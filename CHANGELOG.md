@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.1 — 2026-11-17
+- Fix ([#13](https://github.com/mhaluska/homelab-manager-skill/issues/13)): `issues.py fixed` missed an issue
+  the installed release links when an older CHANGELOG section mentioned the same `#N` in prose (0.5.0's
+  "fix GitHub issue #12" hid 0.12.0's fix of #12). Only real links count now (`[#N](…)`, `…/issues/N`), and
+  any linking release newer than the entry's last-seen version marks it fixed, not just the oldest one.
+
 ## 0.12.0 — 2026-11-17
 - Upgrade advisor ([#11](https://github.com/mhaluska/homelab-manager-skill/issues/11)): after a plugin upgrade
   `init_repo.py --sync-managed --dry-run` no longer answers "nothing to change" while a release has opt-in
@@ -94,13 +100,13 @@
   Until then `issues.py` keeps using the old `ISSUES.md`.
 
 ## 0.7.0 — 2026-11-16
-- New `config_set.py` edits `homelab.yaml` without reflowing it (#1): `yq -i` rewrote the whole file —
+- New `config_set.py` edits `homelab.yaml` without reflowing it ([#1](https://github.com/mhaluska/homelab-manager-skill/issues/1)): `yq -i` rewrote the whole file —
   blank lines and comment alignment were lost, and `authorized_ranges: [] # e.g. …` became a block list
   whose comment jumped to `gateway`. It changes only the lines of the keys it edits (`path=value`,
   `list+=item`, `list-=item`, `--delete`, `--dry-run`), keeps each inline comment on its key, and checks
   the result with yq before writing. Setup and `--sync-managed` use it too, so new repos keep the
   template's layout. Existing files that yq already reflowed stay as they are.
-- Skill problems are logged when they happen, not only when you ask (#2): SKILL.md makes it a rule to run
+- Skill problems are logged when they happen, not only when you ask ([#2](https://github.com/mhaluska/homelab-manager-skill/issues/2)): SKILL.md makes it a rule to run
   `issues.py add` in the same turn whenever Claude works around the skill; a new PostToolUse hook
   (`hooks/skill_problem.py`) reminds Claude when a bundled script crashes or fails; a guard denial says
   how to note a false alarm.

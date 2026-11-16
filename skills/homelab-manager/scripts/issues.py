@@ -538,28 +538,30 @@ def vtuple(v: str) -> tuple[int, ...]:
     return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
 
 
-def changelog_refs(path: Path = CHANGELOG) -> dict[int, str]:
-    """{GitHub issue number: first release whose CHANGELOG section links it} for the installed plugin."""
+ISSUE_LINK_RE = re.compile(r"\[#(\d+)\]\(|/issues/(\d+)\b")
+
+
+def changelog_refs(path: Path = CHANGELOG) -> dict[int, list[str]]:
+    """{GitHub issue number: every release (oldest first) whose CHANGELOG section links it} for the installed
+    plugin. Only real links count (`[#N](…)` or `…/issues/N`): a bare `#N` in prose is often an example."""
     try:
         text = path.read_text()
     except OSError:
         return {}
     installed = vtuple(plugin_info().get("version", ""))
-    refs: dict[int, str] = {}
+    refs: dict[int, set[str]] = {}
     for m in re.finditer(r"^## (\d+\.\d+\.\d+)\b.*?(?=^## |\Z)", text, re.M | re.S):
         ver = m.group(1)
         if vtuple(ver) > installed:
             continue
-        for n in re.findall(r"/issues/(\d+)\b|(?<![\w&/])#(\d+)\b", m.group(0)):
-            num = int(n[0] or n[1])
-            if num not in refs or vtuple(ver) < vtuple(refs[num]):
-                refs[num] = ver
-    return refs
+        for n in ISSUE_LINK_RE.findall(m.group(0)):
+            refs.setdefault(int(n[0] or n[1]), set()).add(ver)
+    return {num: sorted(vers, key=vtuple) for num, vers in refs.items()}
 
 
 def fixed_by_release(items) -> list[tuple[dict, str]]:
     """[(entry, version)]: reported entries whose GitHub issue a release newer than the one they were last
-    seen with links in the installed CHANGELOG — the release fixed (or built) them."""
+    seen with links in the installed CHANGELOG — the oldest such release fixed (or built) them."""
     refs = changelog_refs()
     out = []
     for i in items:
@@ -567,8 +569,9 @@ def fixed_by_release(items) -> list[tuple[dict, str]]:
         if i["status"] == "resolved" or not n or n not in refs:
             continue
         seen = max(vtuple(i.get("plugin_version", "")), vtuple(i.get("last_seen_version", "")))
-        if vtuple(refs[n]) > seen:
-            out.append((i, refs[n]))
+        newer = [v for v in refs[n] if vtuple(v) > seen]
+        if newer:
+            out.append((i, newer[0]))
     return out
 
 

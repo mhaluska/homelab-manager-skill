@@ -932,7 +932,31 @@ class FixedIssuesTests(unittest.TestCase):
 
     def test_changelog_refs(self):
         refs = self.m.changelog_refs()
-        self.assertEqual((refs[9], refs[5], refs[1]), ("0.11.0", "0.10.0", "0.7.0"))
+        self.assertEqual((refs[9][0], refs[5][0], refs[1][0]), ("0.11.0", "0.10.0", "0.7.0"))
+        self.assertNotIn("0.5.0", refs.get(12, []))   # 0.5.0 says "fix GitHub issue #12" in prose
+
+    def test_prose_mention_in_older_release_ignored(self):
+        """#13: a bare #N in an older section must not hide the release that links N."""
+        cl = self.d / "CHANGELOG.md"
+        cl.write_text("# Changelog\n\n## 0.12.0 — x\n- Fix ([#12](https://github.com/o/r/issues/12)): y\n\n"
+                      "## 0.11.0 — x\n- Fix ([#12](https://github.com/o/r/issues/12)) partly\n\n"
+                      "## 0.5.0 — x\n- so \"fix GitHub issue #12\" works; see #9 too\n")
+        orig_info = self.m.plugin_info
+        self.m.plugin_info = lambda: {"version": "0.12.0"}
+        try:
+            refs = self.m.changelog_refs(cl)
+            self.assertEqual(refs, {12: ["0.11.0", "0.12.0"]})
+            orig_refs = self.m.changelog_refs
+            self.m.changelog_refs = lambda: refs
+            try:
+                entry = {"id": "SKILL-013", "status": "reported", "github_number": 12, "plugin_version": "0.11.0"}
+                self.assertEqual(self.m.fixed_by_release([entry]), [(entry, "0.12.0")])
+                entry["last_seen_version"] = "0.12.0"
+                self.assertEqual(self.m.fixed_by_release([entry]), [])
+            finally:
+                self.m.changelog_refs = orig_refs
+        finally:
+            self.m.plugin_info = orig_info
 
     def test_fixed_lists_hints_and_resolves(self):
         out = run("issues.py", "fixed", cwd=self.d).stdout
