@@ -1,0 +1,14 @@
+{
+  "name": "homelab-manager-skill",
+  "description": "Claude Code plugin: conversational homelab infrastructure management (Proxmox VE, Packer, OpenTofu, Ansible).",
+  "owner": {
+    "name": "Marek Haluška"
+  },
+  "plugins": [
+    {
+      "name": "homelab-manager",
+      "source": "./",
+      "description": "Homelab infrastructure orchestrator: discovery, Proxmox, Packer templates, OpenTofu, Ansible, patching — with enforced safety guardrails."
+    }
+  ]
+}
