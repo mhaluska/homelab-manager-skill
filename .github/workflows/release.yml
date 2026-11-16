@@ -37,8 +37,12 @@ jobs:
 
       - name: Create or update the release
         run: |
+          git fetch --quiet --tags origin
+          # Only the highest version is "Latest" (re-publishing an old tag must not take it over).
+          highest=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+          latest=$([ "$TAG" = "$highest" ] && echo true || echo false)
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --title "homelab-manager ${TAG#v}" --notes-file notes.md
+            gh release edit "$TAG" --title "homelab-manager ${TAG#v}" --notes-file notes.md --latest="$latest"
           else
-            gh release create "$TAG" --verify-tag --title "homelab-manager ${TAG#v}" --notes-file notes.md --latest
+            gh release create "$TAG" --verify-tag --title "homelab-manager ${TAG#v}" --notes-file notes.md --latest="$latest"
           fi
