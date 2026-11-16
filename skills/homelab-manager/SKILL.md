@@ -43,10 +43,11 @@ chat as a short numbered list. Ask in rounds, at most ~4 questions per round, an
 "skip / later" for anything that isn't needed yet: a blank value is fine, the skill asks
 again when a task needs it.
 
-**Round 1 — what do you use?** (multi-select, from `init_repo.py --list-components`):
-Proxmox VMs/LXC (OpenTofu) · VM templates (Packer) · Ansible config & patching ·
-network discovery (nmap) · Windows hosts · appliances (NAS/firewall/switches/BMC) ·
-Kubernetes clusters. Plus two single choices:
+**Round 1 — what do you use?** One option per component, never merged: the question tool
+allows 4 options per question, so ask two multi-selects (from `init_repo.py --list-components`):
+- *Core*: Proxmox VMs/LXC (OpenTofu) · VM templates (Packer) · Ansible config & patching · network discovery (nmap).
+- *Extras*: Windows hosts · appliances (NAS/firewall/switches/BMC) · Kubernetes clusters (none is a valid answer).
+The tool adds an "Other" free-text option itself; don't rely on it for choices. Plus two single choices:
 - OpenTofu state (only if Proxmox is selected): **local** file on this Mac outside the repo
   (default, back it up with Time Machine) or an **S3-compatible bucket** (MinIO, Garage, AWS; adds
   locking and an off-Mac copy). Never in Git.

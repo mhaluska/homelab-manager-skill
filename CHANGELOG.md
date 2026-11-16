@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.2 — 2026-11-16
+- Setup asks about components in two multi-select questions (core: Proxmox, Packer templates, Ansible,
+  discovery; extras: Windows, appliances, Kubernetes), one checkbox per component — no more merged options
+  that needed the free-text "Other" field.
+
 ## 0.5.1 — 2026-11-16
 - Fix: when `.claude/settings.json` already existed in the homelab repo (e.g. the plugin was installed with
   project scope before setup), `init_repo.py` skipped it and the template's safety rules (never read private
