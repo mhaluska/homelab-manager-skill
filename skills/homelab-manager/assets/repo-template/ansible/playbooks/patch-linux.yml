@@ -8,6 +8,9 @@
 # Hook paths are relative to ansible/ (as written in homelab.yaml), e.g.
 #   -e pre_hook=playbooks/hooks/k8s-drain.yml -e post_hook=playbooks/hooks/k8s-uncordon.yml
 # Hooks run WITHOUT sudo (become: false): typically kubectl on this Mac via delegate_to: localhost.
+# Packages listed in `patch_exclude` (set it in the group's group_vars, e.g. kubelet/kubeadm/kubectl
+# for Kubernetes nodes) are never upgraded: dnf exclude on RHEL, apt hold on Debian.
+# Not a play var on purpose — play vars would override group_vars.
 - name: Patch Linux hosts
   hosts: "{{ target | default('__no_target__') }}"
   serial: "{{ patch_serial | default(1) }}"
@@ -32,18 +35,30 @@
 
     - name: Cluster pre-hook (drain, maintenance mode, …)
       ansible.builtin.include_tasks:
-        file: "{{ pre_hook if pre_hook is abs else playbook_dir ~ '/../' ~ pre_hook }}"
+        file: "{{ [playbook_dir, '..', pre_hook] | path_join }}"  # absolute paths win
         apply:
           become: false
       when: pre_hook is defined
 
   tasks:
+    - name: Installed packages (hold only what exists)
+      ansible.builtin.package_facts:
+      when: patch_exclude | default([]) | length > 0 and ansible_os_family == "Debian"
+
+    - name: Hold excluded packages (Debian family)
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: "{{ patch_exclude | default([]) | select('in', ansible_facts.packages | default({})) | list }}"
+      when: ansible_os_family == "Debian"
+
     - name: Update (RHEL family)
       ansible.builtin.dnf:
         name: "*"
         state: latest
         security: "{{ security_only | bool }}"
         update_only: true
+        exclude: "{{ patch_exclude | default([]) }}"
       when: ansible_os_family == "RedHat"
       register: upd_rh
 
@@ -98,7 +113,7 @@
 
     - name: Cluster post-hook (uncordon, leave maintenance, …)
       ansible.builtin.include_tasks:
-        file: "{{ post_hook if post_hook is abs else playbook_dir ~ '/../' ~ post_hook }}"
+        file: "{{ [playbook_dir, '..', post_hook] | path_join }}"  # absolute paths win
         apply:
           become: false
       when: post_hook is defined

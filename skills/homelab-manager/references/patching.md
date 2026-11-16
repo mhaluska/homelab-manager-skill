@@ -20,8 +20,10 @@ pending. Sort by security count. Unreachable hosts are findings too. Commit the 
      `-e target=k8s_workers -e pre_hook=playbooks/hooks/k8s-drain.yml -e post_hook=playbooks/hooks/k8s-uncordon.yml`.
      Hook paths are relative to `ansible/`. Hooks run on this Mac without sudo (`kubectl` with the
      user's kubeconfig); check `kubectl get nodes` works and node names match inventory names
-     (or set `k8s_node_name`) before starting. Hold/versionlock kubelet/kubeadm/kubectl packages
-     so a full update doesn't upgrade Kubernetes by accident.
+     (or set `k8s_node_name`) before starting. Keep a full update from upgrading Kubernetes:
+     set `patch_exclude: [kubelet, kubeadm, kubectl]` in that group's `group_vars/<group>.yml`
+     (the playbook excludes them on dnf and holds them on apt). Never set it as a play var or
+     with `-e` scoped wrongly — play vars override group_vars.
    - **Proxmox nodes** — never via this playbook automatically: migrate guests off, patch,
      reboot, verify quorum, next node — each node an explicit approval.
    - **Critical singletons** the user cares about (DNS, the GitLab host, the gateway): ask

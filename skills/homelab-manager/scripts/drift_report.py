@@ -62,10 +62,11 @@ def load_tofu(args, root: Path, env: str):
     d = root / "tofu" / "environments" / env
     if not d.is_dir():
         return None, f"{d.relative_to(root)} does not exist"
-    r = subprocess.run(["tofu", "show", "-json"], cwd=d, capture_output=True, text=True, timeout=300)
+    r = subprocess.run(["tofu", "show", "-json", "-no-color"], cwd=d, capture_output=True, text=True, timeout=300)
     if r.returncode != 0:
-        return None, ("`tofu show -json` failed — run via with_secrets.py so the state backend is reachable: "
-                      + r.stderr.strip().splitlines()[-1] if r.stderr.strip() else "unknown error")
+        lines = [l.strip(" ╷│╵") for l in r.stderr.splitlines() if l.strip(" ╷│╵")]
+        return None, ("`tofu show -json` failed — run via with_secrets.py so the state backend is reachable"
+                      + (f" ({hmlib.clean(lines[0], 160)})" if lines else ""))
     return json.loads(r.stdout or "{}"), f"tofu show -json ({d.relative_to(root)})"
 
 
@@ -152,6 +153,49 @@ def main():
             L += [f"**Attribute drift ({len(diffs)})** — confirm with `tofu plan -refresh-only`:", "", *diffs, ""]
         if not (unmanaged or missing or diffs):
             L += ["No differences.", ""]
+
+    if px and state is None:
+        # No state: fall back to the `tofu` tag every module sets. Weaker than state (a tag can be
+        # hand-edited), but still shows guests nobody manages.
+        untagged = [g for g in live.values() if "tofu" not in str(g.get("tags") or "").replace(",", ";").split(";")
+                    and not g.get("template")]  # Packer-built templates are untagged by design
+        L += ["## Proxmox ↔ OpenTofu (by `tofu` tag — state unavailable)", ""]
+        if untagged:
+            issues += len(untagged)
+            L += [f"**No `tofu` tag ({len(untagged)})** — probably not managed by OpenTofu; confirm with state when reachable:", ""]
+            L += [f"- {g['vmid']} {g['type']} `{g['name']}` on {g['node']} ({g['status']}{', template' if g['template'] else ''})"
+                  for g in untagged]
+        else:
+            L.append("Every guest carries the `tofu` tag.")
+        L.append("")
+
+    if px:
+        L += ["## Backups", ""]
+        found = []
+        if not [st for st in px.get("storage", []) if "backup" in str(st.get("content") or "").split(",")]:
+            found.append("- No storage accepts `backup` content — vzdump has nowhere to write.")
+        jobs = px.get("backup_jobs")
+        if jobs is None:
+            L.append("Backup jobs not collected (older snapshot or token can't read /cluster/backup).")
+        else:
+            active = [j for j in jobs if j.get("enabled")]
+            if not active:
+                found.append("- No enabled scheduled backup job.")
+            else:
+                covered_all = [j for j in active if j.get("all")]
+                ids = {int(x) for j in active for x in str(j.get("vmid") or "").split(",") if x.strip().isdigit()}
+                excl = {int(x) for j in covered_all for x in str(j.get("exclude") or "").split(",") if x.strip().isdigit()}
+                for g in live.values():
+                    if g.get("template"):
+                        continue
+                    if not ((covered_all and g["vmid"] not in excl) or g["vmid"] in ids):
+                        found.append(f"- {g['vmid']} `{g['name']}` is in no backup job.")
+        if found:
+            issues += len(found)
+            L += found
+        elif jobs is not None:
+            L.append("Every guest is in an enabled backup job.")
+        L.append("")
 
     if ans:
         L += ["## Ansible inventory", ""]

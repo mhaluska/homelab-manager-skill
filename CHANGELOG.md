@@ -8,6 +8,11 @@
   (dedupe keys, severities, sanitised text) and can be opened as GitLab issues with `glab` after the user agrees.
 - Guard: asks before `glab issue create/close/…`, GitLab API writes and `issues.py open`; denies printing the glab token.
 - check_env.py reports glab and its login.
+- Patching: `patch_exclude` (set per group, e.g. kubelet/kubeadm/kubectl on k8s nodes) — dnf exclude / apt hold.
+  Hook paths resolved with `path_join` (fixes an ansible-lint crash).
+- Drift report: falls back to the `tofu` tag when state is unreachable; new Backups section (backup storage,
+  vzdump jobs covering every guest). proxmox_inventory.py collects backup jobs (read-only).
+- Report only what actually ran; skipped or assumed steps are labelled as such.
 
 ## 0.1.1 — 2026-11-16
 - Fix: template pre-commit hook flagged its own source as a secret, so the first commit of a new repo failed.

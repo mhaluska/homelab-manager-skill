@@ -51,6 +51,9 @@ devices since the last scan (`first_seen` == `last_seen`).
 
 1. Refresh: `proxmox_inventory.py` (and `nmap_scan.py` if network devices matter).
 2. `python3 $HM/scripts/with_secrets.py gitlab-state -- python3 $HM/scripts/drift_report.py`
+   If state isn't reachable, the report falls back to the `tofu` tag every module sets (weaker — say so).
+   Never fabricate a state file to get findings. The report also checks backups: a storage that takes
+   `backup` content and an enabled vzdump job covering every non-template guest.
    (state backend needs the GitLab token; use `--no-tofu` before OpenTofu is set up).
 3. For managed resources also run a refresh-only plan — it shows attribute drift OpenTofu sees:
    `with_secrets.py proxmox-ro gitlab-state -- tofu -chdir=tofu/environments/homelab plan -refresh-only -no-color`

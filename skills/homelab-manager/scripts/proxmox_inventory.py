@@ -90,6 +90,15 @@ def collect(pve: PVE, details: bool) -> dict:
                                 "vlan_aware": bool(x.get("bridge_vlan_aware")), "active": bool(x.get("active"))}
                                for x in nets]
 
+    try:  # scheduled vzdump jobs (PVEAuditor can read them); None = could not read
+        backup_jobs = [{"id": clean(j.get("id")), "enabled": j.get("enabled", 1) not in (0, "0"),
+                        "schedule": clean(j.get("schedule")), "storage": clean(j.get("storage")),
+                        "all": bool(j.get("all")), "vmid": clean(j.get("vmid")), "exclude": clean(j.get("exclude")),
+                        "node": clean(j.get("node"))}
+                       for j in (pve.get("/cluster/backup") or [])]
+    except SystemExit:
+        backup_jobs = None
+
     if details:  # per-guest config: network, disks, cloud-init, agent — still read-only
         for g in guests:
             kind = "qemu" if g["type"] == "vm" else "lxc"
@@ -111,7 +120,7 @@ def collect(pve: PVE, details: bool) -> dict:
             "nodes": sorted(nodes, key=lambda x: x["node"] or ""),
             "guests": sorted(guests, key=lambda x: x["vmid"] or 0),
             "storage": sorted(storage, key=lambda x: (x["node"] or "", x["storage"] or "")),
-            "networks": networks}
+            "networks": networks, "backup_jobs": backup_jobs}
 
 
 def summary(inv: dict) -> str:

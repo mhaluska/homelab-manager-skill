@@ -90,7 +90,7 @@ For every request, in this order. Skip steps that don't apply, but never skip 4�
 8. **Verify** — the resource exists and is healthy: Proxmox snapshot, guest agent IP, SSH reachable, services active, `tofu plan` shows no changes.
 9. **Record** — refresh `discovery/`, `tofu_to_inventory.py`, `docs/templates.md`, `docs/decisions.md` where relevant.
 10. **Commit** — to `main` when `git.auto_commit` is true and the change is verified. One logical change per commit, message says what and why. Never commit secrets, state or plans (the pre-commit hook also blocks them).
-11. **Report** — what changed, what failed, what's left, in a few lines. Unfixed problems → `ISSUES.md` (§6).
+11. **Report** — what changed, what failed, what's left, in a few lines. Report only what actually ran; anything skipped or assumed is labelled as such, never as a result. Unfixed problems → `ISSUES.md` (§6).
 
 Prefer idempotent operations: declarative OpenTofu and Ansible over imperative CLI
 calls. Use `qm`/`pct`/`pvesh` writes only when OpenTofu can't do it, and say why.

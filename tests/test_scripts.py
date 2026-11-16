@@ -132,6 +132,34 @@ class IssuesTests(unittest.TestCase):
         self.assertIn("| open |", Path(self.d, "ISSUES.md").read_text())  # dry run changes nothing
 
 
+class DriftTests(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        run("init_repo.py", self.d, "--components", "proxmox,ansible", cwd=self.d)
+        snap = {"collected_at": "2026-01-01T00:00:00+00:00", "version": "9", "cluster": None, "nodes": [],
+                "networks": {}, "storage": [{"storage": "local-zfs", "node": "pve1", "content": "images,rootdir"}],
+                "guests": [{"vmid": 100, "name": "dns01", "type": "vm", "node": "pve1", "status": "running",
+                            "template": False, "tags": "debian;tofu"},
+                           {"vmid": 104, "name": "test-old", "type": "vm", "node": "pve1", "status": "stopped",
+                            "template": False, "tags": ""},
+                           {"vmid": 9051, "name": "tpl", "type": "vm", "node": "pve1", "status": "stopped",
+                            "template": True, "tags": ""}],
+                "backup_jobs": [{"id": "daily", "enabled": True, "all": False, "vmid": "100"}]}
+        Path(self.d, "discovery/proxmox.json").write_text(json.dumps(snap))
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def test_tag_fallback_and_backups_without_state(self):
+        r = run("drift_report.py", "--no-tofu", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("104 vm `test-old`", r.stdout)
+        self.assertNotIn("9051", r.stdout.split("## Backups")[0])  # Packer templates aren't "unmanaged"
+        self.assertIn("No storage accepts `backup` content", r.stdout)
+        self.assertIn("104 `test-old` is in no backup job", r.stdout)
+        self.assertNotIn("100 `dns01` is in no backup job", r.stdout)
+
+
 class GuardGlabTests(unittest.TestCase):
     def d(self, cmd):
         out = guard.decide(guard.evaluate(cmd, "/tmp"))
