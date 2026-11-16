@@ -288,8 +288,21 @@ SECRET_RES = [
     (re.compile(r"PVEAPIToken=\S+"), "PVEAPIToken=<token>"),
     (re.compile(r"\b[\w.-]+@[\w.-]+![\w.-]+[=:][0-9a-fA-F-]{36}\b"), "<proxmox-token>"),
     (re.compile(r"(?i)\b(authorization:\s*)(bearer\s+|token\s+|basic\s+)?\S+"), r"\1<redacted>"),
-    (re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key|access[_-]?key)(\s*[:=]\s*)(?!<)\S+"), r"\1\2<redacted>"),
+    (re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key|access[_-]?key)(\s*=\s*)([\"'`]?)(?!<)[^\s\"'`]+"),
+     r"\1\2\3<redacted>"),
 ]
+# "token: X" is often prose ("permissions for the token: / → VM.Audit"): only X that looks like a secret
+KEY_COLON = re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key|access[_-]?key)(\s*:\s*)([\"'`]?)(?!<)([^\s\"'`]+)")
+
+
+def looks_secret(v: str) -> bool:
+    v = v.rstrip(".,;:)]}")
+    if re.fullmatch(r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", v):
+        return True
+    if v.startswith(("$", "/", "~", "<")) or v.lower() in ("none", "null", "true", "false", "required", "optional"):
+        return False
+    letters, digits = re.search(r"[A-Za-z]", v), re.search(r"\d", v)
+    return (len(v) >= 6 and bool(letters and digits)) or (len(v) >= 16 and not re.fullmatch(r"[A-Za-z.\-]+", v))
 IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")
 IPV6 = re.compile(r"(?i)(?<![\w:])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![\w:])")
 MAC = re.compile(r"(?i)\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b")
@@ -426,9 +439,22 @@ class Redactor:
             text = re.sub(rf"(?i)(?<![\w-]){re.escape(t)}(?![\w-])", lambda m: self.mark(kind, m.group(0), numbered), text)
         return text
 
+    def secret(self, m: re.Match, rep: str) -> str:
+        self.seen.setdefault("secret", set()).add(m.group(0))
+        return m.expand(rep)
+
+    def key_colon(self, m: re.Match) -> str:
+        v = m.group(4)
+        if not looks_secret(v):
+            return m.group(0)
+        self.seen.setdefault("secret", set()).add(m.group(0))
+        tail = v[len(v.rstrip(".,;:)]}")):]
+        return m.group(1) + m.group(2) + m.group(3) + "<redacted>" + tail
+
     def __call__(self, text: str) -> str:
         for rx, rep in SECRET_RES:
-            text = rx.sub(rep, text)
+            text = rx.sub(lambda m, rep=rep: self.secret(m, rep), text)
+        text = KEY_COLON.sub(self.key_colon, text)
         text = text.replace(str(Path.home()), "~")
         text = re.sub(r"/(Users|home)/[^/\s]+", r"/\1/<user>", text)
         text = self.words(text, self.domains, "domain", False)
@@ -461,7 +487,8 @@ class Redactor:
 
     def summary(self) -> str:
         names = {"vmid": "VMID", "vlan": "VLAN", "node": "node", "storage": "storage", "pool": "pool",
-                 "bridge": "bridge", "host": "host name", "domain": "domain", "ip": "IPv4", "ip6": "IPv6", "mac": "MAC"}
+                 "bridge": "bridge", "host": "host name", "domain": "domain", "ip": "IPv4", "ip6": "IPv6", "mac": "MAC",
+                 "secret": "secret"}
         parts = [f"{len(self.seen[k])} {v}{'' if len(self.seen[k]) == 1 or v in ('storage',) else 's'}"
                  for k, v in names.items() if self.seen.get(k)]
         return "Redacted: " + (", ".join(parts) if parts else "no site identifiers found") + \
@@ -710,6 +737,17 @@ def github_issues(repo, cfg) -> list[dict]:
     return out
 
 
+def already_reported(i: dict, marker: str | None) -> bool:
+    """Sent and not seen since: by the global marker (plain `report` runs) or by its own `reported_at`
+    (set on every send, so `report <ID>` needn't move the marker past other unsent entries). Every send links
+    the entry, so one without a GitHub link was never sent — before 0.12.2 `report <ID>` could move the marker
+    past it."""
+    if not i.get("github_url"):
+        return False
+    seen = ts(seen_at(i))
+    return any(t and seen <= ts(t) for t in (marker, i.get("reported_at")))
+
+
 def plan_report(items, gl, marker, a, cfg) -> list[dict]:
     forced = {k.upper(): int(v) for k, v in (m.split("=", 1) for m in a.match)}
     new_forced = {n.upper() for n in a.new}
@@ -719,7 +757,7 @@ def plan_report(items, gl, marker, a, cfg) -> list[dict]:
     for i in sorted(items, key=lambda i: i["id"]):
         if only and i["id"] not in only:
             continue
-        if i["status"] == "resolved" or (not only and marker and ts(seen_at(i)) <= ts(marker)):
+        if i["status"] == "resolved" or (not only and already_reported(i, marker)):
             continue
         step = {"item": i, "action": "create", "target": None, "why": "no similar GitHub issue"}
         title = issue_title(i, cfg)
@@ -799,17 +837,23 @@ def cmd_report(a, cfg):
                 continue
             if not i.get("github_url"):
                 i.update(status="reported", github_url=g["url"], github_number=g["number"])
+            i["reported_at"] = started
             print(f"{i['id']} → commented on #{g['number']} {g['url']}")
         else:
             err = create_issue(i, repo, cfg)
             if err:
                 failed.append(f"{i['id']}: {err[:200]}")
                 continue
+            i["reported_at"] = started
             print(f"{i['id']} → created {i['github_url']}")
     if failed:
         save(path, items)  # keep links that did succeed; marker unchanged so failures are retried
         print("Failed (marker not moved, re-run to retry):\n  " + "\n  ".join(failed), file=sys.stderr)
         return 1
+    if a.ids:  # only some entries: the others added before now are still unsent, so the marker stays
+        save(path, items)
+        print("Marker unchanged (limited to " + ", ".join(st["item"]["id"] for st in plan) + ")")
+        return 0
     save(path, items, started)
     print(f"Marker set: reported through {started}")
     return 0
@@ -921,7 +965,7 @@ def main():
     p = sp.add_parser("migrate")
     p.add_argument("--dry-run", action="store_true")
     p = sp.add_parser("report")
-    p.add_argument("ids", nargs="*", help="limit to these issues (ignores the marker)")
+    p.add_argument("ids", nargs="*", help="limit to these issues (ignores and keeps the marker)")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--match", action="append", default=[], metavar="ID=NUMBER",
                    help="comment on this GitHub issue instead of the automatic choice")

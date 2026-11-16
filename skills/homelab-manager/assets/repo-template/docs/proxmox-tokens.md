@@ -21,13 +21,19 @@ Keychain value: `homelab@pve!ro=<secret>` →
 `security add-generic-password -U -T /usr/bin/security -a "$USER" -s homelab/proxmox-ro -w`
 
 Optional — VM IPs from the QEMU guest agent (`proxmox_inventory.py --details`, drift report's
-guest ↔ network matching). PVEAuditor may not include the agent privilege; grant it if the
-inventory says the agent IPs were not read (`VM.GuestAgent.Audit` on Proxmox VE 9, `VM.Monitor` on 8.x):
+guest ↔ network matching). On Proxmox VE 9 PVEAuditor already includes `VM.GuestAgent.Audit`: nothing
+to do. Only if the inventory says the agent IPs were not read (`guest_ip_sources.agent` is not `ok`, e.g.
+on 8.x, which needs `VM.Monitor`), add a role **on `/`, next to PVEAuditor**:
 ```bash
-pveum role add HomelabAgentAudit -privs "VM.GuestAgent.Audit"
-pveum acl modify /vms --users homelab@pve --roles HomelabAgentAudit
-pveum acl modify /vms --tokens 'homelab@pve!ro' --roles HomelabAgentAudit
+pveum role add HomelabAgentAudit -privs "VM.Audit VM.GuestAgent.Audit"   # 8.x: "VM.Audit VM.Monitor"
+pveum acl modify / --users homelab@pve --roles HomelabAgentAudit
+pveum acl modify / --tokens 'homelab@pve!ro' --roles HomelabAgentAudit
 ```
+Never grant it on a narrower path (`/vms`, `/pool/…`) alone: an ACL on a more specific path replaces the
+role inherited from `/`, so the token loses `VM.Audit` there and the inventory sees no guests. Undo the
+`/vms` grant an older version of this doc suggested:
+`pveum acl delete /vms --users homelab@pve --roles HomelabAgentAudit` and the same with
+`--tokens 'homelab@pve!ro'`.
 
 ## Provisioning (OpenTofu, Packer)
 

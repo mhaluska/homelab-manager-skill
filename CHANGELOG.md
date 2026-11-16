@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.12.2 — 2026-11-17
+- Fix ([#14](https://github.com/mhaluska/homelab-manager-skill/issues/14)): the optional guest-agent section of `docs/proxmox-tokens.md` granted `HomelabAgentAudit`
+  on `/vms`. An ACL on a narrower path replaces the role inherited from `/`, so the read-only token lost
+  `VM.Audit` and the inventory saw no guests. The section now says PVEAuditor already covers the guest agent
+  on Proxmox VE 9, grants any extra role on `/` next to PVEAuditor, and shows how to undo the `/vms` grant.
+  The upgrade advisor offers the section only when the inventory says agent IPs were not read, and flags
+  docs that still have the `/vms` lines. `proxmox_inventory.py` warns when it sees no guests and names the
+  ACL that hides them.
+- Fix ([#15](https://github.com/mhaluska/homelab-manager-skill/issues/15)): `issues.py report` no longer redacts the word after "token:" (or "password:", …) in
+  prose; with a colon only values that look like secrets are removed, and `Redacted:` counts the secrets.
+  A closing quote after a redacted value is kept.
+- Fix ([#16](https://github.com/mhaluska/homelab-manager-skill/issues/16)): `issues.py report <ID>` no longer moves the reported-through marker past other unsent
+  entries. Each sent entry records `reported_at`, and an entry without a GitHub link is always offered, so
+  ones the old behaviour skipped come back on the next `report`.
+- Existing repos: if `docs/proxmox-tokens.md` has the `/vms` lines, `init_repo.py --sync-managed --dry-run`
+  suggests replacing them and undoing the grant on Proxmox.
+
 ## 0.12.1 — 2026-11-17
 - Fix ([#13](https://github.com/mhaluska/homelab-manager-skill/issues/13)): `issues.py fixed` missed an issue
   the installed release links when an older CHANGELOG section mentioned the same `#N` in prose (0.5.0's

@@ -101,8 +101,8 @@ def guest_ips(pve: "PVE", g: dict, kind: str, conf: dict, sources: dict) -> list
             data = pve._get(f"/nodes/{g['node']}/qemu/{g['vmid']}/agent/network-get-interfaces") or {}
         except urllib.error.HTTPError as e:
             if e.code == 403:
-                sources["agent"] = (f"forbidden: the read-only token (and its user) need {AGENT_PRIV} on /vms "
-                                    "to read VM IPs from the guest agent")
+                sources["agent"] = (f"forbidden: the read-only token (and its user) need {AGENT_PRIV} on / "
+                                    "(next to PVEAuditor) to read VM IPs from the guest agent")
             return out  # 500: agent not running in the guest
         except (urllib.error.URLError, OSError, ValueError):
             return out
@@ -129,6 +129,26 @@ def guest_ips(pve: "PVE", g: dict, kind: str, conf: dict, sources: dict) -> list
                         out.append({"iface": clean(nic.get("name")), "mac": clean(nic.get("hwaddr")),
                                     "ip": clean(ip.split("/")[0]), "source": "lxc"})
     return out
+
+
+def no_guests_hint(pve: "PVE") -> str | None:
+    """Why the token may see no guests at all: no VM.Audit, typically because an ACL on a narrower path
+    (/vms, /vms/<id>, /pool/…) replaced the PVEAuditor role inherited from / (GitHub issue #14)."""
+    try:
+        perms = pve._get("/access/permissions")
+    except (urllib.error.URLError, ValueError, OSError):
+        return None
+    if not isinstance(perms, dict):
+        return None
+    narrow = sorted(p for p, privs in perms.items()
+                    if p.startswith("/vms") and isinstance(privs, dict) and "VM.Audit" not in privs)
+    if narrow:
+        return (f"no guests visible: the token's ACL on {', '.join(narrow[:3])} lacks VM.Audit. An ACL on a narrower "
+                "path replaces the role inherited from /, so grant extra roles on / next to PVEAuditor instead "
+                "(docs/proxmox-tokens.md), or remove that ACL with pveum acl delete")
+    if "VM.Audit" not in (perms.get("/") or {}):
+        return "no guests visible: the token has no VM.Audit on / (PVEAuditor on / for both the user and the token)"
+    return None
 
 
 def gib(b):
@@ -199,6 +219,7 @@ def collect(pve: PVE, details: bool) -> dict:
             if g["status"] == "running":
                 g["ips"] = guest_ips(pve, g, kind, conf, ip_sources)
 
+    warnings = [w for w in [None if guests else no_guests_hint(pve)] if w]
     return {"collected_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
             "source": "proxmox-api", "version": version.get("version"),
             "cluster": {"name": clean(cluster.get("name")), "nodes": cluster.get("nodes"), "quorate": cluster.get("quorate")}
@@ -207,7 +228,7 @@ def collect(pve: PVE, details: bool) -> dict:
             "guests": sorted(guests, key=lambda x: x["vmid"] or 0),
             "storage": sorted(storage, key=lambda x: (x["node"] or "", x["storage"] or "")),
             "networks": networks, "backup_jobs": backup_jobs,
-            **({"guest_ip_sources": ip_sources} if details else {})}
+            **({"guest_ip_sources": ip_sources} if details else {}), **({"warnings": warnings} if warnings else {})}
 
 
 def used_vmids(root: Path) -> dict[int, str]:
@@ -249,6 +270,8 @@ def summary(inv: dict, cfg: dict | None = None) -> str:
     agent = (inv.get("guest_ip_sources") or {}).get("agent", "")
     if agent.startswith("forbidden"):
         lines.append(f"\nGuest agent IPs not read — {agent}.")
+    for w in inv.get("warnings") or []:
+        lines.append(f"\nWarning: {w}.")
     return "\n".join(lines)
 
 

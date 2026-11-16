@@ -251,6 +251,38 @@ class ReportTests(unittest.TestCase):
         self.assertIn("SKILL-004  CREATE", self.issues("report", "--dry-run").stdout)
         self.assertNotIn("SKILL-001", self.issues("report", "--dry-run").stdout)
 
+    def test_report_ids_keeps_marker_for_other_unsent(self):  # GitHub issue #16
+        self.issues("add", "--title", "packer validate fails on debian13", "--kind", "template")
+        self.issues("add", "--title", "Another unrelated problem", "--kind", "other")
+        r = self.issues("report", "SKILL-001")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Marker unchanged", r.stdout)
+        dry = self.issues("report", "--dry-run").stdout
+        self.assertIn("1 issue(s) to report", dry)
+        self.assertIn("SKILL-002  CREATE", dry)
+        self.assertNotIn("SKILL-001", dry)                           # sent: its own reported_at covers it
+
+    def test_unsent_entry_behind_marker_is_offered(self):  # GitHub issue #16: repos the old bug left stuck
+        self.issues("add", "--title", "Stuck problem", "--kind", "other")
+        p = Path(self.d, "skill_issues.md")
+        import importlib
+        sys.path.insert(0, str(SCRIPTS))
+        issues = importlib.import_module("issues")
+        issues.save(p, issues.load(p), "2999-01-01T00:00:00+00:00")
+        self.assertIn("SKILL-001  CREATE", self.issues("report", "--dry-run").stdout)
+
+    def test_token_colon_prose_kept_secrets_counted(self):  # GitHub issue #15
+        self.issues("add", "--title", "ACL for the 'token: root' path", "--kind", "template", "--body",
+                    "Permissions for the token: `/` → VM.Audit, and the token: root path.\n"
+                    "Real ones: token: 0b0c1d2e-3f40-4152-6374-8596a7b8c9d0 and api_key: sk3cr3tvalue99")
+        out = self.issues("report", "--dry-run").stdout
+        for kept in ("token: `/` → VM.Audit", "token: root path", "'token: root' path"):
+            self.assertIn(kept, out, kept)
+        for leak in ("0b0c1d2e", "sk3cr3tvalue99"):
+            self.assertNotIn(leak, out, leak)
+        self.assertIn("token: <redacted> and api_key: <redacted>", out)
+        self.assertRegex(out, r"Redacted: .*2 secrets")
+
     def test_labels_only_with_triage_rights_and_only_existing(self):
         self.issues("add", "--title", "packer validate fails on debian13", "--kind", "template")
         self.issues("report", env={**self.env, "FAKE_GH_PERM": "WRITE"})
@@ -733,6 +765,23 @@ class GuestNetworkMappingTests(unittest.TestCase):
         self.assertEqual(inv.guest_ips(pve, vm(901), "lxc", {}, src)[0]["ip"], "10.0.10.53")
 
 
+    def test_no_guests_hint_names_narrow_acl(self):  # GitHub issue #14
+        sys.path.insert(0, str(SCRIPTS))
+        import proxmox_inventory as inv
+        pve = inv.PVE("https://pve.example:8006", "homelab@pve!ro=s3cret", None)
+        perms = {"/": {"VM.Audit": 1, "VM.GuestAgent.Audit": 1}, "/vms": {"VM.GuestAgent.Audit": 1}}
+        pve._get = lambda path, **_: perms
+        hint = inv.no_guests_hint(pve)
+        self.assertIn("/vms lacks VM.Audit", hint)
+        self.assertIn("next to PVEAuditor", hint)
+        del perms["/vms"]
+        self.assertIsNone(inv.no_guests_hint(pve))
+        self.assertIn("no VM.Audit on /", inv.no_guests_hint(type("P", (), {"_get": lambda self, p: {"/": {}}})()))
+        s = inv.summary({"version": "9.1", "cluster": None, "nodes": [], "guests": [], "storage": [],
+                         "warnings": ["no guests visible: x"]})
+        self.assertIn("Warning: no guests visible: x.", s)
+
+
 class VmidSchemeTests(unittest.TestCase):
     """#6: VMIDs that encode the network (vmid_scheme), and a warning when the ranges don't fit."""
 
@@ -838,7 +887,7 @@ class UpgradeNotesTests(unittest.TestCase):
         subprocess.run(["yq", "-i", "del(.upgrades) | del(.vmid_scheme)", str(self.cfg)], check=True)
         run("config_set.py", "proxmox.endpoint=https://pve.example.test:8006", cwd=self.d)
         doc = self.d / "docs/proxmox-tokens.md"
-        doc.write_text(re.sub(r"\nOptional — VM IPs.*?\n```\n", "", doc.read_text(), flags=re.S))
+        doc.write_text(re.sub(r"\nOptional — VM IPs.*?(?=\n## )", "\n", doc.read_text(), flags=re.S))
         lxc = lambda vmid, tag, ip: {"vmid": vmid, "name": f"g{vmid}", "type": "lxc", "template": False,
                                      "config": {"net0": f"name=eth0,bridge=vmbr0,ip={ip}/24,tag={tag}"}}
         (self.d / "discovery/proxmox.json").write_text(json.dumps({"guests": [
@@ -858,8 +907,7 @@ class UpgradeNotesTests(unittest.TestCase):
         self.assertIn("Suggested by newer releases (opt-in", out)
         self.assertIn("[0.10.0 · manual step]", out)                              # check_env TLS
         self.assertIn("vmid_scheme={vlan}{octet:03d}", out)                         # inferred from the snapshot
-        self.assertIn("[0.11.0 · template section]", out)
-        self.assertIn(str(SCRIPTS.parent / "assets/repo-template/docs/proxmox-tokens.md"), out)
+        self.assertNotIn("[0.11.0 · template section]", out)  # agent IPs not known to be unread (#14)
         self.assertIn("proxmox_inventory.py --details", out)
         self.assertIn("drift_report.py", out)
         self.assertEqual({f: f.read_text() for f in before}, before)               # dry run writes nothing
@@ -875,11 +923,30 @@ class UpgradeNotesTests(unittest.TestCase):
         Path(self.d, "discovery/drift.md").write_text("## Proxmox guests ↔ network\n")
         out = run("upgrade_notes.py", "--json", cwd=self.d).stdout
         ids = [n["id"] for n in json.loads(out)]
-        self.assertEqual(ids, ["tokens-guest-agent", "inventory-guest-ips"])
+        self.assertEqual(ids, ["inventory-guest-ips"])
         ids = [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", "--all", cwd=self.d).stdout)]
         self.assertIn("proxmox-tls-check", ids)
         subprocess.run(["yq", "-i", ".components.proxmox = false", str(self.cfg)], check=True)
         self.assertEqual(json.loads(run("upgrade_notes.py", "--json", cwd=self.d).stdout), [])
+
+    def test_guest_agent_section_only_when_agent_ips_unread_and_on_root(self):  # GitHub issue #14
+        doc = self.make_old()
+        snap = self.d / "discovery/proxmox.json"
+        run("config_set.py", "upgrades.reviewed=0.10.0", cwd=self.d)
+        ids = lambda: [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", cwd=self.d).stdout)]
+        snap.write_text(json.dumps({"guests": [], "guest_ip_sources": {"agent": "ok", "lxc": "ok"}}))
+        self.assertNotIn("tokens-guest-agent", ids())
+        snap.write_text(json.dumps({"guests": [], "guest_ip_sources": {"agent": "forbidden: x", "lxc": "ok"}}))
+        self.assertIn("tokens-guest-agent", ids())
+        tpl = (SCRIPTS.parent / "assets/repo-template/docs/proxmox-tokens.md").read_text()
+        self.assertIn("pveum acl modify / --tokens 'homelab@pve!ro' --roles HomelabAgentAudit", tpl)
+        self.assertNotIn("acl modify /vms", tpl)
+        self.assertNotIn("tokens-guest-agent-acl-on-root", ids())
+        doc.write_text(doc.read_text() + "\npveum acl modify /vms --users homelab@pve --roles HomelabAgentAudit\n"
+                       "pveum acl modify /vms --tokens 'homelab@pve!ro' --roles HomelabAgentAudit\n")
+        out = run("upgrade_notes.py", cwd=self.d).stdout
+        self.assertIn("[0.12.2 · manual step]", out)
+        self.assertIn("pveum acl delete /vms --tokens 'homelab@pve!ro' --roles HomelabAgentAudit", out)
 
     def test_notes_file_is_well_formed(self):
         notes = json.loads((SCRIPTS.parent / "assets/upgrade-notes.json").read_text())["notes"]
@@ -892,8 +959,8 @@ class UpgradeNotesTests(unittest.TestCase):
             self.assertIn(n["kind"], upgrade_notes.KIND_LABEL)
             self.assertLessEqual(upgrade_notes.vtuple(n["version"]), upgrade_notes.vtuple(have))
             self.assertIn(f"## {n['version']} ", changelog)
-            self.assertTrue(set(n["when"]) <= {"component", "config_empty", "config_set", "file_lacks",
-                                               "vmids_outside_ranges"}, n["id"])
+            self.assertTrue(set(n["when"]) <= {"component", "config_empty", "config_set", "file_lacks", "file_has",
+                                               "vmids_outside_ranges", "agent_ips_unread"}, n["id"])
             if "file_lacks" in n["when"] and n["kind"] == "template":
                 self.assertIn(n["when"]["file_lacks"][1],
                               (SCRIPTS.parent / "assets/repo-template" / n["when"]["file_lacks"][0]).read_text())

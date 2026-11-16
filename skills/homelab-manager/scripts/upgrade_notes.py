@@ -61,6 +61,19 @@ def _check(note: dict, cfg: dict, root: Path) -> tuple[bool, dict]:
         if not f.is_file() or text in f.read_text(errors="replace"):
             return False, ph
         ph["template"] = str(TEMPLATE / rel)
+    if w.get("file_has"):
+        rel, text = w["file_has"]
+        f = root / rel
+        if not f.is_file() or text not in f.read_text(errors="replace"):
+            return False, ph
+        ph["template"] = str(TEMPLATE / rel)
+    if w.get("agent_ips_unread"):
+        try:
+            agent = (json.loads((root / "discovery" / "proxmox.json").read_text()).get("guest_ip_sources") or {}).get("agent")
+        except (OSError, ValueError):
+            return False, ph
+        if not agent or agent == "ok" or agent == "not queried":
+            return False, ph
     if w.get("vmids_outside_ranges"):
         try:
             guests = json.loads((root / "discovery" / "proxmox.json").read_text()).get("guests") or []

@@ -67,6 +67,9 @@ class UpdateCheckTests(unittest.TestCase):
         subprocess.run(["yq", "-i", "del(.upgrades)", str(repo / "homelab.yaml")], check=True)
         doc = repo / "docs" / "proxmox-tokens.md"
         doc.write_text(doc.read_text().replace("HomelabAgentAudit", "Custom"))
+        (repo / "discovery").mkdir(exist_ok=True)
+        (repo / "discovery" / "proxmox.json").write_text(json.dumps(
+            {"guests": [], "guest_ip_sources": {"agent": "forbidden: needs VM.GuestAgent.Audit", "lxc": "ok"}}))
         out = json.loads(subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True,
                                         env=self.env, cwd=repo).stdout)
         self.assertIn("1 suggested opt-in change(s)", out["systemMessage"])

@@ -7,7 +7,9 @@
     "every release that adds something an existing repo has to adopt by hand.",
     "Fields: version, id, kind (config | template | regenerate | manual), text, action, when.",
     "when (all must hold): component (enabled), config_empty (dotted key unset/empty), config_set (dotted key set),",
-    "file_lacks [path, text] (file exists and lacks text), vmids_outside_ranges (snapshot VMIDs don't fit).",
+    "file_lacks [path, text] (file exists and lacks text), file_has [path, text] (file exists and has text),",
+    "vmids_outside_ranges (snapshot VMIDs don't fit), agent_ips_unread (discovery/proxmox.json says the guest",
+    "agent IPs were not read: guest_ip_sources.agent present and not ok).",
     "Placeholders in action: {HM} skill dir, {template} template file of file_lacks, {detail} computed hint."
   ],
   "notes": [
@@ -31,9 +33,9 @@
       "version": "0.11.0",
       "id": "tokens-guest-agent",
       "kind": "template",
-      "when": {"component": "proxmox", "file_lacks": ["docs/proxmox-tokens.md", "HomelabAgentAudit"]},
-      "text": "docs/proxmox-tokens.md has an optional section granting the read-only token the guest-agent privilege, so the inventory can read VM IPs.",
-      "action": "If the user wants VM IPs: copy the 'Optional — VM IPs from the QEMU guest agent' paragraph and its pveum block from {template} into docs/proxmox-tokens.md, and have the user run those pveum lines on Proxmox."
+      "when": {"component": "proxmox", "file_lacks": ["docs/proxmox-tokens.md", "HomelabAgentAudit"], "agent_ips_unread": true},
+      "text": "The inventory could not read VM IPs from the guest agent; docs/proxmox-tokens.md has an optional section granting the read-only token the guest-agent privilege.",
+      "action": "If the user wants VM IPs: copy the 'Optional — VM IPs from the QEMU guest agent' paragraph and its pveum block from {template} into docs/proxmox-tokens.md, and have the user run those pveum lines on Proxmox (on /, next to PVEAuditor — never on /vms)."
     },
     {
       "version": "0.11.0",
@@ -50,6 +52,14 @@
       "when": {"file_lacks": ["discovery/drift.md", "## Proxmox guests ↔ network"]},
       "text": "drift_report.py has a new 'Proxmox guests ↔ network' section matching scanned addresses to guests; it supersedes any hand-made guest/network mapping.",
       "action": "After refreshing discovery/proxmox.json (--details) and network.json, re-run `python3 {HM}/scripts/drift_report.py`."
+    },
+    {
+      "version": "0.12.2",
+      "id": "tokens-guest-agent-acl-on-root",
+      "kind": "manual",
+      "when": {"component": "proxmox", "file_has": ["docs/proxmox-tokens.md", "acl modify /vms --tokens 'homelab@pve!ro' --roles HomelabAgentAudit"]},
+      "text": "The guest-agent section of docs/proxmox-tokens.md from 0.11.0 granted HomelabAgentAudit on /vms. That ACL replaces the PVEAuditor role inherited from /, so the read-only token loses VM.Audit and the inventory sees no guests. On Proxmox VE 9 PVEAuditor already covers the guest agent.",
+      "action": "Replace that section with the one in {template}. If the user ran the old /vms lines, have them undo them on Proxmox: `pveum acl delete /vms --users homelab@pve --roles HomelabAgentAudit` and `pveum acl delete /vms --tokens 'homelab@pve!ro' --roles HomelabAgentAudit` (then `pveum role delete HomelabAgentAudit` unless needed on 8.x), and refresh `python3 {HM}/scripts/proxmox_inventory.py --details`."
     }
   ]
 }
