@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 — 2026-11-16
+- Update check: a SessionStart hook compares the installed version with the highest `vX.Y.Z` tag on
+  the plugin's Git remote, at most once a day (cached in `~/.cache/homelab-manager/`, failed checks
+  retried after 6 h), and tells the user when a newer release exists. `update_check.py --force` checks now.
+- Cheaper subagents: `homelab-runner` (latest Haiku) for exactly specified commands and scripts,
+  `homelab-analyst` (latest Sonnet) for delegated work that needs judgement. SKILL.md §10 says when to
+  use which; subagents never approve anything.
+
 ## 0.3.0 — 2026-11-16
 - `issues.py report`: sends issues added or changed since the last report to GitLab. For each it first
   looks for the same or a similar GitLab issue (same key, already linked, similar title; open or closed)

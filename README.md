@@ -30,6 +30,9 @@ last report — matching GitLab issues get an update note instead of a duplicate
 | `skills/homelab-manager/scripts/` | Stdlib-only Python helpers (inventory, scans, drift, secrets wrapper, env check, repo init) |
 | `skills/homelab-manager/assets/repo-template/` | Scaffold for the `homelab-infrastructure` repository |
 | `hooks/guard.py` | PreToolUse hook enforcing the hard safety rules |
+| `hooks/update_check.py` | SessionStart hook: at most once a day, checks the Git remote for a newer `vX.Y.Z` tag and tells you |
+| `agents/homelab-runner.md` | Subagent on the latest **Haiku** for fully specified commands/scripts |
+| `agents/homelab-analyst.md` | Subagent on the latest **Sonnet** for delegated work that needs reasoning |
 | `tests/` | Unit tests (`python3 -m unittest discover -s tests`) |
 | `skills/homelab-manager/evals/` | Behaviour test cases (`claude plugin eval`) |
 

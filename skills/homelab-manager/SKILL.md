@@ -29,6 +29,9 @@ are Python 3 standard library only; run them as `python3 $HM/scripts/<name>.py`.
    then ask only that part's setup questions).
 4. **Check the environment** when it's the first operation of the session or something
    failed: `python3 $HM/scripts/check_env.py` (tools, SSH agent, glab, keychain, secrets).
+5. **Updates.** A session-start hook checks once a day for a newer release. If the session
+   context says one is available, tell the user once (version + the update command).
+   "Is there a new version?" → `python3 $HM/../../hooks/update_check.py --force`.
 
 ## 2. Interactive setup of a new repository
 
@@ -203,7 +206,22 @@ Scripts (all in `$HM/scripts/`):
 | `tofu_to_inventory.py` | OpenTofu output → Ansible inventory | `ansible/inventory/managed/tofu_hosts.yml` |
 | `issues.py add\|list\|show\|open\|resolve` | track problems; open them on GitLab with glab | `ISSUES.md` |
 
-## 10. Growing the skill
+## 10. Delegating to subagents (cheaper models)
+
+Delegate background or parallel work to the plugin's agents, which pin the model, rather than
+running it on the main model:
+- **`homelab-runner`** (latest Haiku): fully specified steps that need no thinking: a given
+  script or command and its output (`drift_report.py`, `proxmox_inventory.py`, a ping scan of
+  an authorized range, `check-updates.yml`, `tofu validate`, syntax checks). Give it the exact
+  commands and working directory.
+- **`homelab-analyst`** (latest Sonnet): everything that needs judgement: reviewing a plan or
+  drift report, drafting a playbook/module/Packer change, auditing collected data, investigating a failure.
+If you use a generic agent instead, set `model: "haiku"` or `model: "sonnet"` by the same rule.
+Subagents never approve anything. Approval-list actions (§4) stay in the main conversation
+with the user's yes; the guard hook applies to subagents too. Check their reports against the
+files before telling the user something is done.
+
+## 11. Growing the skill
 
 Domain knowledge lives in `references/`, one file per area, so nothing is duplicated.
 When an area outgrows its reference (lots of scripts, its own triggers), propose

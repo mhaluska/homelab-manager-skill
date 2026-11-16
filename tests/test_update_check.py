@@ -1,0 +1,75 @@
+"""Tests for hooks/update_check.py (daily update check) and plugin agent definitions."""
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "hooks" / "update_check.py"
+
+
+def git(*a, cwd):
+    subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True)
+
+
+class UpdateCheckTests(unittest.TestCase):
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.remote = self.d / "remote"
+        self.remote.mkdir()
+        git("init", "-q", "-b", "main", cwd=self.remote)
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x", cwd=self.remote)
+        self.have = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["version"]
+        self.env = {**os.environ, "HM_UPDATE_URL": str(self.remote), "HM_UPDATE_CACHE": str(self.d / "cache.json")}
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def tag(self, v):
+        git("tag", f"v{v}", cwd=self.remote)
+
+    def run_hook(self, *args):
+        return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, env=self.env)
+
+    def test_silent_when_up_to_date(self):
+        self.tag(self.have)
+        r = self.run_hook()
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+        self.assertIn("up to date", self.run_hook("--force").stdout)
+
+    def test_reports_newer_version_and_caches_for_a_day(self):
+        self.tag("99.0.0")
+        self.tag("100.0.0-rc1")  # not a release tag
+        out = json.loads(self.run_hook().stdout)
+        self.assertIn("99.0.0 is available", out["systemMessage"])
+        self.assertEqual(out["hookSpecificOutput"]["hookEventName"], "SessionStart")
+        shutil.rmtree(self.remote)  # cached: no network needed for the rest of the day
+        self.assertIn("99.0.0 is available", json.loads(self.run_hook().stdout)["systemMessage"])
+
+    def test_unreachable_remote_never_breaks_the_session(self):
+        self.env["HM_UPDATE_URL"] = str(self.d / "missing")
+        r = self.run_hook()
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+        self.assertIn("failed", self.run_hook("--force").stdout)
+
+    def test_hook_registered(self):
+        hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text())["hooks"]
+        self.assertIn("update_check.py", hooks["SessionStart"][0]["hooks"][0]["command"])
+
+
+class AgentModelTests(unittest.TestCase):
+    def model(self, name):
+        text = (ROOT / "agents" / f"{name}.md").read_text()
+        return next(l.split(":", 1)[1].strip() for l in text.split("---")[1].splitlines() if l.startswith("model:"))
+
+    def test_models(self):
+        self.assertEqual(self.model("homelab-runner"), "haiku")    # alias = latest Haiku
+        self.assertEqual(self.model("homelab-analyst"), "sonnet")  # alias = latest Sonnet
+
+
+if __name__ == "__main__":
+    unittest.main()
