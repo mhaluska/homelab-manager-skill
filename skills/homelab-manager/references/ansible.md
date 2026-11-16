@@ -16,7 +16,7 @@ Install collections once: `ansible-galaxy collection install -r requirements.yml
 ## Running playbooks
 
 ```bash
-ansible-playbook playbooks/<play>.yml -e target=<group> --syntax-check
+ansible-playbook playbooks/<play>.yml --syntax-check
 ansible-playbook playbooks/<play>.yml -e target=<group> --check --diff     # dry run
 ansible-playbook playbooks/<play>.yml -e target=<group>                    # real run
 ```

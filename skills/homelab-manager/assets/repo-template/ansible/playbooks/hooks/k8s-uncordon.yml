@@ -1,0 +1,6 @@
+# Cluster post-hook for patch-linux.yml: make the node schedulable again after health checks passed.
+- name: Uncordon {{ inventory_hostname }}
+  kubernetes.core.k8s_drain:
+    name: "{{ k8s_node_name | default(inventory_hostname) }}"
+    state: uncordon
+  delegate_to: localhost

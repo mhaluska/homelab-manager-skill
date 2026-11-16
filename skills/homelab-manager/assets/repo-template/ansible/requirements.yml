@@ -3,3 +3,4 @@ collections:
   - name: community.general
   - name: ansible.windows
   - name: community.windows
+  - name: kubernetes.core

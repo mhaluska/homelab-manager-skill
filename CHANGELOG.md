@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1 — 2026-11-16
+- Fix: template pre-commit hook flagged its own source as a secret, so the first commit of a new repo failed.
+- Fix: cluster hooks (k8s drain/uncordon) now run without sudo (`include_tasks … apply: become: false`);
+  hook paths are relative to `ansible/` as written in homelab.yaml. Example k8s hooks added to the template.
+- Add `kubernetes.core` to Ansible requirements; `patch-linux.yml --syntax-check` works without `-e target`.
+- Scanning an authorized range the user asked for no longer needs a second confirmation.
+
 ## 0.1.0 — 2026-11-16
 - Initial skill `homelab-manager`: orchestration workflow, approval rules, routing to 8 domain references.
 - Read-only discovery: `proxmox_inventory.py`, scope-checked `nmap_scan.py`, `drift_report.py`.

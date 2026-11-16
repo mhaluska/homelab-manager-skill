@@ -1,5 +1,11 @@
-- name: Drain node
+# Cluster pre-hook for patch-linux.yml: drain the node being patched.
+# Runs on this Mac (kubectl/kubeconfig), never with sudo — patch-linux.yml includes hooks with become: false.
+- name: Drain {{ inventory_hostname }}
   kubernetes.core.k8s_drain:
-    name: "{{ inventory_hostname }}"
-    delete_options: {ignore_daemonsets: true, delete_emptydir_data: true}
+    name: "{{ k8s_node_name | default(inventory_hostname) }}"
+    state: drain
+    delete_options:
+      ignore_daemonsets: true
+      delete_emptydir_data: true
+      wait_timeout: 600
   delegate_to: localhost

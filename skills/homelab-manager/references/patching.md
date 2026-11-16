@@ -16,7 +16,12 @@ pending. Sort by security count. Unreachable hosts are findings too. Commit the 
    - **Independent hosts** — can go in parallel batches (`-e patch_serial=25%`).
    - **Cluster groups** (`clusters:` in homelab.yaml, plus anything obviously clustered:
      k8s, etcd, Galera/Patroni, Proxmox nodes) — separate run per cluster, `serial: 1`,
-     with that cluster's `pre_hook`/`post_hook` (drain/uncordon, maintenance mode).
+     with that cluster's `pre_hook`/`post_hook` from `homelab.yaml` (drain/uncordon, maintenance mode):
+     `-e target=k8s_workers -e pre_hook=playbooks/hooks/k8s-drain.yml -e post_hook=playbooks/hooks/k8s-uncordon.yml`.
+     Hook paths are relative to `ansible/`. Hooks run on this Mac without sudo (`kubectl` with the
+     user's kubeconfig); check `kubectl get nodes` works and node names match inventory names
+     (or set `k8s_node_name`) before starting. Hold/versionlock kubelet/kubeadm/kubectl packages
+     so a full update doesn't upgrade Kubernetes by accident.
    - **Proxmox nodes** — never via this playbook automatically: migrate guests off, patch,
      reboot, verify quorum, next node — each node an explicit approval.
    - **Critical singletons** the user cares about (DNS, the GitLab host, the gateway): ask

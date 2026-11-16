@@ -5,8 +5,11 @@
 # Safe defaults: one host at a time (serial 1), stop at the first failure, NO reboots
 # unless allow_reboot=true. For groups listed under `clusters:` in homelab.yaml, keep
 # serial 1 and set pre_hook/post_hook (drain/uncordon) — never patch a cluster in parallel.
+# Hook paths are relative to ansible/ (as written in homelab.yaml), e.g.
+#   -e pre_hook=playbooks/hooks/k8s-drain.yml -e post_hook=playbooks/hooks/k8s-uncordon.yml
+# Hooks run WITHOUT sudo (become: false): typically kubectl on this Mac via delegate_to: localhost.
 - name: Patch Linux hosts
-  hosts: "{{ target }}"
+  hosts: "{{ target | default('__no_target__') }}"
   serial: "{{ patch_serial | default(1) }}"
   max_fail_percentage: 0
   any_errors_fatal: true
@@ -28,7 +31,10 @@
       changed_when: false
 
     - name: Cluster pre-hook (drain, maintenance mode, …)
-      ansible.builtin.include_tasks: "{{ pre_hook }}"
+      ansible.builtin.include_tasks:
+        file: "{{ pre_hook if pre_hook is abs else playbook_dir ~ '/../' ~ pre_hook }}"
+        apply:
+          become: false
       when: pre_hook is defined
 
   tasks:
@@ -91,7 +97,10 @@
         fail_msg: "New failed units: {{ failed_after.stdout_lines | difference(failed_before.stdout_lines) }}"
 
     - name: Cluster post-hook (uncordon, leave maintenance, …)
-      ansible.builtin.include_tasks: "{{ post_hook }}"
+      ansible.builtin.include_tasks:
+        file: "{{ post_hook if post_hook is abs else playbook_dir ~ '/../' ~ post_hook }}"
+        apply:
+          become: false
       when: post_hook is defined
 
     - name: Result

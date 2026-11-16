@@ -72,7 +72,9 @@ Ask first, and wait for an explicit yes, before:
 - reboots and shutdowns, patching with `allow_reboot=true`, and anything on Proxmox nodes themselves
 - cluster-level operations: HA, quorum, migration, Kubernetes drain, rolling changes
 - `tofu import`, `tofu state` edits, `force-unlock`; replacing or deleting a VM template
-- the first scan of a range, any `--profile os` (root) or NSE script scan
+- adding a range to `network.authorized_ranges`, any `--profile os` (root) or NSE script scan.
+  (A ping or services scan of an already-authorized range that the user asked for needs no extra yes:
+  the request is the approval.)
 - installing software on many hosts at once
 
 The plugin's `hooks/guard.py` enforces the critical part of this list: it denies
