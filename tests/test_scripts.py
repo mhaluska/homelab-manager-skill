@@ -132,6 +132,76 @@ class IssuesTests(unittest.TestCase):
         self.assertIn("| open |", Path(self.d, "ISSUES.md").read_text())  # dry run changes nothing
 
 
+FAKE_GLAB = """#!/usr/bin/env python3
+import json, os, sys
+log = os.environ["FAKE_GLAB_LOG"]
+with open(log, "a") as f:
+    f.write(json.dumps(sys.argv[1:]) + "\\n")
+if sys.argv[1:3] == ["issue", "list"]:
+    print(json.dumps([
+        {"iid": 7, "title": "[drift] VM 104 test-old not managed by OpenTofu", "state": "opened",
+         "web_url": "https://gl.example/x/-/issues/7", "description": "old"},
+        {"iid": 9, "title": "Something else", "state": "closed", "web_url": "https://gl.example/x/-/issues/9",
+         "description": "<!-- homelab-key: audit:ssh-pw:web01 -->"}]))
+elif sys.argv[1:3] == ["issue", "create"]:
+    print("https://gl.example/x/-/issues/12")
+"""
+
+
+class ReportTests(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        run("init_repo.py", self.d, "--components", "ansible", cwd=self.d)
+        fake = Path(self.d, "fake-glab")
+        fake.write_text(FAKE_GLAB)
+        fake.chmod(0o755)
+        self.log = Path(self.d, "glab.log")
+        self.env = {**os.environ, "HM_GLAB": str(fake), "FAKE_GLAB_LOG": str(self.log)}
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def issues(self, *args):
+        return subprocess.run([sys.executable, str(SCRIPTS / "issues.py"), *args], cwd=self.d,
+                              capture_output=True, text=True, env=self.env)
+
+    def calls(self):
+        return [json.loads(l) for l in self.log.read_text().splitlines()] if self.log.exists() else []
+
+    def test_report_updates_similar_creates_new_and_sets_marker(self):
+        self.issues("add", "--title", "VM 104 test-old not managed by OpenTofu", "--severity", "medium", "--area", "drift")
+        self.issues("add", "--title", "SSH password auth on web01", "--severity", "high", "--area", "security",
+                    "--key", "audit:ssh-pw:web01")
+        self.issues("add", "--title", "Template 9049 missing", "--severity", "medium", "--area", "templates")
+        dry = self.issues("report", "--dry-run")
+        self.assertIn("ISSUE-001  UPDATE #7", dry.stdout)
+        self.assertIn("ISSUE-002  UPDATE #9", dry.stdout)          # same key, even though closed
+        self.assertIn("not reopened", dry.stdout)
+        self.assertIn("ISSUE-003  CREATE", dry.stdout)
+        self.assertEqual([c[:2] for c in self.calls()], [["issue", "list"]])  # dry run only lists
+        self.assertNotIn("reported-through", Path(self.d, "ISSUES.md").read_text())
+
+        r = self.issues("report")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        verbs = [c[:2] for c in self.calls()[1:]]
+        self.assertEqual(verbs.count(["issue", "note"]), 2)
+        self.assertEqual(verbs.count(["issue", "create"]), 1)
+        text = Path(self.d, "ISSUES.md").read_text()
+        self.assertIn("<!-- reported-through: ", text)
+        self.assertIn("issues/12", text)
+
+        again = self.issues("report", "--dry-run")                  # nothing new since the marker
+        self.assertIn("0 issue(s) to report", again.stdout)
+        self.issues("add", "--title", "New problem", "--severity", "low", "--area", "drift")
+        self.assertIn("ISSUE-004  CREATE", self.issues("report", "--dry-run").stdout)
+        self.assertNotIn("ISSUE-001", self.issues("report", "--dry-run").stdout)
+
+    def test_overrides(self):
+        self.issues("add", "--title", "VM 104 test-old not managed by OpenTofu", "--severity", "medium", "--area", "drift")
+        self.assertIn("CREATE", self.issues("report", "--dry-run", "--new", "ISSUE-001").stdout)
+        self.assertIn("UPDATE #9", self.issues("report", "--dry-run", "--match", "ISSUE-001=9").stdout)
+
+
 class DriftTests(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
@@ -169,6 +239,9 @@ class GuardGlabTests(unittest.TestCase):
         self.assertEqual(self.d("glab issue create -t x -d y -y"), "ask")
         self.assertEqual(self.d("glab issue close 12"), "ask")
         self.assertEqual(self.d("python3 /p/issues.py open ISSUE-003"), "ask")
+        self.assertEqual(self.d("python3 /p/issues.py report"), "ask")
+        self.assertEqual(self.d("python3 /p/issues.py report ISSUE-002 --match ISSUE-002=7"), "ask")
+        self.assertIsNone(self.d("python3 /p/issues.py report --dry-run"))
         self.assertIsNone(self.d("python3 /p/issues.py open ISSUE-003 --dry-run"))
         self.assertIsNone(self.d("python3 /p/issues.py add --title x --severity low --area drift"))
         self.assertIsNone(self.d("glab issue list"))

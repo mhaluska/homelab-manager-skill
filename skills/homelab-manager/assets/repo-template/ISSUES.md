@@ -4,6 +4,8 @@ Problems found while managing this homelab — by the homelab-manager skill (dri
 audits, failed runs, things noticed along the way) or added by you.
 
 - Open one on GitLab: ask Claude *"open ISSUE-003 on GitLab"* (uses `glab`, asks first).
+- Send new/changed ones to GitLab: *"report issues to GitLab"* (updates matching GitLab issues
+  instead of duplicating them; asks first).
 - Mark one done: *"ISSUE-003 is fixed"*.
 - Managed by `issues.py`; edit the text under an issue freely, keep the `<!-- issue … -->` lines.
 

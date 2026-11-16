@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 — 2026-11-16
+- `issues.py report`: sends issues added or changed since the last report to GitLab. For each it first
+  looks for the same or a similar GitLab issue (same key, already linked, similar title; open or closed)
+  and adds a note to it instead of creating a duplicate; otherwise creates one. `--dry-run` shows the
+  plan; `--match`/`--new` override. On success a `reported-through` timestamp marker is written to
+  ISSUES.md so old issues aren't reported again; failures leave the marker for a retry.
+- Guard asks before `issues.py report` (except `--dry-run`).
+
 ## 0.2.0 — 2026-11-16
 - Interactive setup: the skill asks which parts the homelab uses (Proxmox/OpenTofu, Packer templates, Ansible,
   discovery, Windows, appliances, Kubernetes), state backend and issue tracking, then scaffolds only those.

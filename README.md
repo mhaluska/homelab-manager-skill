@@ -18,7 +18,8 @@ Ansible, discovery, Windows, appliances, Kubernetes), scaffolds only those, chec
 access, and asks for the configuration it can't discover. Parts can be enabled later.
 
 Problems the skill finds are recorded in `ISSUES.md` in that repository; ask *"open ISSUE-3 on GitLab"*
-to turn one into a GitLab issue (via `glab`, after you confirm).
+to turn one into a GitLab issue, or *"report issues to GitLab"* to send everything new since the
+last report — matching GitLab issues get an update note instead of a duplicate (via `glab`, after you confirm).
 
 ## What's inside
 

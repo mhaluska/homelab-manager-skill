@@ -70,8 +70,8 @@ RULES: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"\bglab\s+issue\s+(create|close|delete|update|note|reopen)\b"), ASK,
      "Creates or changes a GitLab issue (visible to everyone with access to the project)."),
     (re.compile(r"\bglab\s+api\b[^\n;&|]*(-X|--method)\s*(POST|PUT|PATCH|DELETE)"), ASK, "Writes to the GitLab API."),
-    (re.compile(r"issues\.py\b[^\n;&|]*\sopen\b(?![^\n;&|]*--dry-run)"), ASK,
-     "Opens a GitLab issue from ISSUES.md (glab issue create)."),
+    (re.compile(r"issues\.py\b[^\n;&|]*\s(open|report)\b(?![^\n;&|]*--dry-run)"), ASK,
+     "Publishes issues from ISSUES.md to GitLab (glab issue create / note)."),
     # --- templates / git / misc -------------------------------------------------------
     (re.compile(r"\bpacker\s+build\b[^\n;&|]*\s-force\b"), ASK, "packer build -force overwrites an existing template."),
     (re.compile(r"\bgit\s+push\b[^\n;&|]*\s(--force|--force-with-lease|-f)\b"), ASK, "Force-push rewrites Git history."),

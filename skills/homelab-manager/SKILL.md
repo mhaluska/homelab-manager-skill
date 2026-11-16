@@ -144,10 +144,17 @@ python3 $HM/scripts/issues.py add --title "…" --severity high|medium|low --are
 - Severity: **high** = security exposure, data at risk, or something that will break soon;
   **medium** = drift or misconfiguration with workaround; **low** = cleanup.
 - Tell the user in one line which issues you added (`ISSUE-004, ISSUE-005`).
-- When `issues.gitlab` is true, offer to open the important ones on GitLab. Opening an issue
-  publishes it to the project, so it needs the user's yes for those specific IDs:
-  `issues.py open ISSUE-004 --dry-run` to show the title/labels/description, then
-  `issues.py open ISSUE-004` (uses `glab issue create`, records the URL in ISSUES.md).
+- **"Report the issues to GitLab"** (when `issues.gitlab` is true) — never blind-create:
+  1. `issues.py report --dry-run` lists issues added or changed since the `reported-through`
+     marker and, for each, checks GitLab (open and closed): same `--key`, already linked, or a
+     similar title → **UPDATE** (a note on that issue); otherwise **CREATE**. Near-misses are shown.
+  2. Review the matches yourself — the title score is a heuristic. Fix wrong ones with
+     `--match ISSUE-004=<iid>` or `--new ISSUE-004`. A match that is closed on GitLab gets a note,
+     not a reopen; tell the user and let them decide.
+  3. Show the plan, get the user's yes, then run the same command without `--dry-run`. On success it
+     records the GitLab links and moves the marker, so these aren't reported again; on any failure the
+     marker stays and a re-run retries. Commit ISSUES.md (`issues: reported to GitLab`).
+  A single issue: `issues.py open ISSUE-004 [--dry-run]`.
 - When a problem is fixed: `issues.py resolve ISSUE-004 --note "…"`, and offer to close the
   GitLab issue (`glab issue close <iid>`, also with the user's yes).
 - `issues.py list --status open` answers "what's broken?" / "what's left to do?".
