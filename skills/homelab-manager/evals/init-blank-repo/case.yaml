@@ -1,6 +1,0 @@
-schema_version: "1.1"
-name: init-blank-repo
-expected_outcome: |
-  Scaffolds the homelab-infrastructure structure (homelab.yaml, packer/, tofu/, ansible/, docs/, discovery/, .gitignore excluding state and keys), invents no IPs, ranges or storage names, verifies keychain access, asks for the configuration it cannot discover, and commits.
-context:
-  scaffold_script: place-files.sh

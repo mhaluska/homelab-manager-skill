@@ -54,3 +54,5 @@ there's a tested role and explicit approval.
 A host fails mid-patch → the play stops; nothing else is touched. Report what failed, the
 host's state (package manager lock? broken dependency? service down?), and propose a fix.
 Never retry a cluster member's reboot loop more than once without the user.
+Record failed or skipped hosts in `ISSUES.md` (`--area patching --key patch:<host>`), and unreachable hosts
+from check-updates too.

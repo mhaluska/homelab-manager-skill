@@ -3,6 +3,18 @@
 # Empty values are unknown: the skill discovers them (Proxmox API) or asks you.
 version: 1
 
+# Which parts of the homelab this repo manages. Set by init_repo.py during setup;
+# the skill ignores disabled parts and won't create files for them. Enable one later
+# by asking Claude (e.g. "I want to start using Packer templates").
+components:
+  proxmox: true       # Proxmox VE VMs/LXC via OpenTofu
+  templates: true     # Packer VM templates (needs proxmox)
+  ansible: true       # configuration management + patching
+  discovery: true     # nmap discovery in authorized ranges
+  windows: false
+  appliances: false
+  kubernetes: false
+
 site:
   name: homelab
   domain: ""                 # e.g. home.arpa
@@ -78,6 +90,12 @@ secrets:
 
 discovery:
   ignore_unmanaged: []       # IPs you know about and don't want flagged (phones, TVs, …)
+
+issues:
+  file: ISSUES.md            # problems found by the skill are recorded here
+  gitlab: true               # offer to open them as GitLab issues with glab
+  gitlab_repo: ""            # empty = this repo's GitLab project (from git remote)
+  labels: [homelab]
 
 git:
   branch: main

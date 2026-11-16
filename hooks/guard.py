@@ -65,6 +65,13 @@ RULES: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"\bsystemctl\s+(reboot|poweroff|halt|kexec)\b"), ASK, "Reboots or shuts down a system."),
     (re.compile(r"\bansible\b[^\n]*-m\s+(ansible\.(builtin|windows)\.)?(win_)?reboot\b"), ASK, "Reboots remote systems."),
     (re.compile(r"\bRestart-Computer\b|\bStop-Computer\b"), ASK, "Reboots or shuts down Windows systems."),
+    # --- GitLab (glab) / issue tracker ------------------------------------------------
+    (re.compile(r"\bglab\b[^\n;&|]*(--show-token|\bconfig\s+get\s+token\b)"), DENY, "This would print the GitLab token."),
+    (re.compile(r"\bglab\s+issue\s+(create|close|delete|update|note|reopen)\b"), ASK,
+     "Creates or changes a GitLab issue (visible to everyone with access to the project)."),
+    (re.compile(r"\bglab\s+api\b[^\n;&|]*(-X|--method)\s*(POST|PUT|PATCH|DELETE)"), ASK, "Writes to the GitLab API."),
+    (re.compile(r"issues\.py\b[^\n;&|]*\sopen\b(?![^\n;&|]*--dry-run)"), ASK,
+     "Opens a GitLab issue from ISSUES.md (glab issue create)."),
     # --- templates / git / misc -------------------------------------------------------
     (re.compile(r"\bpacker\s+build\b[^\n;&|]*\s-force\b"), ASK, "packer build -force overwrites an existing template."),
     (re.compile(r"\bgit\s+push\b[^\n;&|]*\s(--force|--force-with-lease|-f)\b"), ASK, "Force-push rewrites Git history."),

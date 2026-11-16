@@ -13,8 +13,12 @@ and patching — operated conversationally from the Claude desktop/mobile apps o
 (Private repo: the Mac's SSH agent needs a key with read access to it.)
 
 Then open Claude Code in an empty `homelab-infrastructure` repository and say e.g.
-*"initialise this repo for my homelab"*. The skill scaffolds the structure, checks tools and
-keychain access, and asks for the site configuration it can't discover.
+*"set up this repo for my homelab"*. The skill asks which parts you use (Proxmox/OpenTofu, Packer,
+Ansible, discovery, Windows, appliances, Kubernetes), scaffolds only those, checks tools and keychain
+access, and asks for the configuration it can't discover. Parts can be enabled later.
+
+Problems the skill finds are recorded in `ISSUES.md` in that repository; ask *"open ISSUE-3 on GitLab"*
+to turn one into a GitLab issue (via `glab`, after you confirm).
 
 ## What's inside
 
@@ -39,7 +43,7 @@ command Claude issues (in any project, while the plugin is enabled) and:
 - **asks the user**: `tofu apply` without a saved plan or whose plan deletes/replaces, destroy,
   state edits, imports, `qm`/`pct`/`pvesh`/`ha-manager`/`pvesm` writes, ZFS destroy, Proxmox API
   writes, reboots/shutdowns, patch/upgrade playbooks outside `--check`, `packer build -force`,
-  force-push, `curl | sh`, root or NSE nmap scans;
+  force-push, `curl | sh`, root or NSE nmap scans, creating/closing GitLab issues;
 - scans **scripts that a command executes** with the same rules, so generated scripts can't bypass it.
 
 It is defence in depth, not a sandbox: it inspects command text, so the restricted Proxmox
@@ -47,5 +51,5 @@ tokens and the user's review of plans remain the real boundaries.
 
 ## Requirements (checked by `check_env.py`)
 
-macOS with Homebrew: `opentofu`, `hashicorp/tap/packer`, `ansible`, `nmap`, `yq`, `jq`, git;
+macOS with Homebrew: `opentofu`, `hashicorp/tap/packer`, `ansible`, `nmap`, `yq`, `jq`, git, `glab` (for GitLab issues);
 an SSH agent with the homelab key; auto-login (unlocked login keychain).

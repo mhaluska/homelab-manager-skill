@@ -30,6 +30,7 @@ TOOLS = {
     "yq": (["yq", "--version"], "brew install yq"),
     "jq": (["jq", "--version"], "brew install jq"),
     "git": (["git", "--version"], "xcode-select --install"),
+    "glab": (["glab", "version"], "brew install glab   (only needed to open GitLab issues)"),
 }
 SELFTEST_SERVICE = "homelab/_selftest"
 
@@ -64,6 +65,16 @@ def check_ssh_agent():
         keys = [l.split()[-1] if l.strip() else "" for l in so.strip().splitlines()]
         return [{"check": "ssh-agent", "ok": True, "detail": f"{len(keys)} key(s) loaded: {', '.join(keys)}"}]
     return [{"check": "ssh-agent", "ok": False, "detail": "agent running but no keys loaded (ssh-add --apple-use-keychain ~/.ssh/<key>)"}]
+
+
+def check_glab():
+    if not shutil.which("glab"):
+        return []
+    rc, so, se = run(["glab", "auth", "status"], timeout=20)
+    logged = [l for l in (so + se).splitlines() if "Logged in to" in l]
+    if logged:
+        return [{"check": "glab:auth", "ok": True, "detail": "; ".join(l.strip().lstrip("✓ ").split(" (")[0] for l in logged)}]
+    return [{"check": "glab:auth", "ok": False, "detail": "not logged in — run: glab auth login --hostname <your GitLab host>"}]
 
 
 def check_keychain_unlocked():
@@ -125,7 +136,7 @@ def check_config_and_secrets():
 
 
 def main(argv):
-    results = check_tools() + check_ssh_agent() + check_keychain_unlocked()
+    results = check_tools() + check_ssh_agent() + check_glab() + check_keychain_unlocked()
     if "--keychain" in argv:
         results += check_keychain_selftest()
     cfg_results, _ = check_config_and_secrets()

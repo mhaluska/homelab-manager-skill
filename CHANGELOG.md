@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0 — 2026-11-16
+- Interactive setup: the skill asks which parts the homelab uses (Proxmox/OpenTofu, Packer templates, Ansible,
+  discovery, Windows, appliances, Kubernetes), state backend and issue tracking, then scaffolds only those.
+  `init_repo.py --components … / --add-components …`; choices recorded under `components:` in homelab.yaml.
+- ISSUES.md: problems found (drift, audits, failed runs, config bugs) are recorded via `issues.py`
+  (dedupe keys, severities, sanitised text) and can be opened as GitLab issues with `glab` after the user agrees.
+- Guard: asks before `glab issue create/close/…`, GitLab API writes and `issues.py open`; denies printing the glab token.
+- check_env.py reports glab and its login.
+
 ## 0.1.1 — 2026-11-16
 - Fix: template pre-commit hook flagged its own source as a secret, so the first commit of a new repo failed.
 - Fix: cluster hooks (k8s drain/uncordon) now run without sudo (`include_tasks … apply: become: false`);

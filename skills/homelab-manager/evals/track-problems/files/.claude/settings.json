@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(~/.ssh/id_*)",
+      "Read(**/*.tfstate)",
+      "Read(**/*.tfstate.*)",
+      "Read(**/.vault_pass*)"
+    ],
+    "ask": [
+      "Bash(tofu apply:*)",
+      "Bash(tofu -chdir=*apply*)",
+      "Bash(packer build:*)"
+    ]
+  },
+  "extraKnownMarketplaces": {
+    "homelab-manager-skill": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/mhaluska/homelab-manager-skill.git"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "homelab-manager@homelab-manager-skill": true
+  }
+}

@@ -35,7 +35,9 @@ Read-only by default; report findings with severity and a proposed fix, change n
   shouldn't be (telnet, SMBv1, plain HTTP admin UIs).
 - **Mac Mini**: FileVault / auto-login trade-off (tell the user, don't change), firewall,
   macOS updates pending (`softwareupdate -l`), SSH agent keys.
-Write the report to `docs/security-audit-<date>.md` and commit.
+Write the report to `docs/security-audit-<date>.md`, add each finding to `ISSUES.md`
+(`issues.py add --area security --key audit:<check>:<host>`), offer to open the high-severity ones
+on GitLab, and commit.
 
 ## Hard rules (also enforced by hooks/guard.py)
 
