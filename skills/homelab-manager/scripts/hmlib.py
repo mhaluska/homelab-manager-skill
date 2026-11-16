@@ -197,3 +197,99 @@ def clean(value, limit: int = 200):
         return None
     s = _CTRL.sub("", str(value))
     return s if len(s) <= limit else s[:limit] + "…"
+
+
+# ---- VMIDs -------------------------------------------------------------------------------------
+# vmid_ranges hand out the next free ID; vmid_scheme (optional) derives a guest's ID from its
+# network instead, for sites whose IDs encode meaning, e.g. "{vlan}{octet:03d}" → 1020015 for
+# VLAN 1020, x.x.x.15. Placeholders: vlan, octet (last IP octet), o1–o4 (the IP's octets).
+SCHEME_CANDIDATES = ["{vlan}{octet:03d}", "{vlan}{octet}", "{o3}{octet:03d}", "{vlan}{o3:03d}{octet:03d}"]
+VMID_MIN, VMID_MAX = 100, 999_999_999
+
+
+def vmid_from_scheme(scheme: str, ip: str | None, vlan: int | str | None) -> int:
+    if not ip and re.search(r"\{(octet|o\d)", scheme):
+        raise ConfigError(f"vmid_scheme {scheme!r} needs the guest's static IP (--ip).")
+    if vlan in (None, "") and "{vlan" in scheme:
+        raise ConfigError(f"vmid_scheme {scheme!r} needs the guest's VLAN tag (--vlan).")
+    try:
+        o = [int(x) for x in str(ip or "0.0.0.0").split("/")[0].split(".")]
+        vmid = int(scheme.format(vlan=int(vlan or 0), octet=o[3], o1=o[0], o2=o[1], o3=o[2], o4=o[3]))
+    except (ValueError, IndexError, KeyError) as e:
+        raise ConfigError(f"vmid_scheme {scheme!r} can't be applied to ip={ip} vlan={vlan}: {e}")
+    if not VMID_MIN <= vmid <= VMID_MAX:
+        raise ConfigError(f"vmid_scheme gives {vmid}, outside Proxmox's VMID range {VMID_MIN}–{VMID_MAX}.")
+    return vmid
+
+
+def next_vmid(cfg: dict, kind: str, used: dict[int, str], ip: str | None = None, vlan=None) -> int:
+    """The VMID for a new guest of `kind` (vms, lxc, templates, base_images). `used`: {vmid: name}."""
+    scheme = get(cfg, "vmid_scheme")
+    if scheme and kind in ("vms", "lxc"):
+        vmid = vmid_from_scheme(scheme, ip, vlan)
+        if vmid in used:
+            raise ConfigError(f"VMID {vmid} (vmid_scheme {scheme!r}) is already used by {used[vmid]}.")
+        return vmid
+    rng = get(cfg, f"vmid_ranges.{kind}")
+    if not (isinstance(rng, list) and len(rng) == 2):
+        raise ConfigError(f"vmid_ranges.{kind} is not set in homelab.yaml.")
+    free = next((i for i in range(int(rng[0]), int(rng[1]) + 1) if i not in used), None)
+    if free is None:
+        raise ConfigError(f"vmid_ranges.{kind} {rng} is full.")
+    return free
+
+
+def _guest_net(g: dict) -> tuple[str | None, int | None]:
+    """(static IPv4, VLAN tag) of a guest's first NIC, from its snapshot config (--details)."""
+    conf = g.get("config") or {}
+    ip = vlan = None
+    for k in sorted(conf):
+        v = str(conf[k])
+        if k.startswith(("net", "ipconfig")):
+            m = re.search(r"(?<![\w])ip=(\d+\.\d+\.\d+\.\d+)", v)
+            ip = ip or (m.group(1) if m else None)
+            m = re.search(r"(?<![\w-])tag=(\d+)", v)
+            vlan = vlan if vlan is not None else (int(m.group(1)) if m else None)
+    if not ip:
+        ip = next((a["ip"] for a in g.get("ips") or [] if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", str(a.get("ip")))), None)
+    return ip, vlan
+
+
+def vmid_fit(cfg: dict, guests: list[dict]) -> str | None:
+    """A warning when the site's existing VMIDs don't follow vmid_ranges / vmid_scheme, with a
+    scheme suggestion when one explains most guests. None when they fit (or too few guests)."""
+    guests = [g for g in guests if isinstance(g.get("vmid"), int)]
+    if len(guests) < 3:
+        return None
+    scheme = get(cfg, "vmid_scheme")
+    nets = {g["vmid"]: _guest_net(g) for g in guests if not g.get("template")}
+
+    def explained(s):
+        ok = n = 0
+        for vmid, (ip, vlan) in nets.items():
+            if ip and (vlan is not None or "{vlan" not in s):
+                n += 1
+                try:
+                    ok += vmid_from_scheme(s, ip, vlan) == vmid
+                except ConfigError:
+                    pass
+        return ok, n
+
+    if scheme:
+        ok, n = explained(scheme)
+        if n and ok * 2 < n:
+            return (f"Only {ok} of {n} guests with a known IP follow vmid_scheme {scheme!r}. "
+                    "Check the scheme in homelab.yaml before creating guests.")
+        return None
+    ranges = [r for r in (get(cfg, "vmid_ranges") or {}).values() if isinstance(r, list) and len(r) == 2]
+    outside = [g["vmid"] for g in guests if not any(int(a) <= g["vmid"] <= int(b) for a, b in ranges)]
+    if not ranges or len(outside) * 2 <= len(guests):
+        return None
+    msg = (f"{len(outside)} of {len(guests)} existing guests have VMIDs outside vmid_ranges "
+           f"(e.g. {', '.join(map(str, sorted(outside)[:3]))}): new IDs from the ranges would break your convention.")
+    best = max(((explained(s), s) for s in SCHEME_CANDIDATES), key=lambda x: x[0][0])
+    (ok, n), s = best
+    if n and ok * 2 > n:
+        return (msg + f" {ok} of {n} guests with a known IP and VLAN match vmid_scheme {s!r}: "
+                f"set it with config_set.py 'vmid_scheme={s}'.")
+    return msg + " Set vmid_scheme (e.g. \"{vlan}{octet:03d}\") or adjust vmid_ranges in homelab.yaml."

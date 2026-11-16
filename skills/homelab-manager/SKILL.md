@@ -175,8 +175,8 @@ python3 $HM/scripts/issues.py add --title "…" --kind script|guard|instructions
 - Tell the user in one line (`Noted SKILL-002 — a bug in drift_report.py; say "report skill issues" to send it`).
 - **"Report skill issues"**: `issues.py report --dry-run` checks the plugin repository's issues (open
   and closed: same key, already linked, similar title → **UPDATE** = a comment; else **CREATE**) and
-  prints the exact sanitised text (IPs, MACs, domain, host and guest names, user name, home path and
-  secrets are redacted). Read it: anything still identifying the site? Edit the entry and re-run.
+  prints the exact sanitised text (IPs, MACs, domain, host/guest/node names, VMIDs, VLANs, storage, pools,
+  bridges, user, paths, secrets → placeholders, counted in `Redacted:`). Anything still site-specific? Edit, re-run.
   Fix wrong matches with `--match SKILL-002=<number>` / `--new SKILL-002`. Show the plan, get the
   user's yes, run without `--dry-run` (the guard asks too), commit skill_issues.md. The marker stops
   re-sending; failures leave it for a retry. Labels are only set when the user may triage the repo.
@@ -220,7 +220,7 @@ Scripts (all in `$HM/scripts/`):
 | `init_repo.py --components … [--dry-run]` / `--add-components …` / `--sync-managed` | scaffold, extend, or update the repo after a plugin upgrade | repo files |
 | `check_env.py [--keychain] [--json]` | tools, SSH agent, keychain self-test, secrets readable, Proxmox TLS | — |
 | `with_secrets.py <names…> -- <cmd>` | run a command with keychain secrets in env, output redacted | — |
-| `proxmox_inventory.py [--details]` | read-only Proxmox snapshot + summary table | `discovery/proxmox.json` |
+| `proxmox_inventory.py [--details]` / `--next-vmid vms\|lxc [--ip --vlan]` | read-only Proxmox snapshot + summary table (`--details`: configs, guest IPs) / VMID for a new guest | `discovery/proxmox.json` |
 | `nmap_scan.py <targets> [--profile ping\|services\|os]` | scope-checked scan | `discovery/network.json` |
 | `drift_report.py [--tofu-json F]` | Proxmox ↔ OpenTofu ↔ Ansible ↔ network | `discovery/drift.md` |
 | `tofu_to_inventory.py` | OpenTofu output → Ansible inventory | `ansible/inventory/managed/tofu_hosts.yml` |

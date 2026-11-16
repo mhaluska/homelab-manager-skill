@@ -10,8 +10,8 @@ Sources (all read-only):
   declared  ansible/inventory/managed via `ansible-inventory --list`
 
 Reports: Proxmox guests not managed by OpenTofu, managed resources missing in Proxmox,
-attribute drift (cores, memory, node, status), Ansible hosts that don't exist, and
-network devices nobody manages. Attribute drift inside OpenTofu itself is best seen
+attribute drift (cores, memory, node, status), Ansible hosts that don't exist, which scanned
+addresses are Proxmox guests (by config/agent IP, MAC, DNS name), and network devices nobody manages. Attribute drift inside OpenTofu itself is best seen
 with `tofu plan -refresh-only`; this report covers the gaps between the sources.
 """
 from __future__ import annotations
@@ -20,6 +20,7 @@ import argparse
 import datetime as dt
 import ipaddress
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -51,6 +52,56 @@ def tofu_guests(state: dict) -> dict[int, dict]:
         out[vmid] = {"address": r.get("address"), "type": kind, "name": v.get("name") or init.get("hostname"),
                      "node": v.get("node_name"), "cores": cpu.get("cores"),
                      "mem_mib": mem.get("dedicated"), "started": v.get("started"), "template": v.get("template")}
+    return out
+
+
+MAC_RE = r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}"
+
+
+def guest_addresses(g: dict) -> tuple[dict[str, str], set[str]]:
+    """({ip: source}, {mac}) of a guest from its snapshot: static IPs in its config (LXC `ip=`, VM
+    cloud-init `ipconfigN`), addresses it reports (guest agent / LXC interfaces), and NIC MACs."""
+    ips, macs = {}, set()
+    for k, v in (g.get("config") or {}).items():
+        v = str(v)
+        if k.startswith(("net", "ipconfig")):
+            for ip in re.findall(r"(?<![\w])ip6?=([0-9A-Fa-f.:]+)(?:/\d+)?", v):
+                ips.setdefault(ip.lower(), "config")
+        if k.startswith("net"):
+            macs.update(m.lower() for m in re.findall(MAC_RE, v))
+    for a in g.get("ips") or []:
+        if a.get("ip"):
+            ips.setdefault(str(a["ip"]).lower(), a.get("source") or "agent")
+        if a.get("mac"):
+            macs.add(str(a["mac"]).lower())
+    return ips, macs
+
+
+def match_guests(guests, net_hosts: dict) -> dict[str, tuple[dict, str]]:
+    """{scanned ip: (guest, how)} — by IP (config or reported), then MAC, then DNS name = guest name."""
+    by_ip, by_mac, by_name = {}, {}, {}
+    for g in guests:
+        if g.get("template"):
+            continue
+        ips, macs = guest_addresses(g)
+        for ip, src in ips.items():
+            by_ip.setdefault(ip, (g, f"{src} IP"))
+        for m in macs:
+            by_mac.setdefault(m, g)
+        if g.get("name"):
+            by_name.setdefault(str(g["name"]).lower(), g)
+    out = {}
+    for ip, h in net_hosts.items():
+        if ip.lower() in by_ip:
+            out[ip] = by_ip[ip.lower()]
+        elif (h.get("mac") or "").lower() in by_mac:
+            out[ip] = (by_mac[h["mac"].lower()], "MAC")
+        else:
+            for name in h.get("hostnames") or []:
+                g = by_name.get(str(name or "").lower().split(".")[0])
+                if g:
+                    out[ip] = (g, f"DNS name {name}")
+                    break
     return out
 
 
@@ -200,11 +251,12 @@ def main():
     if ans:
         L += ["## Ansible inventory", ""]
         live_names = {(g["name"] or "").lower() for g in live.values()}
+        guest_ips = {ip for g in live.values() for ip in guest_addresses(g)[0]}
         net_ips = set((net or {}).get("hosts", {}).keys())
         ghosts = []
         for h, v in ans.items():
             ip = v.get("ansible_host")
-            in_px = h.lower().split(".")[0] in live_names
+            in_px = h.lower().split(".")[0] in live_names or (ip or "").lower() in guest_ips
             in_net = ip in net_ips if ip else False
             if px and net and not in_px and not in_net:
                 ghosts.append(f"- `{h}` ({ip or 'no ansible_host'}) — not a Proxmox guest and not seen on the network")
@@ -214,8 +266,31 @@ def main():
         else:
             L += ["All inventory hosts accounted for." if (px and net) else "Needs both snapshots to check.", ""]
 
+    matched = match_guests(live.values(), net["hosts"]) if (px and net) else {}
+    if px and net:
+        L += ["## Proxmox guests ↔ network", ""]
+        if matched:
+            L += [f"{len(matched)} scanned address(es) belong to Proxmox guests:", ""]
+            L += [f"- {ip} → {g['vmid']} {g['type']} `{g['name']}` ({how})"
+                  for ip, (g, how) in sorted(matched.items(), key=lambda x: ipaddress.ip_address(x[0]))]
+        else:
+            L.append("No scanned address matched a guest.")
+        if not any(g.get("config") for g in live.values()):
+            L += ["", "Snapshot has no guest configs: run `proxmox_inventory.py --details` to match by IP and MAC."]
+        agent = (px.get("guest_ip_sources") or {}).get("agent", "")
+        if agent.startswith("forbidden"):
+            L += ["", f"VM IPs from the guest agent were not read — {agent}."]
+        seen = {g["vmid"] for g, _ in matched.values()}
+        silent = [g for g in live.values() if g["status"] == "running" and not g.get("template") and g["vmid"] not in seen]
+        if silent:
+            L += ["", f"Running guests not matched to any scanned address ({len(silent)}) — outside the scanned "
+                  "ranges, firewalled, or no IP known:", ""]
+            L += [f"- {g['vmid']} {g['type']} `{g['name']}`" for g in silent]
+        L.append("")
+
     if net:
         known_ips = {v.get("ansible_host") for v in ans.values() if v.get("ansible_host")}
+        known_ips |= set(matched)
         for node_nets in (px or {}).get("networks", {}).values():
             for n in node_nets:
                 if n.get("cidr"):
@@ -224,7 +299,8 @@ def main():
         unknown = [(ip, h) for ip, h in net["hosts"].items() if ip not in known_ips and ip not in ignore]
         L += ["## Network devices not in managed inventory", ""]
         if unknown:
-            L += [f"{len(unknown)} device(s) — add to inventory, or list in `discovery.ignore_unmanaged`:", ""]
+            L += [f"{len(unknown)} device(s) — add to inventory, or list in `discovery.ignore_unmanaged`"
+                  + (" (Proxmox guests are listed above, not here)" if matched else "") + ":", ""]
             L += [f"- {ip} {(h.get('hostnames') or [''])[0]} — {h.get('device_type_guess')} {h.get('vendor') or ''}".rstrip()
                   for ip, h in sorted(unknown)]
         else:

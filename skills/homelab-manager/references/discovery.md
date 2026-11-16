@@ -16,7 +16,8 @@ doesn't make it managed. Promoting a device to managed is a deliberate edit of
 
 ```bash
 python3 $HM/scripts/proxmox_inventory.py            # snapshot + summary table
-python3 $HM/scripts/proxmox_inventory.py --details  # + per-guest config (disks, NICs, cloud-init)
+python3 $HM/scripts/proxmox_inventory.py --details  # + per-guest config (disks, NICs, cloud-init) and the IPs
+                                                    # running guests report (QEMU guest agent, LXC interfaces)
 python3 $HM/scripts/proxmox_inventory.py --summary  # print only, write nothing
 ```
 Uses the read-only token. For "show VMs and their resource usage", run it and give the
@@ -65,7 +66,10 @@ devices since the last scan (`first_seen` == `last_seen`).
 4. Summarise per category: unmanaged guests (→ import candidates), managed-but-missing
    (→ deleted outside OpenTofu; a normal plan would recreate them — ask what the user wants),
    attribute drift (→ either update code to match reality, or apply to restore; ask which),
-   unknown network devices.
+   unknown network devices. Scanned addresses that are Proxmox guests (matched by config or
+   agent IP, MAC, DNS name = guest name; needs `--details`) are listed under *Proxmox guests ↔
+   network*, not as unknown devices. If VM IPs weren't read (the token lacks
+   `VM.GuestAgent.Audit`), say so and point to `docs/proxmox-tokens.md`.
 5. The findings live in `discovery/drift.md` (regenerated each run) and your reply; they are not
    copied anywhere else. If `drift_report.py` itself misbehaved (crash, a guest wrongly flagged),
    that is a skill problem: note it in `skill_issues.md` (SKILL.md §6).

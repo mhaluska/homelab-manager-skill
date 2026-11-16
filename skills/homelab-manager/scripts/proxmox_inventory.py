@@ -2,6 +2,9 @@
 """Read-only Proxmox VE inventory: nodes, VMs, LXC containers, storage, networks.
 
     proxmox_inventory.py [--secret proxmox-ro] [--out discovery/proxmox.json] [--details] [--summary]
+    proxmox_inventory.py --next-vmid vms|lxc|templates|base_images [--ip IP] [--vlan TAG]
+                         # offline: the VMID for a new guest (vmid_scheme or the next free ID in
+                         # vmid_ranges), checked against the snapshot and the tfvars
 
 Uses only GET requests with the read-only API token from the keychain
 (homelab.yaml: proxmox.tokens.read_only → secrets.<name>). Writes a JSON snapshot
@@ -13,6 +16,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import re
 import ssl
 import sys
 import urllib.error
@@ -73,6 +77,60 @@ class PVE:
         return f"{need}, granted to both the token and its user {user} (privilege separation)."
 
 
+AGENT_PRIV = "VM.GuestAgent.Audit (Proxmox VE 9; VM.Monitor on 8.x)"
+
+
+def agent_enabled(conf: dict) -> bool:
+    v = str(conf.get("agent") or "0")
+    return v.split(",")[0] in ("1", "enabled=1") or "enabled=1" in v
+
+
+def usable_ip(ip: str) -> bool:
+    ip = ip.split("/")[0].lower()
+    return bool(ip) and not ip.startswith(("127.", "169.254.", "fe80:")) and ip != "::1"
+
+
+def guest_ips(pve: "PVE", g: dict, kind: str, conf: dict, sources: dict) -> list[dict]:
+    """Addresses a running guest reports: QEMU guest agent for VMs (agent=1), /interfaces for LXC.
+    Read-only; a 403 is recorded once in `sources` with the missing privilege instead of failing."""
+    out = []
+    if kind == "qemu":
+        if not agent_enabled(conf) or sources["agent"].startswith("forbidden"):
+            return out
+        try:
+            data = pve._get(f"/nodes/{g['node']}/qemu/{g['vmid']}/agent/network-get-interfaces") or {}
+        except urllib.error.HTTPError as e:
+            if e.code == 403:
+                sources["agent"] = (f"forbidden: the read-only token (and its user) need {AGENT_PRIV} on /vms "
+                                    "to read VM IPs from the guest agent")
+            return out  # 500: agent not running in the guest
+        except (urllib.error.URLError, OSError, ValueError):
+            return out
+        sources["agent"] = "ok"
+        for nic in data.get("result") or []:
+            if nic.get("name") == "lo":
+                continue
+            for a in nic.get("ip-addresses") or []:
+                if usable_ip(str(a.get("ip-address") or "")):
+                    out.append({"iface": clean(nic.get("name")), "mac": clean(nic.get("hardware-address")),
+                                "ip": clean(a.get("ip-address")), "source": "agent"})
+    else:
+        try:
+            data = pve._get(f"/nodes/{g['node']}/lxc/{g['vmid']}/interfaces") or []
+        except (urllib.error.URLError, OSError, ValueError):
+            return out
+        sources["lxc"] = "ok"
+        for nic in data:
+            if nic.get("name") == "lo":
+                continue
+            for key in ("inet", "inet6"):
+                for ip in str(nic.get(key) or "").split():
+                    if usable_ip(ip):
+                        out.append({"iface": clean(nic.get("name")), "mac": clean(nic.get("hwaddr")),
+                                    "ip": clean(ip.split("/")[0]), "source": "lxc"})
+    return out
+
+
 def gib(b):
     return round((b or 0) / 1024**3, 1)
 
@@ -124,6 +182,7 @@ def collect(pve: PVE, details: bool) -> dict:
     except SystemExit:
         backup_jobs = None
 
+    ip_sources = {"agent": "not queried", "lxc": "not queried"}
     if details:  # per-guest config: network, disks, cloud-init, agent — still read-only
         for g in guests:
             kind = "qemu" if g["type"] == "vm" else "lxc"
@@ -137,6 +196,8 @@ def collect(pve: PVE, details: bool) -> dict:
                                     "sockets", "memory", "onboot", "description")}
             if "description" in g["config"]:
                 g["config"]["description"] = "[untrusted] " + g["config"]["description"]
+            if g["status"] == "running":
+                g["ips"] = guest_ips(pve, g, kind, conf, ip_sources)
 
     return {"collected_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
             "source": "proxmox-api", "version": version.get("version"),
@@ -145,10 +206,26 @@ def collect(pve: PVE, details: bool) -> dict:
             "nodes": sorted(nodes, key=lambda x: x["node"] or ""),
             "guests": sorted(guests, key=lambda x: x["vmid"] or 0),
             "storage": sorted(storage, key=lambda x: (x["node"] or "", x["storage"] or "")),
-            "networks": networks, "backup_jobs": backup_jobs}
+            "networks": networks, "backup_jobs": backup_jobs,
+            **({"guest_ip_sources": ip_sources} if details else {})}
 
 
-def summary(inv: dict) -> str:
+def used_vmids(root: Path) -> dict[int, str]:
+    """{vmid: who} from discovery/proxmox.json and every vm_id / template_vm_id in the tfvars."""
+    used = {}
+    try:
+        for g in json.loads((root / "discovery" / "proxmox.json").read_text()).get("guests") or []:
+            if isinstance(g.get("vmid"), int):
+                used[g["vmid"]] = f"{g.get('type')} {g.get('name')} (Proxmox)"
+    except (OSError, ValueError):
+        pass
+    for f in sorted((root / "tofu").glob("**/*.tfvars")):
+        for m in re.finditer(r"^\s*vm_id\s*=\s*(\d+)", f.read_text(errors="replace"), re.M):
+            used.setdefault(int(m.group(1)), f"{f.relative_to(root)}")
+    return used
+
+
+def summary(inv: dict, cfg: dict | None = None) -> str:
     lines = [f"Proxmox VE {inv['version']} — " + (f"cluster {inv['cluster']['name']} ({inv['cluster']['nodes']} nodes, "
              f"quorate={bool(inv['cluster']['quorate'])})" if inv["cluster"] else "standalone node")]
     lines.append("\nNodes:")
@@ -166,6 +243,12 @@ def summary(inv: dict) -> str:
         pct = (s["used_gib"] / s["size_gib"] * 100) if s["size_gib"] else 0
         lines.append(f"  {s['storage']:<16} {s['node']:<10} {s['type'] or '':<8} {'shared' if s['shared'] else 'local':<6} "
                      f"{s['used_gib']}/{s['size_gib']} GiB ({pct:.0f}%)  [{s['content']}]")
+    fit = hmlib.vmid_fit(cfg, inv["guests"]) if cfg else None
+    if fit:
+        lines.append(f"\nVMIDs: {fit}")
+    agent = (inv.get("guest_ip_sources") or {}).get("agent", "")
+    if agent.startswith("forbidden"):
+        lines.append(f"\nGuest agent IPs not read — {agent}.")
     return "\n".join(lines)
 
 
@@ -175,9 +258,17 @@ def main():
     ap.add_argument("--out", help="output JSON (default: discovery/proxmox.json in the repo)")
     ap.add_argument("--details", action="store_true", help="also fetch each guest's config")
     ap.add_argument("--summary", action="store_true", help="print the human summary only, write nothing")
+    ap.add_argument("--next-vmid", choices=["vms", "lxc", "templates", "base_images"],
+                    help="print the VMID for a new guest of this kind (no API call)")
+    ap.add_argument("--ip", help="with --next-vmid: the new guest's static IP (for vmid_scheme)")
+    ap.add_argument("--vlan", help="with --next-vmid: the new guest's VLAN tag (for vmid_scheme)")
     a = ap.parse_args()
     try:
         cfg = hmlib.load_config()
+        if a.next_vmid:
+            used = used_vmids(Path(cfg["_root"]))
+            print(hmlib.next_vmid(cfg, a.next_vmid, used, ip=a.ip, vlan=a.vlan))
+            return 0
         endpoint = hmlib.get(cfg, "proxmox.endpoint")
         if not endpoint:
             raise hmlib.ConfigError("proxmox.endpoint is empty in homelab.yaml.")
@@ -193,7 +284,7 @@ def main():
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(inv, indent=2) + "\n")
         print(f"Wrote {out}\n")
-    print(summary(inv))
+    print(summary(inv, cfg))
     return 0
 
 

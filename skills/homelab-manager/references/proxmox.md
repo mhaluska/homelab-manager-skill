@@ -8,7 +8,10 @@ All lifecycle changes go through OpenTofu (`tofu/environments/<env>/homelab.auto
 1. Inputs: name (ask or propose one following existing names), template, size, network.
    - Template: newest `tpl-rocky*` from `discovery/proxmox.json` (template: true) or
      `docs/templates.md`. None? Offer to build one first (templates.md).
-   - VMID: next free in `vmid_ranges.vms` — check both the live snapshot and tfvars.
+   - VMID: `proxmox_inventory.py --next-vmid vms` (LXC: `lxc`) — next free in `vmid_ranges`, checked
+     against the snapshot and tfvars. With `vmid_scheme` set, pass `--ip <static ip> --vlan <tag>`; the ID
+     is derived from them (DHCP guest under a scheme → ask the user for the ID). If the inventory
+     summary warns that existing VMIDs don't fit the ranges, ask the user before picking one.
    - Node/storage/bridge: entry overrides → `defaults` in tfvars → `homelab.yaml`. If
      `defaults` isn't filled yet, fill it from `homelab.yaml` (ask for the gaps).
    - IP: static CIDR if the user gives one or the network has a plan; otherwise `dhcp`.

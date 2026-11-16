@@ -105,8 +105,166 @@ SCRIPT_RUNNERS = {"bash", "sh", "zsh", "dash", "ksh", "python", "python3", "perl
 INFRA_HINT = re.compile(r"\b(tofu|terraform|packer|ansible|ansible-playbook|nmap|qm|pct|pvesh|ssh|security)\b")
 
 
-def split_segments(command: str) -> list[str]:
-    return [s.strip() for s in re.split(r"\n|;|&&|\|\||\|(?!\|)", command) if s.strip()]
+HEREDOC_RUNNERS = SCRIPT_RUNNERS | {"ssh", "eval", "xargs", "osascript"}
+SHELL_KEYWORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "}"}
+
+
+class Shell:
+    """Split a command into simple commands the way the shell would: separators inside quotes don't
+    split, $(…) and `…` are commands of their own, comments are dropped, and heredoc bodies are
+    data unless a command on their line runs them (bash <<EOF, cat <<EOF | sh, ssh host <<EOF).
+
+    segments   — simple commands, in order
+    code       — heredoc bodies that a shell/interpreter executes (checked like commands)
+    rule_text  — the command without data heredoc bodies (for the RULES regexes)
+    """
+
+    def __init__(self, command: str):
+        self.s = command
+        self.segments: list[str] = []
+        self.code: list[str] = []
+        self.data_spans: list[tuple[int, int]] = []
+        end = self.parse(0, None)
+        while end < len(self.s):  # stray `)` or backtick at top level: keep going
+            end = self.parse(end + 1, None)
+        text, last = [], 0
+        for a, b in self.data_spans:
+            text.append(self.s[last:a])
+            last = b
+        self.rule_text = "".join(text) + self.s[last:]
+
+    def flush(self, buf: list[str]):
+        t = "".join(buf).strip()
+        if t:
+            self.segments.append(t)
+        buf.clear()
+
+    def squote(self, i: int, buf: list[str]) -> int:
+        j = self.s.find("'", i + 1)
+        j = len(self.s) - 1 if j < 0 else j
+        buf.append(self.s[i:j + 1])
+        return j + 1
+
+    def dquote(self, i: int, buf: list[str]) -> int:
+        s, n = self.s, len(self.s)
+        buf.append('"')
+        i += 1
+        while i < n:
+            c = s[i]
+            if c == "\\" and i + 1 < n:
+                buf.append(s[i:i + 2])
+                i += 2
+            elif c == '"':
+                buf.append('"')
+                return i + 1
+            elif s.startswith("$(", i) and not s.startswith("$((", i):
+                i = self.parse(i + 2, ")")
+                buf.append("$(…)")
+            elif c == "`":
+                i = self.parse(i + 1, "`")
+                buf.append("`…`")
+            else:
+                buf.append(c)
+                i += 1
+        return n
+
+    def heredoc_start(self, i: int, buf: list[str], pending: list) -> int:
+        """At `<<`: read the delimiter word, remember the heredoc, return the index after the word."""
+        s, n = self.s, len(self.s)
+        j = i + 2
+        strip = j < n and s[j] == "-"
+        j += strip
+        while j < n and s[j] in " \t":
+            j += 1
+        k, word = j, []
+        while k < n and s[k] not in " \t\n;&|<>()":
+            if s[k] in "'\"":
+                q = s.find(s[k], k + 1)
+                q = n if q < 0 else q
+                word.append(s[k + 1:q])
+                k = q + 1
+            else:
+                word.append(s[k].lstrip("\\"))
+                k += 1
+        if word:
+            pending.append(("".join(word), strip))
+        buf.append(s[i:k])
+        return k
+
+    def heredoc_bodies(self, i: int, pending: list, line_start: int) -> int:
+        """At the newline after `<<WORD`: consume the bodies, classify each as code or data."""
+        s, n = self.s, len(self.s)
+        runs = False
+        for seg in self.segments[line_start:]:
+            tok = strip_prefix(tokens(seg))
+            runs |= bool(tok) and Path(tok[0]).name in HEREDOC_RUNNERS
+        for word, strip in pending:
+            start = i
+            while i < n:
+                nl = s.find("\n", i)
+                line_end = n if nl < 0 else nl
+                line = s[i:line_end]
+                i = line_end + 1 if nl >= 0 else n
+                if (line.lstrip("\t") if strip else line) == word:
+                    body_end = line_end
+                    break
+            else:
+                body_end = n
+            if runs:
+                self.code.append(s[start:body_end])
+            else:
+                self.data_spans.append((start, body_end))
+        pending.clear()
+        return i
+
+    def parse(self, i: int, stop: str | None) -> int:
+        s, n = self.s, len(self.s)
+        buf: list[str] = []
+        pending: list = []
+        line_start = len(self.segments)
+        depth = 0
+        while i < n:
+            c = s[i]
+            if stop == "`" and c == "`" or stop == ")" and c == ")" and depth == 0:
+                self.flush(buf)
+                return i + 1
+            if c == "\\" and i + 1 < n:
+                if s[i + 1] != "\n":
+                    buf.append(s[i:i + 2])
+                i += 2
+            elif c == "'":
+                i = self.squote(i, buf)
+            elif c == '"':
+                i = self.dquote(i, buf)
+            elif s.startswith("$(", i) and not s.startswith("$((", i):
+                i = self.parse(i + 2, ")")
+                buf.append("$(…)")
+            elif c == "`":
+                i = self.parse(i + 1, "`")
+                buf.append("`…`")
+            elif c == "#" and (not buf or buf[-1][-1:] in (" ", "\t")):
+                nl = s.find("\n", i)
+                i = n if nl < 0 else nl
+            elif s.startswith("<<", i) and not s.startswith("<<<", i):
+                i = self.heredoc_start(i, buf, pending)
+            elif c == "\n":
+                self.flush(buf)
+                i += 1
+                if pending:
+                    i = self.heredoc_bodies(i, pending, line_start)
+                line_start = len(self.segments)
+            elif c in ";|" or c == "&" and s[i - 1:i] not in (">", "<") and s[i + 1:i + 2] != ">":
+                self.flush(buf)
+                i += 1
+            elif c in "()":
+                depth += 1 if c == "(" else -1 if depth else 0
+                self.flush(buf)
+                i += 1
+            else:
+                buf.append(c)
+                i += 1
+        self.flush(buf)
+        return n
 
 
 def tokens(segment: str) -> list[str]:
@@ -121,6 +279,9 @@ def strip_prefix(tok: list[str]) -> list[str]:
     out = list(tok)
     while out:
         t = out[0]
+        if t in SHELL_KEYWORDS:
+            out = out[1:]
+            continue
         if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t) or t in ("sudo", "env", "time", "exec", "nohup", "command"):
             out = out[1:]
             while out and out[0].startswith("-") and out[0] != "--":  # sudo -n, env -i, …
@@ -159,8 +320,8 @@ def nmap_targets(args: list[str], cwd: str) -> tuple[list[str], list[str]]:
                     problems.append(f"cannot read target list {args[i + 1]}")
             i += 2
             continue
-        if a.startswith("-"):
-            i += 1
+        if a.startswith("-") or re.match(r"^\d*(>>?|<)", a):
+            i += 1 + (re.fullmatch(r"\d*(>>?|<)", a) is not None)  # `> file`: skip the file too
             continue
         targets.append(a)
         i += 1
@@ -231,13 +392,38 @@ def script_path(tok: list[str], cwd: str) -> Path | None:
     return p if p.is_file() else None
 
 
+SSH_VALUE_OPTS = set("bcDEeFIiJLlmOoPpQRSWw")
+
+
+def inner_command(tok: list[str]) -> str | None:
+    """The command string that `bash -c STR`, `eval STR…` or `ssh [opts] host CMD…` runs."""
+    name = Path(tok[0]).name
+    if name in ("bash", "sh", "zsh", "dash", "ksh") and "-c" in tok[1:-1]:
+        return tok[tok.index("-c") + 1]
+    if name == "eval":
+        return " ".join(tok[1:])
+    if name == "ssh":
+        i = 1
+        while i < len(tok) and tok[i].startswith("-"):
+            i += 2 if tok[i][-1] in SSH_VALUE_OPTS and len(tok[i]) == 2 else 1
+        return " ".join(tok[i + 1:]) or None
+    return None
+
+
 def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
-    findings = check_text(command)
-    for seg in split_segments(command):
+    sh = Shell(command)
+    findings = check_text(sh.rule_text)
+    if depth < 3:
+        for body in sh.code:  # heredoc a shell or interpreter runs: same checks as a command
+            findings += evaluate(body, cwd, depth + 1)
+    for seg in sh.segments:
         tok = strip_prefix(tokens(seg))
         if not tok:
             continue
         name = Path(tok[0]).name
+        inner = inner_command(tok)
+        if inner and depth < 3:
+            findings += evaluate(inner, cwd, depth + 1)
         if name == "nmap":
             findings += check_nmap(tok[1:], cwd)
         elif name in ("tofu", "terraform"):

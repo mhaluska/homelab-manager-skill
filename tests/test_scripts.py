@@ -1,6 +1,7 @@
 """Tests for init_repo.py (components, upgrades) and issues.py (skill-problem tracker)."""
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -281,6 +282,31 @@ class ReportTests(unittest.TestCase):
         for kept in ("<ip>/24", "<host>.<domain>", "127.0.0.1", "12:34:56", "<mac>", "nmap_scan fails on <host>"):
             self.assertIn(kept, out, kept)
         self.assertIn("nas-kitchen", Path(self.d, "skill_issues.md").read_text())  # local copy keeps the detail
+
+    def test_proxmox_identifiers_redacted_with_stable_placeholders(self):  # GitHub issue #10
+        px = {"nodes": [{"node": "atlas"}],
+              "guests": [{"vmid": 1020015, "name": "gw", "node": "atlas", "pool": "family",
+                          "config": {"net0": "virtio=AA:BB:CC:00:11:22,bridge=iotbr,tag=1020",
+                                     "net1": "virtio=AA:BB:CC:00:11:23,bridge=vmbr0,tag=7,trunks=30;40"}},
+                         {"vmid": 245, "name": "dns", "node": "atlas"}],
+              "storage": [{"storage": "tank-ssd", "node": "atlas"}, {"storage": "local-zfs", "node": "atlas"}],
+              "networks": {"atlas": [{"iface": "vmbr0.55", "type": "vlan"}, {"iface": "iotbr", "type": "bridge"}]}}
+        Path(self.d, "discovery/proxmox.json").write_text(json.dumps(px))
+        body = ("### Summary\nGuest 1020015 = VLAN 1020 on atlas; 245 too (tag=7, vlan55, trunks=30;40).\n"
+                "Disk tank-ssd:vm-245-disk-0 in pool family on bridge iotbr, vmbr0.55; local-zfs is fine.\n"
+                "Traceback line 245 of proxmox 9.1.245, port 1020 and VLAN 1020 again; 50% of 1024 MiB.")
+        self.issues("add", "--title", "VMID 245 on atlas", "--kind", "script", "--body", body)
+        out = self.issues("report", "--dry-run").stdout
+        for leak in ("1020015", "1020", "atlas", "tank-ssd", "family", "iotbr", "vm-245", "tag=7", "vlan55",
+                     "vmbr0.55", "30;40"):
+            self.assertNotIn(leak, out, leak)
+        for kept in ("[script] VMID <vmid-1> on <node-1>", "Guest <vmid-2> = VLAN <vlan-", "on <node-1>; <vmid-1> too",
+                     "<storage-1>:vm-<vmid-1>-disk-0", "pool <pool-1>", "bridge <bridge-1>", "local-zfs is fine",
+                     "line 245", "9.1.245", "1024 MiB", "50%"):
+            self.assertIn(kept, out, kept)
+        tag = re.search(r"VLAN (<vlan-\d+>) on", out).group(1)
+        self.assertIn(f"VLAN {tag} again", out)  # same value, same placeholder
+        self.assertRegex(out, r"Redacted: 2 VMIDs, \d VLANs, 1 node, 1 storage, 1 pool, 1 bridge")
 
     def test_dry_run_without_gh_still_shows_text(self):
         self.issues("add", "--title", "x crashes", "--kind", "script")
@@ -634,6 +660,126 @@ class DriftTests(unittest.TestCase):
         self.assertNotIn("100 `dns01` is in no backup job", r.stdout)
 
 
+class GuestNetworkMappingTests(unittest.TestCase):
+    """#7: scanned addresses are matched to Proxmox guests (config/agent IP, MAC, DNS name)."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        run("init_repo.py", self.d, "--components", "proxmox,discovery", cwd=self.d)
+        guest = lambda vmid, name, typ, **kw: {"vmid": vmid, "name": name, "type": typ, "node": "pve1",
+                                               "status": "running", "template": False, "tags": "tofu", **kw}
+        snap = {"collected_at": "2026-01-01T00:00:00+00:00", "version": "9", "cluster": None, "nodes": [],
+                "networks": {}, "storage": [], "backup_jobs": None,
+                "guest_ip_sources": {"agent": "forbidden: the read-only token (and its user) need VM.GuestAgent.Audit"},
+                "guests": [guest(901, "dns", "lxc", config={"net0": "name=eth0,bridge=vmbr0,hwaddr=BC:24:11:00:00:01,"
+                                                                     "ip=10.0.10.53/24,gw=10.0.10.1,tag=10"}),
+                           guest(101, "web", "vm", config={"net0": "virtio=BC:24:11:00:00:02,bridge=vmbr0",
+                                                           "ipconfig0": "ip=dhcp"},
+                                 ips=[{"iface": "eth0", "mac": "bc:24:11:00:00:02", "ip": "10.0.10.80", "source": "agent"}]),
+                           guest(102, "mail", "vm", config={"net0": "virtio=BC:24:11:00:00:03,bridge=vmbr0"}),
+                           guest(103, "vault", "vm", config={"net0": "virtio=BC:24:11:00:00:04,bridge=vmbr0"}),
+                           guest(104, "offline", "vm", config={})]}
+        Path(self.d, "discovery/proxmox.json").write_text(json.dumps(snap))
+        host = lambda mac=None, names=(): {"mac": mac, "hostnames": list(names), "device_type_guess": "linux", "vendor": None}
+        net = {"updated_at": "2026-01-01", "hosts": {"10.0.10.53": host(), "10.0.10.80": host(),
+                                                     "10.0.10.25": host(mac="BC:24:11:00:00:03"),
+                                                     "10.0.10.40": host(names=["vault.lab.example"]),
+                                                     "10.0.10.9": host(names=["printer.lab.example"])}}
+        Path(self.d, "discovery/network.json").write_text(json.dumps(net))
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def test_matching(self):
+        r = run("drift_report.py", "--no-tofu", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        section = r.stdout.split("## Proxmox guests ↔ network")[1].split("\n## ")[0]
+        for line in ("10.0.10.25 → 102 vm `mail` (MAC)", "10.0.10.40 → 103 vm `vault` (DNS name vault.lab.example)",
+                     "10.0.10.53 → 901 lxc `dns` (config IP)", "10.0.10.80 → 101 vm `web` (agent IP)",
+                     "- 104 vm `offline`", "VM.GuestAgent.Audit"):
+            self.assertIn(line, section, line)
+        unmanaged = r.stdout.split("## Network devices not in managed inventory")[1]
+        self.assertIn("1 device(s)", unmanaged)
+        self.assertIn("10.0.10.9 printer", unmanaged)
+
+    def test_inventory_reads_agent_and_lxc_ips_and_degrades_on_403(self):
+        import urllib.error
+        sys.path.insert(0, str(SCRIPTS))
+        import proxmox_inventory as inv
+        pve = inv.PVE("https://pve.example:8006", "homelab@pve!ro=s3cret", None)
+        calls = []
+
+        def fake(path, **_):
+            calls.append(path)
+            if path.endswith("/agent/network-get-interfaces"):
+                if "/101/" in path:
+                    return {"result": [{"name": "lo", "ip-addresses": [{"ip-address": "127.0.0.1"}]},
+                                       {"name": "eth0", "hardware-address": "bc:24:11:00:00:02",
+                                        "ip-addresses": [{"ip-address": "10.0.10.80"}, {"ip-address": "fe80::1"}]}]}
+                raise urllib.error.HTTPError(path, 403, "Forbidden", {}, None)
+            if path.endswith("/interfaces"):
+                return [{"name": "eth0", "hwaddr": "bc:24:11:00:00:01", "inet": "10.0.10.53/24"}]
+            raise AssertionError(path)
+        pve._get = fake
+        src = {"agent": "not queried", "lxc": "not queried"}
+        vm = lambda vmid: {"node": "pve1", "vmid": vmid}
+        self.assertEqual([a["ip"] for a in inv.guest_ips(pve, vm(101), "qemu", {"agent": "1"}, src)], ["10.0.10.80"])
+        self.assertEqual(inv.guest_ips(pve, vm(102), "qemu", {"agent": "enabled=1,fstrim_cloned_disks=1"}, src), [])
+        self.assertIn("VM.GuestAgent.Audit", src["agent"])
+        n = len(calls)
+        self.assertEqual(inv.guest_ips(pve, vm(103), "qemu", {"agent": "1"}, src), [])  # no retry after 403
+        self.assertEqual(inv.guest_ips(pve, vm(104), "qemu", {"agent": "0"}, src), [])
+        self.assertEqual(len(calls), n)
+        self.assertEqual(inv.guest_ips(pve, vm(901), "lxc", {}, src)[0]["ip"], "10.0.10.53")
+
+
+class VmidSchemeTests(unittest.TestCase):
+    """#6: VMIDs that encode the network (vmid_scheme), and a warning when the ranges don't fit."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        run("init_repo.py", self.d, "--components", "proxmox", cwd=self.d)
+        sys.path.insert(0, str(SCRIPTS))
+        import hmlib
+        self.h = hmlib
+        lxc = lambda vmid, tag, ip: {"vmid": vmid, "name": f"g{vmid}", "type": "lxc", "template": False,
+                                     "config": {"net0": f"name=eth0,bridge=vmbr0,ip={ip}/24,tag={tag}"}}
+        self.guests = [lxc(1020015, 1020, "10.20.0.15"), lxc(1020016, 1020, "10.20.0.16"),
+                       lxc(30007, 30, "10.30.0.7"), {"vmid": 9050, "name": "tpl", "template": True}]
+        Path(self.d, "discovery/proxmox.json").write_text(json.dumps({"guests": self.guests}))
+        Path(self.d, "tofu/environments/homelab/homelab.auto.tfvars").write_text(
+            Path(self.d, "tofu/environments/homelab/homelab.auto.tfvars").read_text() + "\n# vm_id = 101\nx = {\n  vm_id = 100\n}\n")
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def cfg(self):
+        return self.h.load_config(self.d)
+
+    def test_ranges_by_default_and_warning_suggests_scheme(self):
+        r = run("proxmox_inventory.py", "--next-vmid", "vms", cwd=self.d)
+        self.assertEqual(r.stdout.strip(), "101", r.stderr)  # 100 is in tfvars
+        self.assertEqual(run("proxmox_inventory.py", "--next-vmid", "templates", cwd=self.d).stdout.strip(), "9051")
+        warn = self.h.vmid_fit(self.cfg(), self.guests)
+        self.assertIn("3 of 4 existing guests have VMIDs outside vmid_ranges", warn)
+        self.assertIn("vmid_scheme={vlan}{octet:03d}", warn)
+
+    def test_scheme(self):
+        self.assertEqual(run("config_set.py", "vmid_scheme={vlan}{octet:03d}", cwd=self.d).returncode, 0)
+        self.assertIsNone(self.h.vmid_fit(self.cfg(), self.guests))
+        r = run("proxmox_inventory.py", "--next-vmid", "lxc", "--ip", "10.20.0.17/24", "--vlan", "1020", cwd=self.d)
+        self.assertEqual(r.stdout.strip(), "1020017", r.stderr)
+        r = run("proxmox_inventory.py", "--next-vmid", "vms", "--ip", "10.20.0.15", "--vlan", "1020", cwd=self.d)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("already used by lxc g1020015", r.stderr)
+        r = run("proxmox_inventory.py", "--next-vmid", "vms", "--ip", "10.20.0.18", cwd=self.d)
+        self.assertIn("needs the guest's VLAN tag", r.stderr)
+        self.assertEqual(run("proxmox_inventory.py", "--next-vmid", "templates", cwd=self.d).stdout.strip(), "9051")
+        with self.assertRaises(self.h.ConfigError):
+            self.h.vmid_from_scheme("{vlan}{octet:03d}", "10.0.0.5", 0)  # 5 < 100
+        self.assertIn("Only 0 of 3", self.h.vmid_fit({"vmid_scheme": "{o3}{octet:03d}"}, self.guests))
+
+
 class TokenAclTests(unittest.TestCase):
     """#5: privilege-separated tokens only get what their user also has."""
 
@@ -654,6 +800,7 @@ class TokenAclTests(unittest.TestCase):
 
     def test_old_doc_gets_user_acls_once(self):
         text = self.doc.read_text()
+        text = re.sub(r"\nOptional — VM IPs.*?\n```\n", "", text, flags=re.S)  # added in 0.11.0
         old = "\n".join(l for l in text.splitlines() if "--users" not in l) + "\n"
         old = old.split("Both tokens use privilege separation")[0].rstrip("\n") + "\n\n## " + old.split("\n## ", 1)[1]
         old = old.replace("/ --tokens 'homelab@pve!rw'", "/pool/lab --tokens 'homelab@pve!rw'")  # user-edited path
@@ -840,9 +987,23 @@ class SkillProblemHookTests(unittest.TestCase):
         return p
 
     def test_traceback_in_bundled_script(self):
-        tb = 'Traceback (most recent call last):\n  File "x.py", line 1\nKeyError: \'backup_jobs\'\n'
+        tb = ('Traceback (most recent call last):\n'
+              '  File "/p/skills/homelab-manager/scripts/drift_report.py", line 9, in <module>\n'
+              '  File "/p/skills/homelab-manager/scripts/hmlib.py", line 3, in get\nKeyError: \'backup_jobs\'\n')
         msg = self.hook(self.payload("python3 $HM/scripts/drift_report.py", stderr=tb))
         self.assertIn("issues.py add --kind script --key script:drift_report:keyerror", msg)
+
+    def test_unrelated_traceback_not_blamed_on_a_script(self):  # GitHub issue #8
+        tb = 'Traceback (most recent call last):\n  File "<string>", line 1, in <module>\nKeyError: \'mac\'\n'
+        cmd = "python3 $HM/scripts/drift_report.py --no-tofu >/dev/null; python3 -c 'import json; json.load(...)[\"mac\"]'"
+        self.assertIsNone(self.hook(self.payload(cmd, stderr=tb)))
+        self.assertIsNone(self.hook(self.payload(cmd, event="PostToolUseFailure", stderr=tb, error="Exit code 1")))
+        theirs = tb.replace("<string>", "/Users/x/homelab/scripts/drift_report.py")
+        self.assertIsNone(self.hook(self.payload("python3 $HM/scripts/drift_report.py; python3 scripts/drift_report.py",
+                                                 stderr=theirs)))
+        ours = tb.replace("<string>", "/p/skills/homelab-manager/scripts/nmap_scan.py")
+        msg = self.hook(self.payload("python3 $HM/scripts/drift_report.py", stderr=tb + ours))
+        self.assertIn("nmap_scan.py crashed", msg)
 
     def test_failure_asks_for_judgement(self):
         msg = self.hook(self.payload("python3 /x/skills/homelab-manager/scripts/check_env.py",

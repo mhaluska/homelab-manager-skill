@@ -20,6 +20,15 @@ pveum acl modify / --tokens 'homelab@pve!ro' --roles PVEAuditor
 Keychain value: `homelab@pve!ro=<secret>` →
 `security add-generic-password -U -T /usr/bin/security -a "$USER" -s homelab/proxmox-ro -w`
 
+Optional — VM IPs from the QEMU guest agent (`proxmox_inventory.py --details`, drift report's
+guest ↔ network matching). PVEAuditor may not include the agent privilege; grant it if the
+inventory says the agent IPs were not read (`VM.GuestAgent.Audit` on Proxmox VE 9, `VM.Monitor` on 8.x):
+```bash
+pveum role add HomelabAgentAudit -privs "VM.GuestAgent.Audit"
+pveum acl modify /vms --users homelab@pve --roles HomelabAgentAudit
+pveum acl modify /vms --tokens 'homelab@pve!ro' --roles HomelabAgentAudit
+```
+
 ## Provisioning (OpenTofu, Packer)
 
 ```bash

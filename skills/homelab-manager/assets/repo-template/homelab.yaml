@@ -46,6 +46,9 @@ vmid_ranges:                 # keep IDs predictable; the skill picks the next fr
   templates: [9050, 9999]
   vms: [100, 899]
   lxc: [900, 999]
+vmid_scheme: ""               # optional: derive VM/LXC IDs from the network instead of the ranges, for sites
+                             # whose IDs encode it, e.g. "{vlan}{octet:03d}" → 1020015 (VLAN 1020, x.x.x.15).
+                             # Placeholders: vlan, octet (last IP octet), o1-o4. Templates keep their ranges.
 
 defaults:
   admin_user: ""             # user created by cloud-init on new VMs

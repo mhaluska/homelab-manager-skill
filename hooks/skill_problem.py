@@ -18,6 +18,7 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parents[1] / "skills" / "homelab-manager" / "scripts"
 TRACEBACK = re.compile(r"Traceback \(most recent call last\):(?:.|\n)*?^(\w+(?:\.\w+)*(?:Error|Exception|Exit|Interrupt)?)\b",
                        re.M)
+FRAME = re.compile(r'File "[^"\n]*homelab-manager/scripts/([A-Za-z0-9_]+)\.py"')
 ADD = 'python3 $HM/scripts/issues.py add --kind script --key {key} --title "…" --body-file <details.md>'
 
 
@@ -25,6 +26,12 @@ def scripts_in(command: str) -> list[str]:
     names = {p.stem for p in SCRIPTS.glob("*.py")}
     found = re.findall(r"scripts/([A-Za-z0-9_]+)\.py\b", command)
     return list(dict.fromkeys(n for n in found if n in names))
+
+
+def crashed_script(tb_text: str, names: set[str]) -> str | None:
+    """The bundled script a traceback came from: its outermost frame under homelab-manager/scripts/.
+    None when no frame is ours (inline `python3 -c`, the user's own code)."""
+    return next((n for n in FRAME.findall(tb_text) if n in names), None)
 
 
 def output_text(payload: dict) -> str:
@@ -44,11 +51,19 @@ def message(payload: dict) -> str | None:
     if not names:
         return None
     text = output_text(payload)
-    tb = TRACEBACK.search(text)
-    failed = payload.get("hook_event_name") == "PostToolUseFailure" or bool(tb)
-    if not failed:
+    # Blame a script only for a traceback through its own file; other Python in the same
+    # command (python3 -c, the user's scripts) isn't the skill's.
+    bundled = {p.stem for p in SCRIPTS.glob("*.py")}
+    tbs = list(TRACEBACK.finditer(text))
+    ours = [(m, crashed_script(m.group(0), bundled)) for m in tbs]
+    tb, name = next(((m, n) for m, n in ours if n), (None, None))
+    if tbs:
+        if not tb:
+            return None
+    elif payload.get("hook_event_name") == "PostToolUseFailure":
+        name = names[-1]
+    else:
         return None
-    name = names[-1]
     if name == "issues":
         return ("homelab-manager: issues.py itself failed. Tell the user in your report (it can't log "
                 "its own failure), with the error.")

@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.11.0 — 2026-11-16
+- Fix ([#9](https://github.com/mhaluska/homelab-manager-skill/issues/9)): the guard split commands on `|`, `;`
+  and newlines even inside quotes and heredocs, so `grep -E "(tofu|nmap|yq)"` or an issue body mentioning nmap
+  was refused as a scan with no targets. It now parses commands like the shell: quoted text, comments and
+  heredoc bodies that are only data (`cat <<EOF > file`, `--body "$(cat <<'EOF' …)"`) are not commands.
+  Heredocs a shell or interpreter runs (`bash <<EOF`, `cat <<EOF | sh`, `ssh host <<EOF`) are still checked,
+  and now so are `bash -c '…'`, `eval …`, `ssh host '…'`, `$(…)`, backticks, subshells and `if`/`do` bodies.
+  Redirections (`2>&1`, `> out.txt`) are no longer taken for nmap targets.
+- Fix ([#8](https://github.com/mhaluska/homelab-manager-skill/issues/8)): the skill-problem hook blamed a bundled
+  script for any Python traceback in the same command (e.g. an inline `python3 -c`). It now names a script only
+  when the traceback runs through its file under `homelab-manager/scripts/`, and stays quiet otherwise.
+- `issues.py report` redacts Proxmox identifiers ([#10](https://github.com/mhaluska/homelab-manager-skill/issues/10)):
+  VMIDs, VLAN tags (any number after `VLAN`, `tag=`, `trunks=`, `vmbr0.`; known tags of 3+ digits anywhere),
+  node, storage, pool and non-default bridge names from `discovery/proxmox.json`, as numbered placeholders
+  (`<vmid-1>`, `<vlan-2>`, `<node-1>`) that stay the same across title, body and comments. The preview ends with
+  a `Redacted: 2 VMIDs, 3 VLANs, …` line.
+- Proxmox guests ↔ network discovery ([#7](https://github.com/mhaluska/homelab-manager-skill/issues/7)):
+  `proxmox_inventory.py --details` reads the IPs running guests report (QEMU guest agent for VMs with
+  `agent=1`, `/interfaces` for LXC). Without the agent privilege it records which one is missing
+  (`VM.GuestAgent.Audit`, `VM.Monitor` on 8.x) instead of failing; `docs/proxmox-tokens.md` has an optional
+  section granting it (existing repos: copy it from the plugin's template if you want VM IPs).
+  `drift_report.py` has a new *Proxmox guests ↔ network* section matching scanned addresses to guests by
+  config/agent IP, MAC and DNS name; matched guests no longer appear as unknown network devices.
+- VMID conventions ([#6](https://github.com/mhaluska/homelab-manager-skill/issues/6)): optional `vmid_scheme`
+  in homelab.yaml (e.g. `"{vlan}{octet:03d}"` → 1020015 for VLAN 1020, x.x.x.15) replaces `vmid_ranges` for VMs
+  and LXC. `proxmox_inventory.py --next-vmid vms|lxc [--ip … --vlan …]` gives the ID for a new guest (scheme, or
+  next free in range), checked against the snapshot and tfvars. The inventory summary warns when most existing
+  VMIDs fall outside the ranges and suggests a scheme that explains them.
+
 ## 0.10.0 — 2026-11-16
 - Fix ([#5](https://github.com/mhaluska/homelab-manager-skill/issues/5)): `docs/proxmox-tokens.md` granted
   the roles only to the privilege-separated tokens. A privsep token gets the intersection of its own and

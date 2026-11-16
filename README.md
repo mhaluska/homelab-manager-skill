@@ -37,8 +37,8 @@ Problems in your homelab (drift, audit findings, failed runs) are reported in ch
 that crashes, the safety hook blocking something legitimate, wrong instructions, a template that
 doesn't validate) are noted in `skill_issues.md` of your homelab repo; say *"report skill issues"* and
 Claude sends them to [this repository's issues](https://github.com/mhaluska/homelab-manager-skill/issues)
-with `gh`. Before anything is sent it redacts IPs, MACs, your domain, host and guest names, user
-name and secrets, checks for an existing issue to comment on instead of duplicating, and shows you
+with `gh`. Before anything is sent it redacts IPs, MACs, your domain, host and guest names, VMIDs,
+VLAN tags, node, storage, pool and bridge names, user name and secrets, checks for an existing issue to comment on instead of duplicating, and shows you
 the exact text. You can also open one by hand with the *Problem with the skill* form.
 
 The same file collects **ideas to improve the skill** (kinds `improvement` and `idea`): Claude notes

@@ -95,6 +95,26 @@ class GuardNmapTests(unittest.TestCase):
         finally:
             shutil.rmtree(d)
 
+    def test_scanner_name_in_arguments_or_data_is_not_a_scan(self):  # GitHub issue #9
+        with Repo() as r:
+            for c in ['python3 issues.py report --dry-run | grep -vE "^ - (tofu|nmap|yq)"',
+                      "cat > /tmp/b.md <<'EOF'\n### Summary\nnmap 8.8.8.8 refused; sudo nmap -O x; nmap -iR 5\nEOF\n"
+                      "python3 issues.py add --body-file /tmp/b.md",
+                      "gh pr view 1 --json body -q \"$(cat <<'EOF'\n.body | test(\"nmap 8.8.8.8\")\nEOF\n)\"",
+                      "echo 'nmap 8.8.8.8'", "# nmap 8.8.8.8\nls",
+                      "nmap 10.0.10.5 2>&1 | tee out", "nmap -sn 10.0.10.0/24 > out.txt",
+                      "bash -c 'echo nmap'"]:
+                self.assertIsNone(decision(c, r), c)
+
+    def test_scans_hidden_in_shell_syntax_still_checked(self):
+        with Repo() as r:
+            for c in ["bash <<EOF\nnmap 8.8.8.8\nEOF", "cat <<EOF | sh\nnmap 8.8.8.8\nEOF", 'echo "$(nmap 8.8.8.8)"',
+                      "x=`nmap 8.8.8.8`", "(nmap 8.8.8.8)", "if nmap 8.8.8.8; then echo; fi", "nmap 8.8.8.8 &",
+                      "for h in a; do nmap 8.8.8.8; done", "bash -c 'nmap 8.8.8.8'", "ssh -p 22 pve1 'nmap 8.8.8.8'",
+                      "eval nmap 8.8.8.8", "python3 <<'EOF'\nimport os\nEOF\nnmap -iR 10"]:
+                self.assertEqual(decision(c, r), "deny", c)
+            self.assertEqual(decision("ssh -o BatchMode=yes pve1 pct stop 900", r), "ask")
+
     def test_nmap_scan_wrapper(self):
         with Repo() as r:
             self.assertEqual(decision("python3 /x/nmap_scan.py 192.168.0.0/24 --profile services", r), None)  # file absent: script check skipped

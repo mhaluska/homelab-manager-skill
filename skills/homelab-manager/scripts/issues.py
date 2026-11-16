@@ -342,26 +342,136 @@ def site_terms(cfg) -> tuple[list[str], list[str]]:
             sorted(filter(keep, hosts), key=len, reverse=True))
 
 
+DEFAULT_IFACE = re.compile(r"^(vmbr\d+|eth\d+|en[a-z0-9]+|wl[a-z0-9]+|bond\d+|lo|vmbr\d+v\d+)(\.\d+)?$")
+DEFAULT_STORAGE = {"local", "local-lvm", "local-zfs"}
+VLAN_CTX = [  # a number in these places is a VLAN ID, whatever its value
+    re.compile(r"(?i)(?<![\w-])(vlans?(?:[ _-]?(?:id|tag)s?)?[ \t]*[:=#]?[ \t]*)(\d{1,4})(?!\d)"),
+    re.compile(r"(?<![\w-])(tag=)(\d{1,4})(?!\d)"),
+    re.compile(r"(?<![\w-])((?:vmbr|bond|eth)\d+\.|en[a-z0-9]+\.)(\d{1,4})(?!\d)"),
+]
+TRUNKS = re.compile(r"(trunks=)([\d;-]+)")
+
+
+def proxmox_terms(root: Path) -> dict[str, set]:
+    """Identifiers from discovery/proxmox.json that place a report at this site."""
+    t = {"vmid": set(), "vlan": set(), "node": set(), "storage": set(), "pool": set(), "bridge": set()}
+    try:
+        px = json.loads((root / "discovery" / "proxmox.json").read_text())
+    except (OSError, ValueError):
+        return t
+    for g in px.get("guests") or []:
+        if str(g.get("vmid") or "").isdigit():
+            t["vmid"].add(str(g["vmid"]))
+        if g.get("node"):
+            t["node"].add(str(g["node"]))
+        if g.get("pool"):
+            t["pool"].add(str(g["pool"]))
+        for k, v in (g.get("config") or {}).items():
+            if k.startswith("net"):
+                t["vlan"].update(re.findall(r"(?<![\w-])tag=(\d+)", str(v)))
+                for tr in re.findall(r"trunks=([\d;-]+)", str(v)):
+                    t["vlan"].update(x for x in re.split(r"[;-]", tr) if x)
+                t["bridge"].update(b for b in re.findall(r"bridge=([\w.-]+)", str(v)) if not DEFAULT_IFACE.match(b))
+    for n in px.get("nodes") or []:
+        if n.get("node"):
+            t["node"].add(str(n["node"]))
+    for st in px.get("storage") or []:
+        if st.get("storage") and st["storage"] not in DEFAULT_STORAGE:
+            t["storage"].add(str(st["storage"]))
+    for node, nets in (px.get("networks") or {}).items():
+        t["node"].add(str(node))
+        for x in nets or []:
+            iface = str(x.get("iface") or "")
+            m = re.search(r"(?:\.|^vlan)(\d{1,4})$", iface)
+            if m:
+                t["vlan"].add(m.group(1))
+            if iface and x.get("type") in ("bridge", "OVSBridge", "vlan", "OVSIntPort") and not DEFAULT_IFACE.match(iface) \
+                    and not re.fullmatch(r"vlan\d+", iface):
+                t["bridge"].add(iface)
+    for j in px.get("backup_jobs") or []:
+        t["vmid"].update(x.strip() for x in str(j.get("vmid") or "").split(",") if x.strip().isdigit())
+        if j.get("storage") and j["storage"] not in DEFAULT_STORAGE:
+            t["storage"].add(str(j["storage"]))
+    for k in ("node", "storage", "pool", "bridge"):
+        t[k] = {x for x in t[k] if len(x) >= 2 and x.lower() not in GENERIC}
+    return t
+
+
+class Redactor:
+    """Replaces site details with placeholders. Numbered ones (<vmid-1>, <vlan-2>, <node-1>…) stay the same
+    across every title, body and comment of one run, so the text still reads; counts what it replaced."""
+
+    def __init__(self, cfg):
+        self.root = Path(cfg["_root"])
+        self.domains, self.hosts = site_terms(cfg)
+        self.px = proxmox_terms(self.root)
+        self.user = getpass.getuser()
+        self.ids: dict[str, dict[str, int]] = {}
+        self.seen: dict[str, set] = {}
+
+    def mark(self, kind: str, value: str, numbered: bool = False) -> str:
+        self.seen.setdefault(kind, set()).add(value.lower())
+        if not numbered:
+            return f"<{kind}>"
+        ids = self.ids.setdefault(kind, {})
+        n = ids.setdefault(value.lower(), len(ids) + 1)
+        return f"<{kind}-{n}>"
+
+    def words(self, text: str, terms, kind: str, numbered: bool) -> str:
+        for t in sorted(terms, key=len, reverse=True):
+            text = re.sub(rf"(?i)(?<![\w-]){re.escape(t)}(?![\w-])", lambda m: self.mark(kind, m.group(0), numbered), text)
+        return text
+
+    def __call__(self, text: str) -> str:
+        for rx, rep in SECRET_RES:
+            text = rx.sub(rep, text)
+        text = text.replace(str(Path.home()), "~")
+        text = re.sub(r"/(Users|home)/[^/\s]+", r"/\1/<user>", text)
+        text = self.words(text, self.domains, "domain", False)
+        text = self.words(text, self.px["node"], "node", True)  # before hosts: node names are host names too
+        text = self.words(text, self.hosts, "host", False)
+        text = self.words(text, self.px["storage"], "storage", True)
+        text = self.words(text, self.px["pool"], "pool", True)
+        text = self.words(text, self.px["bridge"], "bridge", True)
+        if len(self.user) >= 3 and self.user.lower() not in GENERIC:
+            text = re.sub(rf"(?<![\w-]){re.escape(self.user)}(?![\w-])", "<user>", text)
+        text = EMAIL.sub("<email>", text)
+        text = MAC.sub(lambda m: self.mark("mac", m.group(0)), text)
+        text = IPV4.sub(lambda m: m.group(0) if m.group(0) in ("127.0.0.1", "0.0.0.0") else self.mark("ip", m.group(0)), text)
+        text = IPV6.sub(lambda m: self.mark("ip6", m.group(0)) if ("::" in m.group(0) or re.search(r"(?i)[a-f]", m.group(0)))
+                        and m.group(0).count(":") >= 2 else m.group(0), text)
+        # VLAN IDs: any number in a VLAN context, and known tags of 3+ digits anywhere
+        text = TRUNKS.sub(lambda m: m.group(1) + re.sub(r"\d+", lambda d: self.mark("vlan", d.group(0), True), m.group(2)), text)
+        for rx in VLAN_CTX:
+            text = rx.sub(lambda m: m.group(1) + self.mark("vlan", m.group(2), True), text)
+        # VMIDs (100–999999999), unless part of a longer number, a version, an IP or a traceback line number
+        vmids = self.px["vmid"]
+        if vmids:
+            text = re.sub(r"(?<![\w.:<])(?<!line )(\d{3,9})(?![\w>]|\.\d)",
+                          lambda m: self.mark("vmid", m.group(1), True) if m.group(1) in vmids else m.group(1), text)
+        long_tags = {v for v in self.px["vlan"] if len(v) >= 3}
+        if long_tags:
+            text = re.sub(r"(?<![\w.:<])(\d{3,4})(?![\w>]|\.\d)",
+                          lambda m: self.mark("vlan", m.group(1), True) if m.group(1) in long_tags else m.group(1), text)
+        return text
+
+    def summary(self) -> str:
+        names = {"vmid": "VMID", "vlan": "VLAN", "node": "node", "storage": "storage", "pool": "pool",
+                 "bridge": "bridge", "host": "host name", "domain": "domain", "ip": "IPv4", "ip6": "IPv6", "mac": "MAC"}
+        parts = [f"{len(self.seen[k])} {v}{'' if len(self.seen[k]) == 1 or v in ('storage',) else 's'}"
+                 for k, v in names.items() if self.seen.get(k)]
+        return "Redacted: " + (", ".join(parts) if parts else "no site identifiers found") + \
+               " (secrets, e-mail addresses and paths are always removed)"
+
+
+def redactor(cfg) -> Redactor:
+    if "_redactor" not in cfg:
+        cfg["_redactor"] = Redactor(cfg)
+    return cfg["_redactor"]
+
+
 def sanitize(text: str, cfg) -> str:
-    for rx, rep in SECRET_RES:
-        text = rx.sub(rep, text)
-    home = str(Path.home())
-    text = text.replace(home, "~")
-    text = re.sub(r"/(Users|home)/[^/\s]+", r"/\1/<user>", text)
-    user = getpass.getuser()
-    domains, hosts = site_terms(cfg)
-    for d in domains:
-        text = re.sub(rf"(?i)(?<![\w-]){re.escape(d)}(?![\w-])", "<domain>", text)
-    for h in hosts:
-        text = re.sub(rf"(?i)(?<![\w-]){re.escape(h)}(?![\w-])", "<host>", text)
-    if len(user) >= 3 and user.lower() not in GENERIC:
-        text = re.sub(rf"(?<![\w-]){re.escape(user)}(?![\w-])", "<user>", text)
-    text = EMAIL.sub("<email>", text)
-    text = MAC.sub("<mac>", text)
-    text = IPV4.sub(lambda m: m.group(0) if m.group(0) in ("127.0.0.1", "0.0.0.0") else "<ip>", text)
-    text = IPV6.sub(lambda m: "<ip6>" if ("::" in m.group(0) or re.search(r"(?i)[a-f]", m.group(0)))
-                    and m.group(0).count(":") >= 2 else m.group(0), text)
-    return text
+    return redactor(cfg)(text)
 
 
 # ---- commands ----
@@ -569,6 +679,8 @@ def cmd_report(a, cfg):
                 print(f"    near: #{n['number']} ({sc:.0%}) \"{n['title']}\"")
             if a.dry_run:
                 print("  body:\n" + indent(issue_body(i, cfg)))
+    if plan:
+        print("\n" + redactor(cfg).summary())
     if a.dry_run:
         print("\nDry run — nothing sent. Read the text above: anything still site-specific? Edit the issue in "
               "skill_issues.md and re-run. Override matches with --match ID=NUMBER or --new ID.")
