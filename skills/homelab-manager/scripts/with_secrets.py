@@ -10,7 +10,8 @@ secret that gets echoed is replaced by ***REDACTED***.
 Secret kinds (secrets.<name>.kind):
   proxmox_token  value "user@realm!tokenid=uuid" → PROXMOX_VE_ENDPOINT, PROXMOX_VE_API_TOKEN (OpenTofu bpg),
                  PROXMOX_URL, PROXMOX_USERNAME, PROXMOX_TOKEN (Packer)
-  gitlab_state   GitLab access token → TF_HTTP_* variables for the GitLab-managed OpenTofu state backend
+  s3_credentials value "ACCESS_KEY_ID:SECRET_ACCESS_KEY" → AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+                 (OpenTofu S3 state backend — MinIO, Garage, AWS)
   env            plain value → the variable named in secrets.<name>.env (default)
 """
 from __future__ import annotations
@@ -41,16 +42,11 @@ def env_for(cfg: dict, name: str) -> tuple[dict, str]:
                    PROXMOX_URL=endpoint + "/api2/json", PROXMOX_USERNAME=token_id, PROXMOX_TOKEN=secret)
         if hmlib.get(cfg, "proxmox.verify_tls", True) is False:
             env.update(PROXMOX_VE_INSECURE="true", PROXMOX_INSECURE_SKIP_TLS_VERIFY="true")
-    elif kind == "gitlab_state":
-        url = (hmlib.get(cfg, "opentofu.gitlab.url") or "").rstrip("/")
-        project = hmlib.get(cfg, "opentofu.gitlab.project_id")
-        state = hmlib.get(cfg, "opentofu.gitlab.state_name", "homelab")
-        if not url or not project:
-            raise hmlib.ConfigError("opentofu.gitlab.url and opentofu.gitlab.project_id must be set in homelab.yaml.")
-        addr = f"{url}/api/v4/projects/{project}/terraform/state/{state}"
-        env.update(TF_HTTP_ADDRESS=addr, TF_HTTP_LOCK_ADDRESS=addr + "/lock", TF_HTTP_UNLOCK_ADDRESS=addr + "/lock",
-                   TF_HTTP_LOCK_METHOD="POST", TF_HTTP_UNLOCK_METHOD="DELETE", TF_HTTP_RETRY_WAIT_MIN="5",
-                   TF_HTTP_USERNAME=hmlib.get(cfg, "opentofu.gitlab.username", "homelab-tofu"), TF_HTTP_PASSWORD=value)
+    elif kind == "s3_credentials":
+        if ":" not in value:
+            raise hmlib.ConfigError(f"Keychain item for {name!r} must look like ACCESS_KEY_ID:SECRET_ACCESS_KEY.")
+        key_id, secret = value.split(":", 1)
+        env.update(AWS_ACCESS_KEY_ID=key_id, AWS_SECRET_ACCESS_KEY=secret)
     else:
         var = entry.get("env")
         if not var:
@@ -72,8 +68,9 @@ def main(argv: list[str]) -> int:
             e, v = env_for(cfg, n)
             env.update(e)
             secrets.append(v)
-            if "=" in v:
-                secrets.append(v.split("=", 1)[1])
+            for sep in ("=", ":"):  # token secret / S3 secret key on their own
+                if sep in v:
+                    secrets.append(v.split(sep, 1)[1])
     except hmlib.ConfigError as e:
         print(f"with_secrets: {e}", file=sys.stderr)
         return 3

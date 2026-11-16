@@ -30,7 +30,7 @@ TOOLS = {
     "yq": (["yq", "--version"], "brew install yq"),
     "jq": (["jq", "--version"], "brew install jq"),
     "git": (["git", "--version"], "xcode-select --install"),
-    "glab": (["glab", "version"], "brew install glab   (only needed to open GitLab issues)"),
+    "gh": (["gh", "--version"], "brew install gh   (only needed to report GitHub issues)"),
 }
 SELFTEST_SERVICE = "homelab/_selftest"
 
@@ -67,14 +67,15 @@ def check_ssh_agent():
     return [{"check": "ssh-agent", "ok": False, "detail": "agent running but no keys loaded (ssh-add --apple-use-keychain ~/.ssh/<key>)"}]
 
 
-def check_glab():
-    if not shutil.which("glab"):
+def check_gh():
+    if not shutil.which("gh"):
         return []
-    rc, so, se = run(["glab", "auth", "status"], timeout=20)
+    rc, so, se = run(["gh", "auth", "status"], timeout=20)
     logged = [l for l in (so + se).splitlines() if "Logged in to" in l]
     if logged:
-        return [{"check": "glab:auth", "ok": True, "detail": "; ".join(l.strip().lstrip("✓ ").split(" (")[0] for l in logged)}]
-    return [{"check": "glab:auth", "ok": False, "detail": "not logged in — run: glab auth login --hostname <your GitLab host>"}]
+        return [{"check": "gh:auth", "ok": True,
+                 "detail": "; ".join(l.strip().lstrip("✓ ").split(" (")[0] for l in logged)}]
+    return [{"check": "gh:auth", "ok": False, "detail": "not logged in — run: gh auth login (stores the token in the keychain)"}]
 
 
 def check_keychain_unlocked():
@@ -116,6 +117,8 @@ def check_config_and_secrets():
     for name, entry in (cfg.get("secrets") or {}).items():
         if not isinstance(entry, dict) or not entry.get("service"):
             continue
+        if entry.get("kind") == "s3_credentials" and hmlib.get(cfg, "opentofu.state_backend", "local") != "s3":
+            continue  # only needed for the S3 state backend
         service, account = entry["service"], entry.get("account") or os.environ.get("USER")
         rc, _, _ = run(["/usr/bin/security", "find-generic-password", "-a", account, "-s", service], timeout=10)
         if rc != 0:
@@ -125,10 +128,12 @@ def check_config_and_secrets():
         try:
             v = hmlib.keychain_read(service, account, timeout=15)
             fmt_ok = True
-            if entry.get("kind") == "proxmox_token":
-                fmt_ok = bool(re.match(r"^[^@\s]+@[^!\s]+![^=\s]+=\S+$", v))
+            want = {"proxmox_token": (r"^[^@\s]+@[^!\s]+![^=\s]+=\S+$", "user@realm!tokenid=secret"),
+                    "s3_credentials": (r"^[^:\s]+:\S+$", "ACCESS_KEY_ID:SECRET_ACCESS_KEY")}.get(entry.get("kind"))
+            if want:
+                fmt_ok = bool(re.match(want[0], v))
             out.append({"check": f"secret:{name}", "ok": bool(v) and fmt_ok,
-                        "detail": ("readable" if fmt_ok else "readable but not in user@realm!tokenid=secret format")
+                        "detail": ("readable" if fmt_ok else f"readable but not in {want[1]} format")
                         + f" ({len(v)} chars)"})
         except hmlib.ConfigError as e:
             out.append({"check": f"secret:{name}", "ok": False, "detail": str(e)})
@@ -136,7 +141,7 @@ def check_config_and_secrets():
 
 
 def main(argv):
-    results = check_tools() + check_ssh_agent() + check_glab() + check_keychain_unlocked()
+    results = check_tools() + check_ssh_agent() + check_gh() + check_keychain_unlocked()
     if "--keychain" in argv:
         results += check_keychain_selftest()
     cfg_results, _ = check_config_and_secrets()

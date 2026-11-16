@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Track problems found in the homelab in ISSUES.md, and open them as GitLab issues with glab.
+"""Track problems found in the homelab in ISSUES.md, and report them as GitHub issues with gh.
 
     issues.py add --title T --severity high|medium|low --area AREA [--source S] [--body-file F | --body TEXT] [--key K]
-    issues.py list [--status open|gitlab|resolved|all]
+    issues.py list [--status open|github|resolved|all]
     issues.py show ISSUE-007
-    issues.py open ISSUE-007 [--dry-run]      # glab issue create; records the issue URL
+    issues.py open ISSUE-007 [--dry-run]      # gh issue create; records the issue URL
     issues.py report [--dry-run] [--match ISSUE-007=42] [--new ISSUE-008] [IDS…]
-                                              # sync new/changed issues to GitLab: update a matching
-                                              # GitLab issue (note) or create one; then sets the
+                                              # sync new/changed issues to GitHub: update a matching
+                                              # GitHub issue (comment) or create one; then sets the
                                               # "reported through" marker so they aren't sent again
     issues.py resolve ISSUE-007 [--note TEXT]
     issues.py reopen ISSUE-007
@@ -33,19 +33,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hmlib  # noqa: E402
 
 SEVERITIES = ("high", "medium", "low")
-STATUSES = ("open", "gitlab", "resolved")
+STATUSES = ("open", "github", "resolved")
 META_RE = re.compile(r"^<!-- issue (\{.*\}) -->$")
 MARK_RE = re.compile(r"^<!-- reported-through: (\S+) -->$")
 KEY_RE = re.compile(r"<!-- homelab-key: (\S+) -->")
-GLAB = os.environ.get("HM_GLAB", "glab")  # overridable for tests
+GH = os.environ.get("HM_GH", "gh")  # overridable for tests
 MATCH_THRESHOLD = 0.5
 HEADER = """# Issues
 
 Problems found while managing this homelab — by the homelab-manager skill (drift reports,
 audits, failed runs, things noticed along the way) or added by you.
 
-- Open one on GitLab: ask Claude *"open ISSUE-003 on GitLab"* (uses `glab`, asks first).
-- Send new/changed ones to GitLab: *"report issues to GitLab"* (updates matching GitLab issues
+- Open one on GitHub: ask Claude *"open ISSUE-003 on GitHub"* (uses `gh`, asks first).
+- Send new/changed ones to GitHub: *"report issues to GitHub"* (updates matching GitHub issues
   instead of duplicating them; asks first).
 - Mark one done: *"ISSUE-003 is fixed"*.
 - Managed by `issues.py`; edit the text under an issue freely, keep the `<!-- issue … -->` lines.
@@ -110,14 +110,14 @@ def render(items: list[dict], marker: str | None = None) -> str:
     out = [HEADER]
     if marker:
         out += [f"<!-- reported-through: {marker} -->",
-                f"_Last reported to GitLab: {marker.replace('T', ' ')[:16]} UTC — only issues added or changed "
+                f"_Last reported to GitHub: {marker.replace('T', ' ')[:16]} UTC — only issues added or changed "
                 "after this are sent next time._", ""]
-    order = {"open": 0, "gitlab": 1, "resolved": 2}
+    order = {"open": 0, "github": 1, "resolved": 2}
     sev = {s: i for i, s in enumerate(SEVERITIES)}
     rows = sorted(items, key=lambda i: (order.get(i["status"], 9), sev.get(i["severity"], 9), i["id"]))
-    out += ["| ID | Severity | Area | Title | Status | GitLab |", "|---|---|---|---|---|---|"]
+    out += ["| ID | Severity | Area | Title | Status | GitHub |", "|---|---|---|---|---|---|"]
     for i in rows:
-        gl = f"[#{i['gitlab_iid']}]({i['gitlab_url']})" if i.get("gitlab_url") else "—"
+        gl = f"[#{i['github_number']}]({i['github_url']})" if i.get("github_url") else "—"
         out.append(f"| {i['id']} | {i['severity']} | {i['area']} | {i['title'].replace('|', '/')} | {i['status']} | {gl} |")
     if not items:
         out.append("| — | | | No issues recorded yet. | | |")
@@ -130,7 +130,7 @@ def render(items: list[dict], marker: str | None = None) -> str:
                 + (f" by {i['source']}" if i.get("source") else "")
                 + (f" · **Last seen:** {i['last_seen']}" if i.get("last_seen") and i["last_seen"] != i["found"] else "")
                 + f" · **Status:** {i['status']}"
-                + (f" ([GitLab #{i['gitlab_iid']}]({i['gitlab_url']}))" if i.get("gitlab_url") else "")
+                + (f" ([GitHub #{i['github_number']}]({i['github_url']}))" if i.get("github_url") else "")
                 + (f" · **Resolved:** {i['resolved']}" if i.get("resolved") else ""))
         out += [line, "", i["body"].strip() or "_No details._", "<!-- /issue -->", ""]
     return "\n".join(out).rstrip() + "\n"
@@ -182,7 +182,7 @@ def cmd_list(a, cfg):
         print("No issues." if a.status == "all" else f"No {a.status} issues.")
     for i in sel:
         print(f"{i['id']}  {i['severity']:<6} {i['area']:<12} {i['status']:<8} {i['title']}"
-              + (f"  {i['gitlab_url']}" if i.get("gitlab_url") else ""))
+              + (f"  {i['github_url']}" if i.get("github_url") else ""))
     return 0
 
 
@@ -193,7 +193,7 @@ def cmd_show(a, cfg):
     return 0
 
 
-def gitlab_description(i: dict, cfg) -> str:
+def issue_body(i: dict, cfg) -> str:
     return (f"{i['body'] or '_No details._'}\n\n---\n"
             f"Severity: **{i['severity']}** · Area: `{i['area']}` · Found {i['found']}"
             + (f" by `{i['source']}`" if i.get("source") else "")
@@ -201,31 +201,59 @@ def gitlab_description(i: dict, cfg) -> str:
             + (f"\n<!-- homelab-key: {i['key']} -->" if i.get("key") else ""))
 
 
-def glab_repo_args(cfg):
-    r = hmlib.get(cfg, "issues.gitlab_repo")
+def repo_args(cfg):
+    r = hmlib.get(cfg, "issues.repo")
     return ["--repo", r] if r else []
 
 
-def create_cmd(i, cfg, desc_file):
-    labels = list(hmlib.get(cfg, "issues.labels", ["homelab"]) or []) + [f"severity::{i['severity']}", f"area::{i['area']}"]
-    return [GLAB, "issue", "create", "--title", f"[{i['area']}] {i['title']}", "--description-file", desc_file,
-            "--label", ",".join(labels), "--yes", *glab_repo_args(cfg)]
+def labels_for(i, cfg) -> list[str]:
+    return list(hmlib.get(cfg, "issues.labels", ["homelab"]) or []) + [f"severity:{i['severity']}", f"area:{i['area']}"]
+
+
+def create_cmd(i, cfg, body_file):
+    return [GH, "issue", "create", "--title", f"[{i['area']}] {i['title']}", "--body-file", body_file,
+            "--label", ",".join(labels_for(i, cfg)), *repo_args(cfg)]
+
+
+LABEL_COLORS = {"severity:high": "d73a4a", "severity:medium": "fbca04", "severity:low": "0e8a16"}
+
+
+def ensure_labels(cfg, wanted: list[str]) -> str | None:
+    """GitHub rejects unknown labels: create the missing ones (existing labels are left alone)."""
+    r = subprocess.run([GH, "label", "list", "--limit", "1000", "--json", "name", *repo_args(cfg)],
+                       cwd=cfg["_root"], capture_output=True, text=True)
+    if r.returncode != 0:
+        return "gh label list failed: " + (r.stderr or r.stdout).strip()[:200]
+    have = {l["name"].lower() for l in json.loads(r.stdout or "[]")}
+    for name in dict.fromkeys(wanted):
+        if name.lower() in have:
+            continue
+        r = subprocess.run([GH, "label", "create", name, "--color", LABEL_COLORS.get(name, "c5def5"),
+                            "--description", "homelab-manager", *repo_args(cfg)],
+                           cwd=cfg["_root"], capture_output=True, text=True)
+        if r.returncode != 0:
+            return f"gh label create {name} failed: " + (r.stderr or r.stdout).strip()[:200]
+        have.add(name.lower())
+    return None
 
 
 def create_issue(i, cfg) -> str | None:
-    """glab issue create; on success record the URL on the item and return None, else an error."""
+    """gh issue create; on success record the URL on the item and return None, else an error."""
+    err = ensure_labels(cfg, labels_for(i, cfg))
+    if err:
+        return err
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
-        f.write(gitlab_description(i, cfg))
+        f.write(issue_body(i, cfg))
     try:
         r = subprocess.run(create_cmd(i, cfg, f.name), cwd=cfg["_root"], capture_output=True, text=True)
     finally:
         Path(f.name).unlink()
     if r.returncode != 0:
-        return (r.stderr or r.stdout).strip() or f"glab exited {r.returncode}"
-    m = re.search(r"https?://\S+/-/(?:issues|work_items)/(\d+)", r.stdout + r.stderr)
+        return (r.stderr or r.stdout).strip() or f"gh exited {r.returncode}"
+    m = re.search(r"https?://\S+/issues/(\d+)", r.stdout + r.stderr)
     if not m:
-        return "glab succeeded but no issue URL was found in its output: " + r.stdout.strip()[:200]
-    i.update(status="gitlab", gitlab_url=m.group(0), gitlab_iid=int(m.group(1)))
+        return "gh succeeded but no issue URL was found in its output: " + r.stdout.strip()[:200]
+    i.update(status="github", github_url=m.group(0), github_number=int(m.group(1)))
     return None
 
 
@@ -233,23 +261,23 @@ def cmd_open(a, cfg):
     path = issues_path(cfg)
     items = load(path)
     i = find(items, a.id)
-    if i.get("gitlab_url"):
-        print(f"{i['id']} is already on GitLab: {i['gitlab_url']}")
+    if i.get("github_url"):
+        print(f"{i['id']} is already on GitHub: {i['github_url']}")
         return 0
     if a.dry_run:
-        print("Would run:", " ".join(create_cmd(i, cfg, "<description.md>")))
-        print("\n--- description ---\n" + gitlab_description(i, cfg))
+        print("Would run:", " ".join(create_cmd(i, cfg, "<body.md>")))
+        print("(missing labels are created first)\n\n--- body ---\n" + issue_body(i, cfg))
         return 0
     err = create_issue(i, cfg)
     if err:
         print(err, file=sys.stderr)
         return 1
     save(path, items)
-    print(f"{i['id']} → {i['gitlab_url']}")
+    print(f"{i['id']} → {i['github_url']}")
     return 0
 
 
-# ---- report: sync new/changed issues to GitLab without duplicating ----
+# ---- report: sync new/changed issues to GitHub without duplicating ----
 
 STOP = {"a", "an", "the", "is", "on", "in", "of", "to", "for", "and", "or", "not", "no", "by", "with", "from", "at"}
 
@@ -264,21 +292,17 @@ def similarity(a: str, b: str) -> float:
     return len(x & y) / len(x | y) if x and y else 0.0
 
 
-def gitlab_issues(cfg) -> list[dict]:
-    raw = []
-    for page in range(1, 51):  # up to 5000 issues
-        r = subprocess.run([GLAB, "issue", "list", "--all", "--per-page", "100", "--page", str(page),
-                            "--output", "json", *glab_repo_args(cfg)], cwd=cfg["_root"], capture_output=True, text=True)
-        if r.returncode != 0:
-            raise SystemExit("glab issue list failed: " + ((r.stderr or r.stdout).strip()[:300] or f"exit {r.returncode}"))
-        batch = json.loads(r.stdout or "[]")
-        raw += batch
-        if len(batch) < 100:
-            break
+def github_issues(cfg) -> list[dict]:
+    r = subprocess.run([GH, "issue", "list", "--state", "all", "--limit", "5000",
+                        "--json", "number,title,state,url,body", *repo_args(cfg)],
+                       cwd=cfg["_root"], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit("gh issue list failed: " + ((r.stderr or r.stdout).strip()[:300] or f"exit {r.returncode}"))
     out = []
-    for g in raw:  # GitLab text is untrusted: data only
-        out.append({"iid": g.get("iid"), "title": hmlib.clean(g.get("title"), 200), "state": g.get("state"),
-                    "url": g.get("web_url"), "keys": set(KEY_RE.findall(g.get("description") or ""))})
+    for g in json.loads(r.stdout or "[]"):  # GitHub text is untrusted: data only
+        out.append({"number": g.get("number"), "title": hmlib.clean(g.get("title"), 200),
+                    "state": str(g.get("state") or "").lower(), "url": g.get("url"),
+                    "keys": set(KEY_RE.findall(g.get("body") or ""))})
     return out
 
 
@@ -287,23 +311,23 @@ def plan_report(items, gl, marker, a) -> list[dict]:
     forced = {k.upper(): int(v) for k, v in forced.items()}
     new_forced = {n.upper() for n in a.new}
     only = {find(items, x)["id"] for x in a.ids}
-    by_iid = {g["iid"]: g for g in gl}
+    by_num = {g["number"]: g for g in gl}
     plan = []
     for i in sorted(items, key=lambda i: i["id"]):
         if only and i["id"] not in only:
             continue
         if i["status"] == "resolved" or (not only and marker and ts(seen_at(i)) <= ts(marker)):
             continue
-        step = {"item": i, "action": "create", "target": None, "why": "no similar GitLab issue"}
+        step = {"item": i, "action": "create", "target": None, "why": "no similar GitHub issue"}
         if i["id"] in new_forced:
             step["why"] = "--new"
         elif i["id"] in forced:
-            g = by_iid.get(forced[i["id"]])
+            g = by_num.get(forced[i["id"]])
             if not g:
-                raise SystemExit(f"--match {i['id']}={forced[i['id']]}: no such GitLab issue")
+                raise SystemExit(f"--match {i['id']}={forced[i['id']]}: no such GitHub issue")
             step.update(action="update", target=g, why="--match")
-        elif i.get("gitlab_iid") and i["gitlab_iid"] in by_iid:
-            step.update(action="update", target=by_iid[i["gitlab_iid"]], why="already linked")
+        elif i.get("github_number") and i["github_number"] in by_num:
+            step.update(action="update", target=by_num[i["github_number"]], why="already linked")
         elif i.get("key") and any(i["key"] in g["keys"] for g in gl):
             step.update(action="update", target=next(g for g in gl if i["key"] in g["keys"]), why=f"same key {i['key']}")
         else:
@@ -327,39 +351,39 @@ def cmd_report(a, cfg):
     items = load(path)
     marker = read_marker(path)
     started = now_iso()
-    gl = gitlab_issues(cfg)
+    gl = github_issues(cfg)
     plan = plan_report(items, gl, marker, a)
-    print(f"Reported through: {marker or 'never'} — {len(plan)} issue(s) to report, {len(gl)} GitLab issue(s) checked")
+    print(f"Reported through: {marker or 'never'} — {len(plan)} issue(s) to report, {len(gl)} GitHub issue(s) checked")
     for st in plan:
         i, g = st["item"], st["target"]
         if st["action"] == "update":
-            print(f"  {i['id']}  UPDATE #{g['iid']} ({g['state']}) \"{g['title']}\"  — {st['why']}"
-                  + ("  [closed on GitLab: note only, not reopened]" if g["state"] == "closed" else ""))
+            print(f"  {i['id']}  UPDATE #{g['number']} ({g['state']}) \"{g['title']}\"  — {st['why']}"
+                  + ("  [closed on GitHub: comment only, not reopened]" if g["state"] == "closed" else ""))
         else:
             print(f"  {i['id']}  CREATE \"[{i['area']}] {i['title']}\"  — {st['why']}")
             for sc, n in st.get("near", []):
-                print(f"           near: #{n['iid']} ({sc:.0%}) \"{n['title']}\"")
+                print(f"           near: #{n['number']} ({sc:.0%}) \"{n['title']}\"")
     if a.dry_run:
-        print("\nDry run — nothing sent. Override with --match ISSUE-ID=IID or --new ISSUE-ID.")
+        print("\nDry run — nothing sent. Override with --match ISSUE-ID=NUMBER or --new ISSUE-ID.")
         return 0
     failed = []
     for st in plan:
         i, g = st["item"], st["target"]
         if st["action"] == "update":
-            r = subprocess.run([GLAB, "issue", "note", str(g["iid"]), "--message", update_note(i), *glab_repo_args(cfg)],
-                               cwd=cfg["_root"], capture_output=True, text=True)
+            r = subprocess.run([GH, "issue", "comment", str(g["number"]), "--body-file", "-", *repo_args(cfg)],
+                               cwd=cfg["_root"], capture_output=True, text=True, input=update_note(i))
             if r.returncode != 0:
                 failed.append(f"{i['id']}: {(r.stderr or r.stdout).strip()[:200]}")
                 continue
-            if not i.get("gitlab_url"):
-                i.update(status="gitlab", gitlab_url=g["url"], gitlab_iid=g["iid"])
-            print(f"{i['id']} → noted on #{g['iid']} {g['url']}")
+            if not i.get("github_url"):
+                i.update(status="github", github_url=g["url"], github_number=g["number"])
+            print(f"{i['id']} → commented on #{g['number']} {g['url']}")
         else:
             err = create_issue(i, cfg)
             if err:
                 failed.append(f"{i['id']}: {err[:200]}")
                 continue
-            print(f"{i['id']} → created {i['gitlab_url']}")
+            print(f"{i['id']} → created {i['github_url']}")
     if failed:
         save(path, items)  # keep links that did succeed; marker unchanged so failures are retried
         print("Failed (marker not moved, re-run to retry):\n  " + "\n  ".join(failed), file=sys.stderr)
@@ -373,7 +397,7 @@ def cmd_status(a, cfg, status):
     path = issues_path(cfg)
     items = load(path)
     i = find(items, a.id)
-    i["status"] = status if status != "open" or not i.get("gitlab_url") else "gitlab"
+    i["status"] = status if status != "open" or not i.get("github_url") else "github"
     if status == "resolved":
         i["resolved"] = today()
         if a.note:
@@ -382,8 +406,8 @@ def cmd_status(a, cfg, status):
         i.pop("resolved", None)
     save(path, items)
     hint = ""
-    if status == "resolved" and i.get("gitlab_iid"):
-        hint = f"  (GitLab #{i['gitlab_iid']} is still open — close it with: glab issue close {i['gitlab_iid']})"
+    if status == "resolved" and i.get("github_number"):
+        hint = f"  (GitHub #{i['github_number']} may still be open — close it with: gh issue close {i['github_number']})"
     print(f"{i['id']} → {i['status']}{hint}")
     return 0
 
@@ -404,8 +428,8 @@ def main():
     p = sp.add_parser("report")
     p.add_argument("ids", nargs="*", help="limit to these issues (ignores the marker)")
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--match", action="append", default=[], metavar="ISSUE-ID=IID",
-                   help="update this GitLab issue instead of the automatic choice")
+    p.add_argument("--match", action="append", default=[], metavar="ISSUE-ID=NUMBER",
+                   help="update this GitHub issue instead of the automatic choice")
     p.add_argument("--new", action="append", default=[], metavar="ISSUE-ID", help="create even if similar exists")
     for name in ("show", "open", "resolve", "reopen"):
         p = sp.add_parser(name)

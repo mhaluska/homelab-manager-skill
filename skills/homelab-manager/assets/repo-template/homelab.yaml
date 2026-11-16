@@ -63,12 +63,16 @@ templates:
 
 opentofu:
   environment: homelab
-  state_backend: gitlab      # gitlab | local
-  gitlab:
-    url: ""                  # e.g. https://gitlab.example.com
-    project_id: ""           # numeric ID of this repository's GitLab project
-    state_name: homelab
-    username: homelab-tofu   # any name for a project access token
+  state_backend: local       # local | s3 — state is never stored in Git
+  local:
+    path: ""                 # empty = ~/.local/share/homelab/tofu-state/<site.name>/<environment>.tfstate
+  s3:                        # any S3-compatible store: MinIO, Garage, AWS (locking via lockfile)
+    endpoint: ""             # e.g. https://minio.home.arpa:9000
+    bucket: ""
+    key: ""                  # empty = <site.name>/<environment>.tfstate
+    region: us-east-1        # most self-hosted stores ignore it
+    use_path_style: true
+  state_secret: s3-state     # keychain secret with the S3 keys (only for state_backend: s3)
 
 ansible:
   default_linux_group: linux
@@ -86,15 +90,15 @@ clusters: []
 secrets:
   proxmox-ro:   {service: homelab/proxmox-ro,   kind: proxmox_token}   # user@pve!token=uuid
   proxmox-rw:   {service: homelab/proxmox-rw,   kind: proxmox_token}
-  gitlab-state: {service: homelab/gitlab-state, kind: gitlab_state}    # GitLab token, api scope
+  s3-state:     {service: homelab/s3-state,     kind: s3_credentials}  # ACCESS_KEY_ID:SECRET_ACCESS_KEY (S3 state only)
 
 discovery:
   ignore_unmanaged: []       # IPs you know about and don't want flagged (phones, TVs, …)
 
 issues:
   file: ISSUES.md            # problems found by the skill are recorded here
-  gitlab: true               # offer to open them as GitLab issues with glab
-  gitlab_repo: ""            # empty = this repo's GitLab project (from git remote)
+  github: true               # offer to report them as GitHub issues with gh
+  repo: ""                   # owner/name; empty = this repo's GitHub repository (from git remote)
   labels: [homelab]
 
 git:

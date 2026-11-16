@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.0 — 2026-11-16
+- Moved to GitHub: public repository `mhaluska/homelab-manager-skill`, install over HTTPS
+  (`/plugin marketplace add https://github.com/mhaluska/homelab-manager-skill.git`).
+- Issues go to GitHub with `gh`: `issues.py open` / `report` create issues,
+  comment on matching ones, and create missing `severity:*` / `area:*` labels. `check_env.py` checks `gh auth status`.
+- Guard: asks before `gh issue` writes, label/release/repo/secret changes and GitHub API writes; denies
+  printing the `gh` token (`gh auth token`, `--show-token`).
+- OpenTofu state: **local** state file on the Mac outside the repository (default)
+  or any **S3-compatible** bucket (MinIO, Garage, AWS) with lockfile locking. New `tofu_init.py` runs
+  `tofu init` with the backend from homelab.yaml; new secret kind `s3_credentials`.
+- Releases: pushing a `vX.Y.Z` tag publishes a GitHub release with that version's CHANGELOG section.
+- Template pre-commit hook also blocks GitHub tokens and AWS access keys.
+- License: MIT.
+
 ## 0.4.0 — 2026-11-16
 - Update check: a SessionStart hook compares the installed version with the highest `vX.Y.Z` tag on
   the plugin's Git remote, at most once a day (cached in `~/.cache/homelab-manager/`, failed checks
@@ -9,9 +23,9 @@
   use which; subagents never approve anything.
 
 ## 0.3.0 — 2026-11-16
-- `issues.py report`: sends issues added or changed since the last report to GitLab. For each it first
-  looks for the same or a similar GitLab issue (same key, already linked, similar title; open or closed)
-  and adds a note to it instead of creating a duplicate; otherwise creates one. `--dry-run` shows the
+- `issues.py report`: sends issues added or changed since the last report to the issue tracker. For each it
+  first looks for the same or a similar existing issue (same key, already linked, similar title; open or closed)
+  and comments on it instead of creating a duplicate; otherwise creates one. `--dry-run` shows the
   plan; `--match`/`--new` override. On success a `reported-through` timestamp marker is written to
   ISSUES.md so old issues aren't reported again; failures leave the marker for a retry.
 - Guard asks before `issues.py report` (except `--dry-run`).
@@ -21,9 +35,9 @@
   discovery, Windows, appliances, Kubernetes), state backend and issue tracking, then scaffolds only those.
   `init_repo.py --components … / --add-components …`; choices recorded under `components:` in homelab.yaml.
 - ISSUES.md: problems found (drift, audits, failed runs, config bugs) are recorded via `issues.py`
-  (dedupe keys, severities, sanitised text) and can be opened as GitLab issues with `glab` after the user agrees.
-- Guard: asks before `glab issue create/close/…`, GitLab API writes and `issues.py open`; denies printing the glab token.
-- check_env.py reports glab and its login.
+  (dedupe keys, severities, sanitised text) and can be opened in the issue tracker after the user agrees.
+- Guard: asks before creating/closing tracker issues, API writes and `issues.py open`; denies printing the CLI token.
+- check_env.py reports the issue-tracker CLI and its login.
 - Patching: `patch_exclude` (set per group, e.g. kubelet/kubeadm/kubectl on k8s nodes) — dnf exclude / apt hold.
   Hook paths resolved with `path_join` (fixes an ansible-lint crash).
 - Drift report: falls back to the `tofu` tag when state is unreachable; new Backups section (backup storage,
@@ -42,6 +56,6 @@
 - Read-only discovery: `proxmox_inventory.py`, scope-checked `nmap_scan.py`, `drift_report.py`.
 - `check_env.py` with keychain self-test; `with_secrets.py` keychain → env with output redaction.
 - `init_repo.py` + repository template: homelab.yaml, OpenTofu modules (VM, LXC, cloud-image base; bpg/proxmox ≥ 0.122),
-  GitLab state backend, Packer proxmox-clone template build (Rocky/Debian/Ubuntu), Ansible inventory,
+  remote OpenTofu state backend, Packer proxmox-clone template build (Rocky/Debian/Ubuntu), Ansible inventory,
   check-updates and rolling patch playbooks, secret-blocking pre-commit hook.
 - `hooks/guard.py` PreToolUse safety hook with unit tests.

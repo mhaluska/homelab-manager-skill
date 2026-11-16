@@ -26,7 +26,7 @@ pending. Sort by security count. Unreachable hosts are findings too. Commit the 
      with `-e` scoped wrongly — play vars override group_vars.
    - **Proxmox nodes** — never via this playbook automatically: migrate guests off, patch,
      reboot, verify quorum, next node — each node an explicit approval.
-   - **Critical singletons** the user cares about (DNS, the GitLab host, the gateway): ask
+   - **Critical singletons** the user cares about (DNS, the Git server, the gateway): ask
      whether to include them, and patch them last.
 3. Plan for the user: hosts per batch, security-only or full, reboot policy.
    Reboots default **off** (`allow_reboot=false`); the run reports `reboot_pending`.

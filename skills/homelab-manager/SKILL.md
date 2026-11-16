@@ -1,6 +1,6 @@
 ---
 name: homelab-manager
-description: Orchestrator for a personal homelab managed from a homelab-infrastructure Git repo — Proxmox VE VMs/LXC, Packer templates, OpenTofu, Ansible config and patching, nmap discovery, drift and inventory, for Linux, Windows and appliances. Use it for ANY request touching the homelab or its infrastructure code, even when no tool is named: "discover devices in my management subnet", "show my Proxmox VMs", "create a Rocky VM with 4 CPUs", "add three k8s workers", "patch all Linux servers", "which hosts miss security updates", "update the Debian template", "compare Proxmox against Git", "install Zabbix agent everywhere", "is the keychain working". Also use it to set up a new homelab-infrastructure repo interactively, to enable a part later, and to track problems in ISSUES.md or open them as GitLab issues ("what's broken", "open ISSUE-3 on GitLab").
+description: Orchestrator for a personal homelab managed from a homelab-infrastructure Git repo — Proxmox VE VMs/LXC, Packer templates, OpenTofu, Ansible config and patching, nmap discovery, drift and inventory, for Linux, Windows and appliances. Use it for ANY request touching the homelab or its infrastructure code, even when no tool is named: "discover devices in my management subnet", "show my Proxmox VMs", "create a Rocky VM with 4 CPUs", "add three k8s workers", "patch all Linux servers", "which hosts miss security updates", "update the Debian template", "compare Proxmox against Git", "install Zabbix agent everywhere", "is the keychain working". Also use it to set up a new homelab-infrastructure repo interactively, to enable a part later, and to track problems in ISSUES.md and report them as GitHub issues ("what's broken", "report issues to GitHub").
 ---
 
 # Homelab manager
@@ -28,7 +28,7 @@ are Python 3 standard library only; run them as `python3 $HM/scripts/<name>.py`.
    `templates: false`), say so and offer to enable it (`init_repo.py --add-components templates`,
    then ask only that part's setup questions).
 4. **Check the environment** when it's the first operation of the session or something
-   failed: `python3 $HM/scripts/check_env.py` (tools, SSH agent, glab, keychain, secrets).
+   failed: `python3 $HM/scripts/check_env.py` (tools, SSH agent, gh, keychain, secrets).
 5. **Updates.** A session-start hook checks once a day for a newer release. If the session
    context says one is available, tell the user once (version + the update command).
    "Is there a new version?" → `python3 $HM/../../hooks/update_check.py --force`.
@@ -46,8 +46,10 @@ again when a task needs it.
 Proxmox VMs/LXC (OpenTofu) · VM templates (Packer) · Ansible config & patching ·
 network discovery (nmap) · Windows hosts · appliances (NAS/firewall/switches/BMC) ·
 Kubernetes clusters. Plus two single choices:
-- OpenTofu state: GitLab-managed (recommended) or local — only if Proxmox is selected.
-- Issues: track problems in `ISSUES.md` and offer GitLab issues via `glab`, or `ISSUES.md` only.
+- OpenTofu state (only if Proxmox is selected): **local** file on this Mac outside the repo
+  (default, back it up with Time Machine) or an **S3-compatible bucket** (MinIO, Garage, AWS; adds
+  locking and an off-Mac copy). Never in Git.
+- Issues: track problems in `ISSUES.md` and offer GitHub issues via `gh`, or `ISSUES.md` only.
 
 **Scaffold**: `python3 $HM/scripts/init_repo.py --components <list> --dry-run`, summarise
 what will be created in a few lines, then run it for real. Run
@@ -60,8 +62,11 @@ mostly confirms:
   `excluded_hosts`. Never propose a range from the Mac's own IP without asking.
 - proxmox → `proxmox.endpoint`, TLS (`ca_cert` preferred over `verify_tls: false`),
   `defaults.admin_user`, SSH key (offer the keys from `ssh-add -L`).
-- GitLab state / issues → GitLab URL and project: derive from `git remote get-url origin` and
-  `glab repo view -F json` (gives the numeric `id`); just ask the user to confirm.
+- S3 state → `opentofu.s3.endpoint`, `bucket` (and `key` if they share the bucket). Local state
+  needs nothing; `tofu_init.py --print` shows where the file will live.
+- GitHub issues → the repository: derive from `git remote get-url origin` or
+  `gh repo view --json nameWithOwner`; just ask the user to confirm (`issues.repo` stays empty
+  when it's this repo). Check `gh auth status`; if not logged in, the user runs `gh auth login`.
 - kubernetes → cluster group name(s) in Ansible and whether `kubectl` works on this Mac.
 Write answers with `yq -i '.path = "value"' homelab.yaml` (keeps comments).
 Node, storage and bridge names are discovered later from the Proxmox API; don't ask for them.
@@ -71,10 +76,11 @@ Node, storage and bridge names are discovered later from the Proxmox API; don't 
 Proxmox and stores each value with
 `security add-generic-password -U -T /usr/bin/security -a "$USER" -s <service> -w`
 (nothing after `-w` → it prompts, so the secret never enters shell history or this chat).
+For S3 state the value is `ACCESS_KEY_ID:SECRET_ACCESS_KEY` under `homelab/s3-state`.
 Never ask the user to paste a token into the conversation. Remove `secrets:` entries for
-parts they don't use.
+parts they don't use. Then `python3 $HM/scripts/tofu_init.py` (S3: under `with_secrets.py s3-state --`).
 
-**Finish**: re-run `check_env.py`; record anything left unresolved (missing token, glab not
+**Finish**: re-run `check_env.py`; record anything left unresolved (missing token, gh not
 logged in, unreachable Proxmox) in `ISSUES.md` (section 6); commit
 `Initialise homelab-infrastructure` and tell the user what's ready and what's pending.
 If the user stops halfway, commit what exists — the setup can resume any time.
@@ -110,7 +116,7 @@ Ask first, and wait for an explicit yes, before:
   (A ping or services scan of an already-authorized range that the user asked for needs no extra yes:
   the request is the approval.)
 - installing software on many hosts at once
-- opening, closing or commenting on GitLab issues (`glab`) — they're visible to everyone in the project
+- opening, closing, editing or commenting on GitHub issues (`gh`) — on a public repo anyone can read them
 
 The plugin's `hooks/guard.py` enforces the critical part of this list: it denies
 scans outside `authorized_ranges`, `-auto-approve`, printing keychain secrets and
@@ -126,7 +132,9 @@ anything under `clusters:` in `homelab.yaml`) at a time, and never automatically
 
 - Secrets live only in the login keychain; `homelab.yaml` maps names → keychain items.
 - Run tools that need credentials through the wrapper, which injects env vars and redacts output:
-  `python3 $HM/scripts/with_secrets.py proxmox-rw gitlab-state -- tofu plan -out=plan.tfplan`
+  `python3 $HM/scripts/with_secrets.py proxmox-rw $STATE -- tofu plan -out=plan.tfplan`
+  `$STATE` here and in the references = the `opentofu.state_secret` (e.g. `s3-state`) when
+  `opentofu.state_backend` is `s3`; leave it out for local state.
 - Use the **read-only** token (`proxmox-ro`) for discovery; `proxmox-rw` only for changes.
 - Don't echo, print, write to files or pass secrets as arguments. If a secret ever
   appears in output, stop, tell the user, and recommend rotating it.
@@ -147,19 +155,20 @@ python3 $HM/scripts/issues.py add --title "…" --severity high|medium|low --are
 - Severity: **high** = security exposure, data at risk, or something that will break soon;
   **medium** = drift or misconfiguration with workaround; **low** = cleanup.
 - Tell the user in one line which issues you added (`ISSUE-004, ISSUE-005`).
-- **"Report the issues to GitLab"** (when `issues.gitlab` is true) — never blind-create:
+- **"Report the issues to GitHub"** (when `issues.github` is true) — never blind-create:
   1. `issues.py report --dry-run` lists issues added or changed since the `reported-through`
-     marker and, for each, checks GitLab (open and closed): same `--key`, already linked, or a
-     similar title → **UPDATE** (a note on that issue); otherwise **CREATE**. Near-misses are shown.
+     marker and, for each, checks GitHub (open and closed): same `--key`, already linked, or a
+     similar title → **UPDATE** (a comment on that issue); otherwise **CREATE**. Near-misses are shown.
   2. Review the matches yourself — the title score is a heuristic. Fix wrong ones with
-     `--match ISSUE-004=<iid>` or `--new ISSUE-004`. A match that is closed on GitLab gets a note,
+     `--match ISSUE-004=<number>` or `--new ISSUE-004`. A match that is closed on GitHub gets a comment,
      not a reopen; tell the user and let them decide.
   3. Show the plan, get the user's yes, then run the same command without `--dry-run`. On success it
-     records the GitLab links and moves the marker, so these aren't reported again; on any failure the
-     marker stays and a re-run retries. Commit ISSUES.md (`issues: reported to GitLab`).
+     records the GitHub links and moves the marker, so these aren't reported again; on any failure the
+     marker stays and a re-run retries. Commit ISSUES.md (`issues: reported to GitHub`). Missing labels
+     (`severity:*`, `area:*`) are created on first use.
   A single issue: `issues.py open ISSUE-004 [--dry-run]`.
 - When a problem is fixed: `issues.py resolve ISSUE-004 --note "…"`, and offer to close the
-  GitLab issue (`glab issue close <iid>`, also with the user's yes).
+  GitHub issue (`gh issue close <number>`, also with the user's yes).
 - `issues.py list --status open` answers "what's broken?" / "what's left to do?".
 Commit ISSUES.md with the related change, or as `issues: <summary>`.
 
@@ -204,7 +213,8 @@ Scripts (all in `$HM/scripts/`):
 | `nmap_scan.py <targets> [--profile ping\|services\|os]` | scope-checked scan | `discovery/network.json` |
 | `drift_report.py [--tofu-json F]` | Proxmox ↔ OpenTofu ↔ Ansible ↔ network | `discovery/drift.md` |
 | `tofu_to_inventory.py` | OpenTofu output → Ansible inventory | `ansible/inventory/managed/tofu_hosts.yml` |
-| `issues.py add\|list\|show\|open\|resolve` | track problems; open them on GitLab with glab | `ISSUES.md` |
+| `issues.py add\|list\|show\|open\|report\|resolve` | track problems; report them to GitHub with gh | `ISSUES.md` |
+| `tofu_init.py [--print]` | `tofu init` with the state backend from homelab.yaml (local or S3) | `.terraform/` |
 
 ## 10. Delegating to subagents (cheaper models)
 

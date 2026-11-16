@@ -1,9 +1,11 @@
 {
   "name": "homelab-manager",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Homelab infrastructure orchestrator: discovery, Proxmox, Packer templates, OpenTofu, Ansible, patching — with enforced safety guardrails.",
   "author": {
     "name": "Marek Haluška"
   },
-  "license": "UNLICENSED"
+  "license": "MIT",
+  "homepage": "https://github.com/mhaluska/homelab-manager-skill",
+  "repository": "https://github.com/mhaluska/homelab-manager-skill"
 }

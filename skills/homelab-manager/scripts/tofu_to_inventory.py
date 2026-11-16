@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate ansible/inventory/managed/tofu_hosts.yml from the OpenTofu `ansible_hosts` output.
 
-    with_secrets.py gitlab-state -- python3 tofu_to_inventory.py [--env homelab]
+    python3 tofu_to_inventory.py [--env homelab]      # S3 state: prefix with_secrets.py <opentofu.state_secret> --
 
 The generated file is committed; hand-maintained hosts stay in hosts.yml.
 """

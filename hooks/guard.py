@@ -65,13 +65,18 @@ RULES: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"\bsystemctl\s+(reboot|poweroff|halt|kexec)\b"), ASK, "Reboots or shuts down a system."),
     (re.compile(r"\bansible\b[^\n]*-m\s+(ansible\.(builtin|windows)\.)?(win_)?reboot\b"), ASK, "Reboots remote systems."),
     (re.compile(r"\bRestart-Computer\b|\bStop-Computer\b"), ASK, "Reboots or shuts down Windows systems."),
-    # --- GitLab (glab) / issue tracker ------------------------------------------------
-    (re.compile(r"\bglab\b[^\n;&|]*(--show-token|\bconfig\s+get\s+token\b)"), DENY, "This would print the GitLab token."),
-    (re.compile(r"\bglab\s+issue\s+(create|close|delete|update|note|reopen)\b"), ASK,
-     "Creates or changes a GitLab issue (visible to everyone with access to the project)."),
-    (re.compile(r"\bglab\s+api\b[^\n;&|]*(-X|--method)\s*(POST|PUT|PATCH|DELETE)"), ASK, "Writes to the GitLab API."),
+    # --- GitHub (gh) / issue tracker --------------------------------------------------
+    (re.compile(r"\bgh\s+auth\s+token\b|\bgh\s+auth\s+status\b[^\n;&|]*(--show-token|\s-t\b)"), DENY,
+     "This would print the GitHub token."),
+    (re.compile(r"\bgh\s+issue\s+(create|close|delete|edit|comment|reopen|transfer|lock|unlock|pin|unpin)\b"), ASK,
+     "Creates or changes a GitHub issue (public on a public repository)."),
+    (re.compile(r"\bgh\s+(label\s+(create|edit|delete|clone)|release\s+(create|delete|edit|upload)"
+                r"|repo\s+(delete|archive|rename|edit)|secret\s+(set|delete)|variable\s+(set|delete)"
+                r"|pr\s+merge|workflow\s+run)\b"), ASK, "Changes the GitHub repository or its settings."),
+    (re.compile(r"\bgh\s+api\b(?![^\n;&|]*(-X|--method)\s*GET)[^\n;&|]*((-X|--method)\s*(POST|PUT|PATCH|DELETE)"
+                r"|\s(-f|-F|--field|--raw-field|--input)\b)"), ASK, "Writes to the GitHub API."),
     (re.compile(r"issues\.py\b[^\n;&|]*\s(open|report)\b(?![^\n;&|]*--dry-run)"), ASK,
-     "Publishes issues from ISSUES.md to GitLab (glab issue create / note)."),
+     "Publishes issues from ISSUES.md to GitHub (gh issue create / comment)."),
     # --- templates / git / misc -------------------------------------------------------
     (re.compile(r"\bpacker\s+build\b[^\n;&|]*\s-force\b"), ASK, "packer build -force overwrites an existing template."),
     (re.compile(r"\bgit\s+push\b[^\n;&|]*\s(--force|--force-with-lease|-f)\b"), ASK, "Force-push rewrites Git history."),

@@ -1,0 +1,44 @@
+name: Release
+
+# Creates the GitHub release for a pushed vX.Y.Z tag, with notes from CHANGELOG.md.
+# Note: GitHub sends no tag events when more than 3 tags are pushed at once, and a tag
+# only triggers this if its commit contains this file. For such tags, run it by hand:
+# Actions → Release → Run workflow → tag (it uses CHANGELOG.md from the branch you run it on).
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)publish, e.g. v0.5.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            python3 .github/release_notes.py "$TAG" --check-version > notes.md
+          else
+            git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null || { echo "tag $TAG not found"; exit 1; }
+            python3 .github/release_notes.py "$TAG" > notes.md
+          fi
+          cat notes.md
+
+      - name: Create or update the release
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "homelab-manager ${TAG#v}" --notes-file notes.md
+          else
+            gh release create "$TAG" --verify-tag --title "homelab-manager ${TAG#v}" --notes-file notes.md --latest
+          fi

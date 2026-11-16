@@ -5,7 +5,7 @@ Discovery is read-only. Three pictures of the homelab are kept apart on purpose:
 | Picture | Where | Produced by |
 |---|---|---|
 | What is running | `discovery/proxmox.json`, `discovery/network.json`, `discovery/updates.json` | scripts below |
-| What OpenTofu manages | OpenTofu state (GitLab) | `tofu apply` |
+| What OpenTofu manages | OpenTofu state (local file or S3) | `tofu apply` |
 | What Git declares | `tofu/**/homelab.auto.tfvars`, `ansible/inventory/managed/` | you + the user |
 
 `discovery/` is never used as Ansible inventory: a device showing up on the network
@@ -50,13 +50,13 @@ devices since the last scan (`first_seen` == `last_seen`).
 ## Drift: "compare my Proxmox infrastructure against Git"
 
 1. Refresh: `proxmox_inventory.py` (and `nmap_scan.py` if network devices matter).
-2. `python3 $HM/scripts/with_secrets.py gitlab-state -- python3 $HM/scripts/drift_report.py`
+2. `python3 $HM/scripts/with_secrets.py $STATE -- python3 $HM/scripts/drift_report.py` (local state: no wrapper)
    If state isn't reachable, the report falls back to the `tofu` tag every module sets (weaker — say so).
    Never fabricate a state file to get findings. The report also checks backups: a storage that takes
    `backup` content and an enabled vzdump job covering every non-template guest.
-   (state backend needs the GitLab token; use `--no-tofu` before OpenTofu is set up).
+   (S3 state needs its keys; use `--no-tofu` before OpenTofu is set up).
 3. For managed resources also run a refresh-only plan — it shows attribute drift OpenTofu sees:
-   `with_secrets.py proxmox-ro gitlab-state -- tofu -chdir=tofu/environments/homelab plan -refresh-only -no-color`
+   `with_secrets.py proxmox-ro $STATE -- tofu -chdir=tofu/environments/homelab plan -refresh-only -no-color`
    (read-only token is enough for refresh; it can't change anything).
 4. Summarise per category: unmanaged guests (→ import candidates), managed-but-missing
    (→ deleted outside OpenTofu; a normal plan would recreate them — ask what the user wants),

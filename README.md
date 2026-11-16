@@ -10,16 +10,21 @@ and patching — operated conversationally from the Claude desktop/mobile apps o
 /plugin marketplace add https://github.com/mhaluska/homelab-manager-skill.git
 /plugin install homelab-manager@homelab-manager-skill
 ```
-(Private repo: the Mac's SSH agent needs a key with read access to it.)
+(Public repository over HTTPS, no SSH key needed; `/plugin marketplace add mhaluska/homelab-manager-skill`
+works too.) Updates: once a day the plugin checks for a newer release and tells you; then run
+`/plugin marketplace update homelab-manager-skill`. Release notes: [Releases](https://github.com/mhaluska/homelab-manager-skill/releases).
 
 Then open Claude Code in an empty `homelab-infrastructure` repository and say e.g.
 *"set up this repo for my homelab"*. The skill asks which parts you use (Proxmox/OpenTofu, Packer,
 Ansible, discovery, Windows, appliances, Kubernetes), scaffolds only those, checks tools and keychain
 access, and asks for the configuration it can't discover. Parts can be enabled later.
 
-Problems the skill finds are recorded in `ISSUES.md` in that repository; ask *"open ISSUE-3 on GitLab"*
-to turn one into a GitLab issue, or *"report issues to GitLab"* to send everything new since the
-last report — matching GitLab issues get an update note instead of a duplicate (via `glab`, after you confirm).
+Problems the skill finds are recorded in `ISSUES.md` in that repository; ask *"open ISSUE-3 on GitHub"*
+to turn one into a GitHub issue, or *"report issues to GitHub"* to send everything new since the
+last report — matching GitHub issues get a comment instead of a duplicate (via `gh`, after you confirm).
+
+OpenTofu state never goes into Git: by default it is a file on the Mac outside the repository
+(`~/.local/share/homelab/tofu-state/`); setup can instead put it in any S3-compatible bucket (MinIO, Garage, AWS).
 
 ## What's inside
 
@@ -47,7 +52,8 @@ command Claude issues (in any project, while the plugin is enabled) and:
 - **asks the user**: `tofu apply` without a saved plan or whose plan deletes/replaces, destroy,
   state edits, imports, `qm`/`pct`/`pvesh`/`ha-manager`/`pvesm` writes, ZFS destroy, Proxmox API
   writes, reboots/shutdowns, patch/upgrade playbooks outside `--check`, `packer build -force`,
-  force-push, `curl | sh`, root or NSE nmap scans, creating/closing GitLab issues;
+  force-push, `curl | sh`, root or NSE nmap scans, creating/closing/commenting GitHub issues,
+  GitHub API writes, labels, releases and repository settings; **denies** printing the `gh` token;
 - scans **scripts that a command executes** with the same rules, so generated scripts can't bypass it.
 
 It is defence in depth, not a sandbox: it inspects command text, so the restricted Proxmox
@@ -55,5 +61,9 @@ tokens and the user's review of plans remain the real boundaries.
 
 ## Requirements (checked by `check_env.py`)
 
-macOS with Homebrew: `opentofu`, `hashicorp/tap/packer`, `ansible`, `nmap`, `yq`, `jq`, git, `glab` (for GitLab issues);
+macOS with Homebrew: `opentofu`, `hashicorp/tap/packer`, `ansible`, `nmap`, `yq`, `jq`, git, `gh` (for GitHub issues);
 an SSH agent with the homelab key; auto-login (unlocked login keychain).
+
+## License
+
+MIT — see [LICENSE](LICENSE).

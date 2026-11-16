@@ -123,28 +123,30 @@ class IssuesTests(unittest.TestCase):
         self.assertNotIn("\x1b", text)
         self.assertNotIn("\x00", text)
 
-    def test_open_dry_run_shows_glab_command(self):
+    def test_open_dry_run_shows_gh_command(self):
         self.issues("add", "--title", "Template 9049 missing", "--severity", "medium", "--area", "templates")
         r = self.issues("open", "ISSUE-001", "--dry-run")
-        self.assertIn("glab issue create --title [templates] Template 9049 missing", r.stdout)
-        self.assertIn("severity::medium", r.stdout)
+        self.assertIn("gh issue create --title [templates] Template 9049 missing", r.stdout)
+        self.assertIn("severity:medium", r.stdout)
         self.assertIn("Tracked as ISSUE-001", r.stdout)
         self.assertIn("| open |", Path(self.d, "ISSUES.md").read_text())  # dry run changes nothing
 
 
-FAKE_GLAB = """#!/usr/bin/env python3
+FAKE_GH = """#!/usr/bin/env python3
 import json, os, sys
-log = os.environ["FAKE_GLAB_LOG"]
+log = os.environ["FAKE_GH_LOG"]
 with open(log, "a") as f:
-    f.write(json.dumps(sys.argv[1:]) + "\\n")
+    f.write(json.dumps(sys.argv[1:] + ([sys.stdin.read()] if "-" in sys.argv else [])) + "\\n")
 if sys.argv[1:3] == ["issue", "list"]:
     print(json.dumps([
-        {"iid": 7, "title": "[drift] VM 104 test-old not managed by OpenTofu", "state": "opened",
-         "web_url": "https://gl.example/x/-/issues/7", "description": "old"},
-        {"iid": 9, "title": "Something else", "state": "closed", "web_url": "https://gl.example/x/-/issues/9",
-         "description": "<!-- homelab-key: audit:ssh-pw:web01 -->"}]))
+        {"number": 7, "title": "[drift] VM 104 test-old not managed by OpenTofu", "state": "OPEN",
+         "url": "https://github.com/o/r/issues/7", "body": "old"},
+        {"number": 9, "title": "Something else", "state": "CLOSED", "url": "https://github.com/o/r/issues/9",
+         "body": "<!-- homelab-key: audit:ssh-pw:web01 -->"}]))
+elif sys.argv[1:3] == ["label", "list"]:
+    print(json.dumps([{"name": "homelab"}, {"name": "severity:medium"}]))
 elif sys.argv[1:3] == ["issue", "create"]:
-    print("https://gl.example/x/-/issues/12")
+    print("https://github.com/o/r/issues/12")
 """
 
 
@@ -152,11 +154,11 @@ class ReportTests(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
         run("init_repo.py", self.d, "--components", "ansible", cwd=self.d)
-        fake = Path(self.d, "fake-glab")
-        fake.write_text(FAKE_GLAB)
+        fake = Path(self.d, "fake-gh")
+        fake.write_text(FAKE_GH)
         fake.chmod(0o755)
-        self.log = Path(self.d, "glab.log")
-        self.env = {**os.environ, "HM_GLAB": str(fake), "FAKE_GLAB_LOG": str(self.log)}
+        self.log = Path(self.d, "gh.log")
+        self.env = {**os.environ, "HM_GH": str(fake), "FAKE_GH_LOG": str(self.log)}
 
     def tearDown(self):
         shutil.rmtree(self.d)
@@ -183,9 +185,14 @@ class ReportTests(unittest.TestCase):
 
         r = self.issues("report")
         self.assertEqual(r.returncode, 0, r.stderr)
-        verbs = [c[:2] for c in self.calls()[1:]]
-        self.assertEqual(verbs.count(["issue", "note"]), 2)
+        calls = self.calls()[1:]
+        verbs = [c[:2] for c in calls]
+        self.assertEqual(verbs.count(["issue", "comment"]), 2)
         self.assertEqual(verbs.count(["issue", "create"]), 1)
+        created = [c[2] for c in calls if c[:2] == ["label", "create"]]
+        self.assertEqual(sorted(created), ["area:templates"])   # only missing labels are created
+        comment = next(c for c in calls if c[:2] == ["issue", "comment"])
+        self.assertIn("Seen again", comment[-1])                   # body sent on stdin, not argv
         text = Path(self.d, "ISSUES.md").read_text()
         self.assertIn("<!-- reported-through: ", text)
         self.assertIn("issues/12", text)
@@ -200,6 +207,53 @@ class ReportTests(unittest.TestCase):
         self.issues("add", "--title", "VM 104 test-old not managed by OpenTofu", "--severity", "medium", "--area", "drift")
         self.assertIn("CREATE", self.issues("report", "--dry-run", "--new", "ISSUE-001").stdout)
         self.assertIn("UPDATE #9", self.issues("report", "--dry-run", "--match", "ISSUE-001=9").stdout)
+
+
+class StateBackendTests(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        run("init_repo.py", self.d, "--components", "proxmox", cwd=self.d)
+        self.cfg = Path(self.d, "homelab.yaml")
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith("AWS_")}
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def init(self, *args, env=None):
+        return subprocess.run([sys.executable, str(SCRIPTS / "tofu_init.py"), *args], cwd=self.d,
+                              capture_output=True, text=True, env=env or self.env)
+
+    def test_local_is_default_and_outside_repo(self):
+        self.assertIn('backend "local"', Path(self.d, "tofu/environments/homelab/backend.tf").read_text())
+        subprocess.run(["yq", "-i", f'.opentofu.local.path = "{self.d}/../st/homelab.tfstate"', str(self.cfg)], check=True)
+        r = self.init("--print")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("[local]", r.stdout)
+        self.assertIn("-backend-config=path=", r.stdout)
+        self.assertNotIn(".gitlab", r.stdout)
+
+    def test_s3_needs_config_and_keys(self):
+        subprocess.run(["yq", "-i", '.opentofu.state_backend = "s3"', str(self.cfg)], check=True)
+        self.assertIn("opentofu.s3.endpoint", self.init("--print").stderr)
+        subprocess.run(["yq", "-i", '.opentofu.s3.endpoint = "https://s3.example:9000" | .opentofu.s3.bucket = "tf"',
+                        str(self.cfg)], check=True)
+        self.assertIn("with_secrets.py s3-state", self.init("--print").stderr)
+        r = self.init("--print", env={**self.env, "AWS_ACCESS_KEY_ID": "k", "AWS_SECRET_ACCESS_KEY": "s"})
+        self.assertIn('endpoints={s3="https://s3.example:9000"}', r.stdout)
+        self.assertIn("use_lockfile=true", r.stdout)
+        self.assertIn("skip_requesting_account_id=true", r.stdout)
+
+    def test_s3_credentials_kind(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import with_secrets, hmlib
+        cfg = {"secrets": {"s3-state": {"service": "x", "kind": "s3_credentials"}}}
+        orig = hmlib.read_secret
+        hmlib.read_secret = lambda c, n: "AKIDEXAMPLE:secretvalue"
+        try:
+            env, _ = with_secrets.env_for(cfg, "s3-state")
+        finally:
+            hmlib.read_secret = orig
+        self.assertEqual(env, {"AWS_ACCESS_KEY_ID": "AKIDEXAMPLE", "AWS_SECRET_ACCESS_KEY": "secretvalue"})
 
 
 class DriftTests(unittest.TestCase):
@@ -230,25 +284,34 @@ class DriftTests(unittest.TestCase):
         self.assertNotIn("100 `dns01` is in no backup job", r.stdout)
 
 
-class GuardGlabTests(unittest.TestCase):
+class GuardGhTests(unittest.TestCase):
     def d(self, cmd):
         out = guard.decide(guard.evaluate(cmd, "/tmp"))
         return out["hookSpecificOutput"]["permissionDecision"] if out else None
 
     def test_rules(self):
-        self.assertEqual(self.d("glab issue create -t x -d y -y"), "ask")
-        self.assertEqual(self.d("glab issue close 12"), "ask")
+        self.assertEqual(self.d("gh issue create -t x -b y"), "ask")
+        self.assertEqual(self.d("gh issue close 12"), "ask")
+        self.assertEqual(self.d("gh issue comment 12 --body-file -"), "ask")
+        self.assertEqual(self.d("gh label create severity:high"), "ask")
+        self.assertEqual(self.d("gh release create v1.0.0"), "ask")
+        self.assertEqual(self.d("gh repo delete o/r --yes"), "ask")
+        self.assertEqual(self.d("gh api repos/o/r/issues -f title=x"), "ask")   # fields imply POST
+        self.assertIsNone(self.d("gh api repos/o/r/issues -X GET -f state=all"))
+        self.assertIsNone(self.d("gh api repos/o/r/releases/latest"))
         self.assertEqual(self.d("python3 /p/issues.py open ISSUE-003"), "ask")
         self.assertEqual(self.d("python3 /p/issues.py report"), "ask")
         self.assertEqual(self.d("python3 /p/issues.py report ISSUE-002 --match ISSUE-002=7"), "ask")
         self.assertIsNone(self.d("python3 /p/issues.py report --dry-run"))
         self.assertIsNone(self.d("python3 /p/issues.py open ISSUE-003 --dry-run"))
         self.assertIsNone(self.d("python3 /p/issues.py add --title x --severity low --area drift"))
-        self.assertIsNone(self.d("glab issue list"))
-        self.assertIsNone(self.d("glab repo view -F json"))
-        self.assertEqual(self.d("glab auth status --show-token"), "deny")
-        self.assertEqual(self.d("glab config get token"), "deny")
-        self.assertEqual(self.d("glab api -X POST projects/1/issues"), "ask")
+        self.assertIsNone(self.d("gh issue list --state all --json number,title"))
+        self.assertIsNone(self.d("gh repo view --json nameWithOwner"))
+        self.assertIsNone(self.d("gh auth status"))
+        self.assertEqual(self.d("gh auth status --show-token"), "deny")
+        self.assertEqual(self.d("gh auth status -t"), "deny")
+        self.assertEqual(self.d("gh auth token"), "deny")
+        self.assertEqual(self.d("gh api -X POST repos/o/r/issues"), "ask")
 
 
 if __name__ == "__main__":

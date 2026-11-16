@@ -6,13 +6,14 @@ Desired state is data in `homelab.auto.tfvars`; edit data, not module calls.
 
 ## Running
 
-Always through the secrets wrapper, from the environment directory:
+Always through the secrets wrapper, from the environment directory. `$STATE` = the
+`opentofu.state_secret` when `state_backend: s3`, nothing for local state (SKILL.md §5):
 ```bash
 W="python3 $HM/scripts/with_secrets.py"
-$W gitlab-state -- tofu init                       # once, and after provider changes
+$W $STATE -- python3 $HM/scripts/tofu_init.py      # once, and after provider/backend changes (local: no $W needed)
 tofu fmt -recursive ../../ && tofu validate        # no secrets needed
-$W proxmox-rw gitlab-state -- tofu plan -out=plan.tfplan -no-color
-$W proxmox-rw gitlab-state -- tofu apply plan.tfplan
+$W proxmox-rw $STATE -- tofu plan -out=plan.tfplan -no-color
+$W proxmox-rw $STATE -- tofu apply plan.tfplan
 rm plan.tfplan
 ```
 - `-auto-approve` is denied by the guard. The saved plan is the approval artefact.
@@ -21,13 +22,18 @@ rm plan.tfplan
 
 ## State
 
-- Default: GitLab-managed state (`backend "http" {}` configured by `TF_HTTP_*`).
-  The project needs a token with `api` scope (Maintainer) stored as `homelab/gitlab-state`.
-  GitLab keeps versions and locks; state never touches Git or the Mac's disk long-term.
+State holds resource details (and sometimes cloud-init data), so it never goes into Git.
+`backend.tf` only names the backend type; `tofu_init.py` passes the settings from homelab.yaml.
+- **local** (default): `~/.local/share/homelab/tofu-state/<site>/<env>.tfstate` on this Mac
+  (`opentofu.local.path` overrides), directory mode 700, file locking. Make sure Time Machine (or
+  another backup) covers it; losing it means re-importing every resource.
+- **s3**: any S3-compatible bucket — MinIO, Garage, AWS (`opentofu.s3.*`), locking via a lockfile
+  next to the state (`use_lockfile`), credentials `ACCESS_KEY_ID:SECRET_ACCESS_KEY` in the keychain
+  (`homelab/s3-state`, kind `s3_credentials`). Turn on bucket versioning so old states can be restored.
+- Switching backend: change `opentofu.state_backend`, then `tofu_init.py -- -migrate-state` — that
+  moves state, so explain it and get a yes first. `tofu_init.py` rewrites `backend.tf` to match.
 - Locked state: someone/something else is running. Do not `force-unlock` without approval and
   without checking nothing is running (`ps aux | grep tofu`).
-- `opentofu.state_backend: local` alternative: local state with OpenTofu state encryption
-  (key via `TF_ENCRYPTION` from keychain) plus backups — only if GitLab isn't available.
 
 ## Plan review — detail
 

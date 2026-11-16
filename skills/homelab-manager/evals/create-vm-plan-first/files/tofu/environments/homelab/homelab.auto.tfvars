@@ -47,7 +47,7 @@ vms = {
     tags           = ["debian"]
     ansible_groups = ["debian"]
   }
-  "gitlab" = {
+  "git01" = {
     vm_id          = 101
     template_vm_id = 9050
     cores          = 4

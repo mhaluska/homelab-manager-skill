@@ -1,4 +1,4 @@
-# --- OpenTofu (state lives in GitLab; never commit state or plans) ---
+# --- OpenTofu (state lives outside the repo; never commit state or plans) ---
 **/.terraform/
 *.tfstate
 *.tfstate.*

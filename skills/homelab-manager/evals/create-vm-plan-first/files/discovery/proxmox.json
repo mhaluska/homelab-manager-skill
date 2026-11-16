@@ -2,7 +2,7 @@
  "nodes":[{"node":"pve1","status":"online","cpus":16,"cpu_usage":0.12,"mem_gib":62.7,"mem_used_gib":21.3,"uptime_s":900000}],
  "guests":[
   {"type":"vm","vmid":100,"name":"dns01","node":"pve1","status":"running","template":false,"cpus":1,"cpu_usage":0.01,"mem_gib":1.0,"mem_used_gib":0.4,"disk_gib":10.0,"tags":"tofu;debian","pool":null,"hastate":null,"uptime_s":800000},
-  {"type":"vm","vmid":101,"name":"gitlab","node":"pve1","status":"running","template":false,"cpus":4,"cpu_usage":0.2,"mem_gib":8.0,"mem_used_gib":6.1,"disk_gib":80.0,"tags":"tofu;rocky","pool":null,"hastate":null,"uptime_s":800000},
+  {"type":"vm","vmid":101,"name":"git01","node":"pve1","status":"running","template":false,"cpus":4,"cpu_usage":0.2,"mem_gib":8.0,"mem_used_gib":6.1,"disk_gib":80.0,"tags":"tofu;rocky","pool":null,"hastate":null,"uptime_s":800000},
   {"type":"vm","vmid":102,"name":"monitor","node":"pve1","status":"running","template":false,"cpus":2,"cpu_usage":0.05,"mem_gib":4.0,"mem_used_gib":2.2,"disk_gib":40.0,"tags":"tofu;rocky","pool":null,"hastate":null,"uptime_s":800000},
   {"type":"vm","vmid":9000,"name":"base-rocky9-20261001","node":"pve1","status":"stopped","template":true,"cpus":2,"cpu_usage":0,"mem_gib":2.0,"mem_used_gib":0,"disk_gib":10.0,"tags":"base-image;rocky;tofu","pool":null,"hastate":null,"uptime_s":0},
   {"type":"vm","vmid":9050,"name":"tpl-rocky9-20261001","node":"pve1","status":"stopped","template":true,"cpus":2,"cpu_usage":0,"mem_gib":2.0,"mem_used_gib":0,"disk_gib":10.0,"tags":"rocky;template","pool":null,"hastate":null,"uptime_s":0},

@@ -17,7 +17,7 @@ All lifecycle changes go through OpenTofu (`tofu/environments/<env>/homelab.auto
 2. Add the entry, `tofu fmt`, `validate`, `plan -out`. Expect exactly `+1 create`
    (one `module.vm["<name>"]...vm.this`). Anything else → stop and explain.
 3. Present: name, VMID, node, template, 4 vCPU / 8 GiB / disk, network, IP, then apply
-   (`with_secrets.py proxmox-rw gitlab-state -- tofu apply plan.tfplan`).
+   (`with_secrets.py proxmox-rw $STATE -- tofu apply plan.tfplan`).
 4. Verify: guest agent reports an IP (refresh snapshot with `--details` or `tofu refresh`
    output), `ssh <admin_user>@<ip> true` via the agent, cloud-init finished
    (`cloud-init status --wait`).

@@ -17,14 +17,15 @@ never values). Run it after setup, after macOS updates, and whenever a secret re
 
 - Two Proxmox tokens (`docs/proxmox-tokens.md`): `ro` = PVEAuditor; `rw` = custom
   provisioning role, ideally scoped to a pool and specific storages. Privilege separation on.
-- GitLab state token: project access token, `api` scope, Maintainer, expiry set.
+- S3 state keys (if used): a key limited to the state bucket, not the store's admin key.
+- GitHub: `gh` keeps its token in the keychain (`gh auth login`); never print it (`gh auth token` is denied).
 - Rotation: user creates the new token, updates the keychain item (`-U` overwrites),
   `check_env.py`, then revokes the old one.
 
 ## Security audit ("run a security audit")
 
 Read-only by default; report findings with severity and a proposed fix, change nothing until approved.
-- **Repo**: no secrets in Git history (`git log -p | grep -E 'PRIVATE KEY|PVEAPIToken|glpat-'`),
+- **Repo**: no secrets in Git history (`git log -p | grep -E 'PRIVATE KEY|PVEAPIToken|ghp_|github_pat_|AKIA'`),
   `.gitignore` covers state/keys, pre-commit hook active (`git config core.hooksPath`).
 - **Proxmox**: token ACLs (`pveum acl list` — user runs or via ro token `/access/acl`),
   no `root@pam` tokens, TLS verification on, 2FA on root (ask).
@@ -36,8 +37,9 @@ Read-only by default; report findings with severity and a proposed fix, change n
 - **Mac Mini**: FileVault / auto-login trade-off (tell the user, don't change), firewall,
   macOS updates pending (`softwareupdate -l`), SSH agent keys.
 Write the report to `docs/security-audit-<date>.md`, add each finding to `ISSUES.md`
-(`issues.py add --area security --key audit:<check>:<host>`), offer to open the high-severity ones
-on GitLab, and commit.
+(`issues.py add --area security --key audit:<check>:<host>`), offer to report the high-severity ones
+to GitHub, and commit. On a public repo, keep exploitable detail (IPs, versions with known holes)
+out of the issue text, or keep those findings in ISSUES.md only — ask the user.
 
 ## Hard rules (also enforced by hooks/guard.py)
 
