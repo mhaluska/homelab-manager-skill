@@ -2,7 +2,8 @@
 
 Claude Code plugin that turns Claude into the infrastructure orchestrator for a personal
 homelab: Proxmox VE, Packer templates, OpenTofu, Ansible, nmap discovery, drift detection
-and patching — operated conversationally from the Claude desktop/mobile apps on a headless Mac.
+and patching — operated conversationally from the Claude desktop/mobile apps on a headless Mac
+(the control machine must be macOS, see [Requirements](#requirements-checked-by-check_envpy)).
 
 ## Install
 
@@ -65,6 +66,11 @@ tokens and the user's review of plans remain the real boundaries.
 
 macOS with Homebrew: `opentofu`, `hashicorp/tap/packer`, `ansible`, `nmap`, `yq`, `jq`, git, `gh` (for GitHub issues);
 an SSH agent with the homelab key; auto-login (unlocked login keychain).
+
+**macOS only (for now).** Secrets are read from the macOS login keychain (`security`), and setup,
+environment checks and install hints assume macOS with Homebrew. Linux, and Windows via WSL2, would
+need another secret store (e.g. `pass`, Secret Service or 1Password CLI); that is not supported yet.
+The machines you *manage* can be anything: Linux, Windows and appliances.
 
 ## License
 
