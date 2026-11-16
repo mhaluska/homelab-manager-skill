@@ -22,6 +22,9 @@ access, and asks for the configuration it can't discover. Parts can be enabled l
 Problems the skill finds are recorded in `ISSUES.md` in that repository; ask *"open ISSUE-3 on GitHub"*
 to turn one into a GitHub issue, or *"report issues to GitHub"* to send everything new since the
 last report — matching GitHub issues get a comment instead of a duplicate (via `gh`, after you confirm).
+Every issue follows one template (Summary, Affected, Evidence, Impact, Proposed fix, Verify), so
+*"fix ISSUE-3"* can start straight from the evidence; the homelab repo gets a matching GitHub issue
+form, and *"fix GitHub issue #12"* imports one you opened by hand.
 
 OpenTofu state never goes into Git: by default it is a file on the Mac outside the repository
 (`~/.local/share/homelab/tofu-state/`); setup can instead put it in any S3-compatible bucket (MinIO, Garage, AWS).

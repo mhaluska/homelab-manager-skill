@@ -12,6 +12,11 @@
   `tofu init` with the backend from homelab.yaml; new secret kind `s3_credentials`.
 - Releases: pushing a `vX.Y.Z` tag publishes a GitHub release with that version's CHANGELOG section.
 - Template pre-commit hook also blocks GitHub tokens and AWS access keys.
+- Issue template: every ISSUES.md entry and GitHub issue has Summary, Affected, Evidence, Impact,
+  Proposed fix and Verify (`issues.py template`; missing sections are marked unknown), so a later session
+  can fix it from the evidence. The homelab repo gets a matching GitHub issue form, kept current with
+  `init_repo.py --sync-managed`. `issues.py pull <n>` imports a GitHub issue (owner/collaborators only
+  unless `--any-author`) so "fix GitHub issue #12" works.
 - License: MIT.
 
 ## 0.4.0 — 2026-11-16

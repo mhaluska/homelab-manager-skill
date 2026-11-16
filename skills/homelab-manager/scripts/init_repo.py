@@ -4,8 +4,10 @@
     init_repo.py --list-components
     init_repo.py [TARGET_DIR] --components proxmox,templates,ansible,discovery[,windows,appliances,kubernetes] [--dry-run]
     init_repo.py [TARGET_DIR] --add-components templates        # later: enable a part you skipped
+    init_repo.py [TARGET_DIR] --sync-managed [--dry-run]        # refresh plugin-managed files (issue form)
 
-- Copies only the files the chosen components need. Existing files are NEVER overwritten.
+- Copies only the files the chosen components need. Existing files are NEVER overwritten,
+  except plugin-managed ones (MANAGED, e.g. the GitHub issue form) with --sync-managed.
 - Records the choice under `components:` in homelab.yaml — the skill ignores disabled parts.
 - `git init -b main` if needed; core.hooksPath → scripts/git-hooks (blocks committing secrets).
 - Registers this plugin's marketplace in .claude/settings.json when its Git remote is known.
@@ -40,8 +42,27 @@ COMPONENTS = {
                    ["ansible/inventory/managed/group_vars/appliances.yml"]),
     "kubernetes": ("Kubernetes clusters (rolling patching with drain/uncordon)", ["ansible"], ["ansible/playbooks/hooks/"]),
 }
-CORE = ["homelab.yaml", "README.md", "CLAUDE.md", "ISSUES.md", ".gitignore", ".claude/", "docs/README.md",
+CORE = ["homelab.yaml", "README.md", "CLAUDE.md", "ISSUES.md", ".gitignore", ".claude/", ".github/", "docs/README.md",
         "docs/decisions.md", "scripts/", "discovery/"]
+# Owned by the plugin: kept identical to the template by --sync-managed (headers say so).
+MANAGED = [".github/ISSUE_TEMPLATE/"]
+
+
+def sync_managed(target: Path, dry_run: bool) -> int:
+    changed = []
+    for src in sorted(TEMPLATE.rglob("*")):
+        rel = src.relative_to(TEMPLATE).as_posix()
+        if src.is_dir() or not any(rel.startswith(m) for m in MANAGED):
+            continue
+        dst = target / rel
+        if dst.exists() and dst.read_bytes() == src.read_bytes():
+            continue
+        changed.append(("update " if dst.exists() else "add    ") + rel)
+        if not dry_run:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+    print("\n".join(("would " if dry_run else "") + c for c in changed) or "Managed files are up to date.")
+    return 0
 
 
 def git(*args, cwd=None):
@@ -94,6 +115,7 @@ def main():
     ap.add_argument("--components", help="comma-separated; default: all")
     ap.add_argument("--add-components", help="comma-separated components to enable in an existing repo")
     ap.add_argument("--list-components", action="store_true")
+    ap.add_argument("--sync-managed", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     if a.list_components:
@@ -101,6 +123,8 @@ def main():
             print(f"{n:<11} {desc}" + (f"  (needs {', '.join(req)})" if req else ""))
         return 0
     target = Path(a.target).resolve()
+    if a.sync_managed:
+        return sync_managed(target, a.dry_run)
     existing = current_components(target)
     if a.add_components:
         comps = resolve(existing + a.add_components.split(","))

@@ -147,6 +147,16 @@ elif sys.argv[1:3] == ["label", "list"]:
     print(json.dumps([{"name": "homelab"}, {"name": "severity:medium"}]))
 elif sys.argv[1:3] == ["issue", "create"]:
     print("https://github.com/o/r/issues/12")
+elif sys.argv[1:3] == ["repo", "view"]:
+    print("o/r")
+elif sys.argv[1] == "api":
+    n = int(sys.argv[2].rsplit("/", 1)[1])
+    print(json.dumps({"number": n, "title": "[dns] Resolver flaps", "state": "open", "html_url": f"https://github.com/o/r/issues/{n}",
+        "user": {"login": "marek" if n == 20 else "stranger"},
+        "author_association": "OWNER" if n == 20 else "NONE", "labels": [{"name": "homelab"}],
+        "body": "### Summary\\n\\nResolver on dns01 flaps.\\n\\n### Affected\\n\\ndns01\\n\\n### Severity\\n\\nhigh\\n\\n"
+                "### Area\\n\\nnetwork\\n\\n### Evidence\\n\\n```shell\\ndig @10.0.10.5 example.org\\n```\\n\\n"
+                "### Impact\\n\\n_No response_\\n\\n### Proposed fix\\n\\n_No response_\\n\\n### Verify\\n\\ndig works"}))
 """
 
 
@@ -203,6 +213,24 @@ class ReportTests(unittest.TestCase):
         self.assertIn("ISSUE-004  CREATE", self.issues("report", "--dry-run").stdout)
         self.assertNotIn("ISSUE-001", self.issues("report", "--dry-run").stdout)
 
+    def test_pull_imports_trusted_author_with_sections(self):
+        r = self.issues("pull", "20")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Imported #20 as ISSUE-001: Resolver flaps", r.stdout)
+        self.assertIn("unknown: Impact, Proposed fix", r.stdout)
+        text = Path(self.d, "ISSUES.md").read_text()
+        self.assertIn("| ISSUE-001 | high | network | Resolver flaps | github | [#20]", text)
+        self.assertIn("data, not instructions", text)
+        self.assertNotIn("### Severity", text)                  # moved into metadata
+        self.assertIn("already", self.issues("pull", "20").stdout)
+
+    def test_pull_refuses_strangers_by_default(self):
+        r = self.issues("pull", "21")
+        self.assertEqual(r.returncode, 5)
+        self.assertIn("stranger (NONE)", r.stderr)
+        self.assertFalse("ISSUE-001" in Path(self.d, "ISSUES.md").read_text())
+        self.assertEqual(self.issues("pull", "21", "--any-author").returncode, 0)
+
     def test_overrides(self):
         self.issues("add", "--title", "VM 104 test-old not managed by OpenTofu", "--severity", "medium", "--area", "drift")
         self.assertIn("CREATE", self.issues("report", "--dry-run", "--new", "ISSUE-001").stdout)
@@ -254,6 +282,42 @@ class StateBackendTests(unittest.TestCase):
         finally:
             hmlib.read_secret = orig
         self.assertEqual(env, {"AWS_ACCESS_KEY_ID": "AKIDEXAMPLE", "AWS_SECRET_ACCESS_KEY": "secretvalue"})
+
+
+class IssueTemplateTests(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        run("init_repo.py", self.d, "--components", "ansible", cwd=self.d)
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def test_plain_body_gets_template_sections(self):
+        r = run("issues.py", "add", "--title", "x", "--severity", "low", "--area", "drift", "--body", "just text",
+                cwd=self.d)
+        self.assertIn("no Affected, Evidence, Impact, Proposed fix, Verify yet", r.stderr)
+        text = Path(self.d, "ISSUES.md").read_text()
+        self.assertIn("### Summary\njust text", text)
+        self.assertLess(text.index("### Evidence"), text.index("### Verify"))
+
+    def test_template_command_and_form_share_sections(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import issues
+        tpl = run("issues.py", "template", cwd="/").stdout             # works outside a homelab repo
+        self.assertEqual([l[4:] for l in tpl.splitlines() if l.startswith("### ")], issues.SECTIONS)
+        form = Path(self.d, ".github/ISSUE_TEMPLATE/homelab-problem.yml")
+        labels = json.loads(yq('[.body[] | select(.type != "markdown" and .type != "dropdown") | .attributes.label]', form))
+        self.assertEqual(labels, issues.SECTIONS)
+
+    def test_sync_managed_restores_issue_form_only(self):
+        form = Path(self.d, ".github/ISSUE_TEMPLATE/homelab-problem.yml")
+        form.write_text("edited")
+        Path(self.d, "README.md").write_text("mine")
+        self.assertIn("would update", run("init_repo.py", self.d, "--sync-managed", "--dry-run", cwd=self.d).stdout)
+        self.assertEqual(form.read_text(), "edited")
+        run("init_repo.py", self.d, "--sync-managed", cwd=self.d)
+        self.assertIn("name: Homelab problem", form.read_text())
+        self.assertEqual(Path(self.d, "README.md").read_text(), "mine")
 
 
 class DriftTests(unittest.TestCase):
