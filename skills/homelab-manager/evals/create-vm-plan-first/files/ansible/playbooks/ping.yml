@@ -1,0 +1,11 @@
+- name: Reachability (Linux)
+  hosts: linux
+  gather_facts: false
+  tasks:
+    - ansible.builtin.ping:
+
+- name: Reachability (Windows)
+  hosts: windows
+  gather_facts: false
+  tasks:
+    - ansible.windows.win_ping:

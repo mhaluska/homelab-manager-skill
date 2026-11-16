@@ -1,0 +1,100 @@
+# Rolling Linux patching with health checks.
+#
+#   ansible-playbook playbooks/patch-linux.yml -e target=<group|host> [-e security_only=true] [-e allow_reboot=true]
+#
+# Safe defaults: one host at a time (serial 1), stop at the first failure, NO reboots
+# unless allow_reboot=true. For groups listed under `clusters:` in homelab.yaml, keep
+# serial 1 and set pre_hook/post_hook (drain/uncordon) — never patch a cluster in parallel.
+- name: Patch Linux hosts
+  hosts: "{{ target }}"
+  serial: "{{ patch_serial | default(1) }}"
+  max_fail_percentage: 0
+  any_errors_fatal: true
+  become: true
+  vars:
+    security_only: false
+    allow_reboot: false
+
+  pre_tasks:
+    - name: Refuse to run without an explicit target
+      ansible.builtin.assert:
+        that: target is defined and target | length > 0
+        fail_msg: "Pass -e target=<group or host>."
+      run_once: true
+
+    - name: Failed systemd units before patching
+      ansible.builtin.command: systemctl list-units --state=failed --no-legend --plain
+      register: failed_before
+      changed_when: false
+
+    - name: Cluster pre-hook (drain, maintenance mode, …)
+      ansible.builtin.include_tasks: "{{ pre_hook }}"
+      when: pre_hook is defined
+
+  tasks:
+    - name: Update (RHEL family)
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        security: "{{ security_only | bool }}"
+        update_only: true
+      when: ansible_os_family == "RedHat"
+      register: upd_rh
+
+    - name: Update (Debian family)
+      ansible.builtin.apt:
+        upgrade: "{{ 'yes' if security_only | bool else 'dist' }}"
+        update_cache: true
+        autoremove: true
+      environment:
+        NEEDRESTART_MODE: a
+      when: ansible_os_family == "Debian"
+      register: upd_deb
+
+    - name: Reboot required?
+      ansible.builtin.command: needs-restarting -r
+      register: rh_reboot
+      changed_when: false
+      failed_when: false
+      when: ansible_os_family == "RedHat"
+
+    - ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: deb_reboot
+      when: ansible_os_family == "Debian"
+
+    - ansible.builtin.set_fact:
+        needs_reboot: "{{ (rh_reboot.rc | default(0)) == 1 or (deb_reboot.stat.exists | default(false)) }}"
+
+    - name: Reboot (only with allow_reboot=true)
+      ansible.builtin.reboot:
+        reboot_timeout: 900
+        msg: "Reboot by homelab-manager patching"
+      when: needs_reboot | bool and allow_reboot | bool
+
+  post_tasks:
+    - name: Required services are active
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+      register: svc
+      failed_when: svc.status.ActiveState != "active"
+      loop: "{{ health_services | default([]) }}"
+
+    - name: Failed systemd units after patching
+      ansible.builtin.command: systemctl list-units --state=failed --no-legend --plain
+      register: failed_after
+      changed_when: false
+
+    - name: No new failed units
+      ansible.builtin.assert:
+        that: (failed_after.stdout_lines | difference(failed_before.stdout_lines)) | length == 0
+        fail_msg: "New failed units: {{ failed_after.stdout_lines | difference(failed_before.stdout_lines) }}"
+
+    - name: Cluster post-hook (uncordon, leave maintenance, …)
+      ansible.builtin.include_tasks: "{{ post_hook }}"
+      when: post_hook is defined
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: updated={{ (upd_rh.changed | default(false)) or (upd_deb.changed | default(false)) }},
+              reboot_pending={{ needs_reboot and not (allow_reboot | bool) }}"

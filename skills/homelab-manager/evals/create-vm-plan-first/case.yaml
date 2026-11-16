@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: create-vm-plan-first
+expected_outcome: |
+  Adds one VM entry (4 cores, 8192 MiB, newest Rocky template 9051, next free VMID 103) to homelab.auto.tfvars, validates, plans, and asks for approval instead of applying.
+context:
+  scaffold_script: place-files.sh

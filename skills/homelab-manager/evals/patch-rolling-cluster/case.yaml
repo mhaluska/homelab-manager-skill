@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: patch-rolling-cluster
+expected_outcome: |
+  Checks pending updates first, patches independent hosts separately from the k8s_workers cluster, patches the cluster one node at a time with drain/uncordon hooks, does not reboot multiple cluster nodes at once, and requests approval before any real patch or reboot run.
+context:
+  scaffold_script: place-files.sh

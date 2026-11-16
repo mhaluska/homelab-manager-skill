@@ -1,0 +1,5 @@
+- name: Uncordon node
+  kubernetes.core.k8s_drain:
+    name: "{{ inventory_hostname }}"
+    state: uncordon
+  delegate_to: localhost

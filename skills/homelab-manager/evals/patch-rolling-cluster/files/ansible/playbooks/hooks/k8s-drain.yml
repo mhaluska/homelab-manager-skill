@@ -1,0 +1,5 @@
+- name: Drain node
+  kubernetes.core.k8s_drain:
+    name: "{{ inventory_hostname }}"
+    delete_options: {ignore_daemonsets: true, delete_emptydir_data: true}
+  delegate_to: localhost

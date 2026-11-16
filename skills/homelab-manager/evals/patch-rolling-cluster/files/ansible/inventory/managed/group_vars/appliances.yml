@@ -1,0 +1,2 @@
+# Appliances are not configured by Ansible unless a play explicitly targets them.
+homelab_read_only: true
