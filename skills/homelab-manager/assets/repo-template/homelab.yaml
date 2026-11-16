@@ -102,6 +102,9 @@ issues:
   file: skill_issues.md            # problems with / ideas for the homelab-manager skill itself (not the homelab)
   report: true               # offer to report them to the plugin's GitHub repository (sanitised, asks first)
 
+upgrades:
+  reviewed: ""               # upgrade notes reviewed up to this plugin version (init_repo.py --sync-managed)
+
 git:
   branch: main
   auto_commit: true          # commit config changes after successful, verified operations

@@ -11,6 +11,9 @@ reported to the plugin's GitHub repository.
                                               # the same/similar GitHub issue or create one, then set the
                                               # "reported through" marker so they aren't sent again
     issues.py resolve SKILL-002 [--note TEXT]
+    issues.py fixed [--apply] [--github]      # reported entries the installed release fixed (its CHANGELOG links
+                                              # their GitHub issue): --apply resolves them; --github also lists
+                                              # ones closed as completed on GitHub but not in this release yet
     issues.py reopen SKILL-002
     issues.py template [--kind K]             # the sections an entry's body follows (problem or idea)
     issues.py migrate [--dry-run]             # older repos: move pre-0.6.0 homelab entries to
@@ -61,6 +64,7 @@ ASSETS = Path(__file__).resolve().parent.parent / "assets"
 TEMPLATE = ASSETS / "issue-template.md"
 IDEA_TEMPLATE = ASSETS / "idea-template.md"
 PLUGIN_JSON = hmlib.PLUGIN_ROOT / ".claude-plugin" / "plugin.json"
+CHANGELOG = hmlib.PLUGIN_ROOT / "CHANGELOG.md"
 SECTIONS = ["Summary", "Steps to reproduce", "Expected", "Actual", "Evidence", "Environment", "Proposed fix"]
 OPTIONAL = {"Proposed fix"}
 IDEA_SECTIONS = ["Summary", "Context", "Proposal", "Benefit", "Environment"]
@@ -495,6 +499,7 @@ def cmd_add(a, cfg):
         for i in items:
             if i.get("key") == a.key and i["status"] != "resolved":
                 i["last_seen"] = today()
+                i["last_seen_version"] = plugin_info().get("version", "")  # a fix must be newer than this
                 if body != i["body"]:
                     i["seen_at"] = now_iso()  # changed → report again
                     i["body"] = body
@@ -520,6 +525,99 @@ def cmd_list(a, cfg):
     for i in sel:
         print(f"{i['id']}  {i.get('kind', '?'):<12} {i['status']:<8} {i['title']}"
               + (f"  {i['github_url']}" if i.get("github_url") else ""))
+    hint = fixed_hint(items)
+    if hint:
+        print("\n" + hint)
+    return 0
+
+
+# ---- entries fixed by a release ----
+
+def vtuple(v: str) -> tuple[int, ...]:
+    m = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", (v or "").strip())
+    return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
+
+
+def changelog_refs(path: Path = CHANGELOG) -> dict[int, str]:
+    """{GitHub issue number: first release whose CHANGELOG section links it} for the installed plugin."""
+    try:
+        text = path.read_text()
+    except OSError:
+        return {}
+    installed = vtuple(plugin_info().get("version", ""))
+    refs: dict[int, str] = {}
+    for m in re.finditer(r"^## (\d+\.\d+\.\d+)\b.*?(?=^## |\Z)", text, re.M | re.S):
+        ver = m.group(1)
+        if vtuple(ver) > installed:
+            continue
+        for n in re.findall(r"/issues/(\d+)\b|(?<![\w&/])#(\d+)\b", m.group(0)):
+            num = int(n[0] or n[1])
+            if num not in refs or vtuple(ver) < vtuple(refs[num]):
+                refs[num] = ver
+    return refs
+
+
+def fixed_by_release(items) -> list[tuple[dict, str]]:
+    """[(entry, version)]: reported entries whose GitHub issue a release newer than the one they were last
+    seen with links in the installed CHANGELOG — the release fixed (or built) them."""
+    refs = changelog_refs()
+    out = []
+    for i in items:
+        n = i.get("github_number")
+        if i["status"] == "resolved" or not n or n not in refs:
+            continue
+        seen = max(vtuple(i.get("plugin_version", "")), vtuple(i.get("last_seen_version", "")))
+        if vtuple(refs[n]) > seen:
+            out.append((i, refs[n]))
+    return out
+
+
+def fixed_hint(items) -> str | None:
+    fixed = fixed_by_release(items)
+    if not fixed:
+        return None
+    return (f"Fixed by the installed release: " + ", ".join(f"{i['id']} (#{i['github_number']}, {v})" for i, v in fixed)
+            + " — `issues.py fixed --apply` marks them resolved.")
+
+
+def closed_on_github(items, cfg) -> list[dict]:
+    """Reported entries whose GitHub issue was closed as completed (data from a public repo: state only)."""
+    nums = {i["github_number"] for i in items if i["status"] != "resolved" and i.get("github_number")}
+    if not nums:
+        return []
+    r = gh(["issue", "list", "--repo", plugin_repo(), "--state", "closed", "--limit", "5000",
+            "--json", "number,stateReason"], cfg)
+    if r.returncode != 0:
+        raise SystemExit("gh issue list failed: " + ((r.stderr or r.stdout).strip()[:300] or f"exit {r.returncode}"))
+    done = {g.get("number") for g in json.loads(r.stdout or "[]")
+            if str(g.get("stateReason") or "").upper() == "COMPLETED"}
+    return [i for i in items if i["status"] != "resolved" and i.get("github_number") in done]
+
+
+def cmd_fixed(a, cfg):
+    path = issues_path(cfg)
+    items = load(path)
+    fixed = fixed_by_release(items)
+    have = plugin_info().get("version", "?")
+    for i, v in fixed:
+        print(f"{i['id']}  #{i['github_number']} fixed in {v}  {i['title']}")
+    if not fixed:
+        print(f"None of the reported entries is fixed by the installed release ({have}).")
+    if a.github:
+        ids = {i["id"] for i, _ in fixed}
+        later = [i for i in closed_on_github(items, cfg) if i["id"] not in ids]
+        for i in later:
+            print(f"{i['id']}  #{i['github_number']} closed as completed on GitHub, not in {have}'s changelog "
+                  f"— in a newer release? (update the plugin)  {i['title']}")
+    if fixed and a.apply:
+        for i, v in fixed:
+            i["status"], i["resolved"] = "resolved", today()
+            i["body"] = (i["body"] + f"\n\n**Resolution ({today()}):** fixed in homelab-manager {v} "
+                         f"(#{i['github_number']}).").strip()
+        save(path, items)
+        print(f"Resolved {len(fixed)} entr{'y' if len(fixed) == 1 else 'ies'}.")
+    elif fixed:
+        print("Run with --apply to mark them resolved.")
     return 0
 
 
@@ -681,6 +779,9 @@ def cmd_report(a, cfg):
                 print("  body:\n" + indent(issue_body(i, cfg)))
     if plan:
         print("\n" + redactor(cfg).summary())
+    hint = fixed_hint(items)
+    if hint and a.dry_run:
+        print("\n" + hint)
     if a.dry_run:
         print("\nDry run — nothing sent. Read the text above: anything still site-specific? Edit the issue in "
               "skill_issues.md and re-run. Override matches with --match ID=NUMBER or --new ID.")
@@ -809,6 +910,9 @@ def main():
     g = p.add_mutually_exclusive_group()
     g.add_argument("--ideas", action="store_true", help="only improvements and ideas")
     g.add_argument("--problems", action="store_true", help="only problems")
+    p = sp.add_parser("fixed")
+    p.add_argument("--apply", action="store_true", help="mark them resolved")
+    p.add_argument("--github", action="store_true", help="also check which are closed as completed on GitHub")
     p = sp.add_parser("template")
     p.add_argument("--kind", choices=KINDS)
     p = sp.add_parser("migrate")
@@ -832,7 +936,7 @@ def main():
     except hmlib.ConfigError as e:
         print(f"issues: {e}", file=sys.stderr)
         return 3
-    return {"add": cmd_add, "list": cmd_list, "show": cmd_show, "report": cmd_report, "migrate": cmd_migrate,
+    return {"add": cmd_add, "list": cmd_list, "fixed": cmd_fixed, "show": cmd_show, "report": cmd_report, "migrate": cmd_migrate,
             "resolve": lambda a, c: cmd_status(a, c, "resolved"),
             "reopen": lambda a, c: cmd_status(a, c, "open")}[a.cmd](a, cfg)
 

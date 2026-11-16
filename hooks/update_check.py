@@ -9,7 +9,9 @@ non-interactive, short timeout). The remote comes from HM_UPDATE_URL, the instal
 entry in ~/.claude/plugins/known_marketplaces.json, or this checkout's `origin`.
 The result is cached in ~/.cache/homelab-manager/update-check.json; a failed check is retried after 6 h.
 Also (local, no network, every session): when the working directory is a homelab repo set up by an
-older plugin version, tells Claude which one-time upgrades `init_repo.py --sync-managed` would apply.
+older plugin version, tells Claude which one-time upgrades `init_repo.py --sync-managed` would apply,
+which opt-in changes newer releases suggest (assets/upgrade-notes.json, until upgrades.reviewed is
+recorded), and which of the user's reported skill issues the installed release fixed.
 Never fails the session: any error → silent.
 """
 from __future__ import annotations
@@ -110,19 +112,35 @@ def update_text(have: str, latest: str) -> str:
 SCRIPTS = ROOT / "skills" / "homelab-manager" / "scripts"
 
 
-def repo_upgrades() -> list[str]:
-    """One-time upgrades pending for the homelab repo in the working directory (empty outside one)."""
+def repo_upgrades() -> tuple[list[str], list[str], list[str]]:
+    """For the homelab repo in the working directory (all empty outside one): one-time upgrades pending,
+    opt-in suggestions from newer releases, reported skill issues fixed by the installed release."""
     sys.path.insert(0, str(SCRIPTS))
     import hmlib
     import init_repo
     root = hmlib.find_repo_root()
-    return [desc for desc, _ in init_repo.upgrades(root)] if root else []
+    if not root:
+        return [], [], []
+    notes, fixed = init_repo.suggestions(root)
+    return ([desc for desc, _ in init_repo.upgrades(root)], [f"{n['text']} ({n['version']})" for n in notes],
+            [f"{i['id']} (#{i['github_number']}, fixed in {v})" for i, v in fixed])
 
 
-def upgrade_text(steps: list[str]) -> str:
-    return ("This homelab repository was set up by an older homelab-manager and needs a one-time update: "
-            + "; ".join(steps) + f". Tell the user, run `python3 {SCRIPTS}/init_repo.py --sync-managed --dry-run`, "
-            "and after their yes run it without --dry-run and commit (`Update repo for homelab-manager`).")
+def upgrade_text(steps: list[str], notes: list[str], fixed: list[str]) -> str:
+    parts = []
+    if steps:
+        parts.append("This homelab repository was set up by an older homelab-manager and needs a one-time update: "
+                     + "; ".join(steps) + ".")
+    if notes:
+        parts.append("Newer homelab-manager releases suggest opt-in changes for this repo (not applied "
+                     "automatically): " + "; ".join(notes) + ".")
+    if fixed:
+        parts.append("The installed release fixed skill issues the user reported: " + ", ".join(fixed) + ".")
+    return " ".join(parts) + (f" Tell the user, run `python3 {SCRIPTS}/init_repo.py --sync-managed --dry-run` and "
+                              "present its list, separating what it applies automatically from the suggestions "
+                              "(each needs the user's yes). After their yes run it without --dry-run (it records that the "
+                              "suggestions were reviewed), apply the accepted suggestions, resolve fixed issues with "
+                              "`issues.py fixed --apply`, and commit (`Update repo for homelab-manager`).")
 
 
 def main() -> int:
@@ -143,16 +161,18 @@ def main() -> int:
             print(update_text(have, latest) if newer else f"homelab-manager {have} is up to date (latest: {latest}).")
         return 0
     try:
-        steps = repo_upgrades()
+        steps, suggested, fixed = repo_upgrades()
     except Exception:  # never break a session
-        steps = []
+        steps, suggested, fixed = [], [], []
     notes, context = [], []
     if newer:
         notes.append(update_text(have, latest))
         context.append(notes[-1] + " Mention this to the user once.")
-    if steps:
-        notes.append("homelab-manager: this repository needs a one-time update for the installed plugin version.")
-        context.append(upgrade_text(steps))
+    if steps or suggested or fixed:
+        what = [w for w, on in (("a one-time update", steps), (f"{len(suggested)} suggested opt-in change(s)", suggested),
+                                (f"{len(fixed)} reported skill issue(s) fixed by this release", fixed)) if on]
+        notes.append("homelab-manager: this repository has " + ", ".join(what) + " for the installed plugin version.")
+        context.append(upgrade_text(steps, suggested, fixed))
     if notes:
         print(json.dumps({"systemMessage": " ".join(notes),
                           "hookSpecificOutput": {"hookEventName": "SessionStart",

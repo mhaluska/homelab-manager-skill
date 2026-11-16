@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.12.0 — 2026-11-17
+- Upgrade advisor ([#11](https://github.com/mhaluska/homelab-manager-skill/issues/11)): after a plugin upgrade
+  `init_repo.py --sync-managed --dry-run` no longer answers "nothing to change" while a release has opt-in
+  changes for the repo. Besides the one-time updates it applies itself, it lists **suggestions** (never
+  applied by it): new homelab.yaml keys (`vmid_scheme`, with the scheme inferred from your existing VMIDs),
+  template sections missing from your own docs (the guest-agent privilege in `docs/proxmox-tokens.md`),
+  snapshots made by an older version to regenerate, and manual steps. They come from the machine-readable
+  `assets/upgrade-notes.json`; `upgrade_notes.py [--all] [--json]` shows them alone. A real run records
+  `upgrades.reviewed` in homelab.yaml so the same suggestions aren't offered again; new repos start reviewed.
+  The session-start hook mentions pending suggestions too.
+- Fixed skill issues ([#12](https://github.com/mhaluska/homelab-manager-skill/issues/12)): new
+  `issues.py fixed [--apply] [--github]` finds reported entries whose GitHub issue the installed release's
+  CHANGELOG links (newer than the version they were last seen with) and resolves them with `--apply`;
+  `--github` also lists ones closed as completed but not in the installed release yet. `issues.py list`,
+  `report --dry-run`, `--sync-managed` and the session-start hook point them out. Entries seen again now
+  record the plugin version (`last_seen_version`), so a fix older than that isn't claimed.
+- Existing repos: the next session offers the update; `upgrades.reviewed` is added to homelab.yaml on the
+  first real `--sync-managed` run that shows suggestions.
+
 ## 0.11.0 — 2026-11-16
 - Fix ([#9](https://github.com/mhaluska/homelab-manager-skill/issues/9)): the guard split commands on `|`, `;`
   and newlines even inside quotes and heredocs, so `grep -E "(tofu|nmap|yq)"` or an issue body mentioning nmap

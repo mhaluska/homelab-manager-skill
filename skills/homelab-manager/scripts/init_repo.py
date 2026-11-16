@@ -11,7 +11,10 @@
   template's permission rules merged in, so the safety settings aren't lost),
   except plugin-managed ones (MANAGED) with --sync-managed.
 - --sync-managed also applies one-time upgrades for repos set up by older plugin versions (see upgrades());
-  the SessionStart hook (hooks/update_check.py) tells Claude when one is pending.
+  the SessionStart hook (hooks/update_check.py) tells Claude when one is pending. It also lists the opt-in
+  changes newer releases suggest (upgrade_notes.py — never applied by it, they need the user's yes) and the
+  user's reported skill issues the installed release fixed; a real run records the installed version in
+  upgrades.reviewed so the same suggestions aren't offered again.
 - Records the choice under `components:` in homelab.yaml — the skill ignores disabled parts.
 - `git init -b main` if needed; core.hooksPath → scripts/git-hooks (blocks committing secrets).
 - Registers this plugin's marketplace in .claude/settings.json when its Git remote is known.
@@ -30,6 +33,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import config_set  # noqa: E402
+import upgrade_notes  # noqa: E402
 TEMPLATE = HERE.parent / "assets" / "repo-template"
 PLUGIN_ROOT = HERE.parents[2]
 
@@ -224,16 +228,52 @@ def rename_issues_file(target: Path):
             f"update issues.file and the mentions in CLAUDE.md / README.md", apply)
 
 
+def suggestions(target: Path) -> tuple[list[dict], list[tuple[dict, str]]]:
+    """(opt-in upgrade notes newer than upgrades.reviewed, reported skill issues fixed by this release)."""
+    if not (target / "homelab.yaml").exists():
+        return [], []
+    import issues  # noqa: E402
+    notes = upgrade_notes.pending(target)
+    try:
+        fixed = issues.fixed_by_release(issues.load(issues.issues_path(issues.hmlib.load_config(target))))
+    except issues.hmlib.ConfigError:
+        fixed = []
+    return notes, fixed
+
+
+def record_reviewed(target: Path):
+    config_set.edit_file(target / "homelab.yaml", [("set", upgrade_notes.REVIEWED_KEY, upgrade_notes.installed_version(),
+                                                    "upgrade notes reviewed up to this plugin version (init_repo.py --sync-managed)")])
+
+
 def sync_managed(target: Path, dry_run: bool) -> int:
     steps = upgrades(target)
+    notes, fixed = suggestions(target)
+    if steps:
+        print("One-time updates" + (" (applied by this command):" if dry_run else ":"))
     for desc, apply in steps:
         if not dry_run:
             apply()
-        print(("would " if dry_run else "") + desc)
-    if not steps:
+        print("  " + ("would " if dry_run else "") + desc)
+    if notes:
+        print("Suggested by newer releases (opt-in — not applied; ask the user for each):")
+        print("\n".join("  " + upgrade_notes.describe(n) for n in notes))
+    if fixed:
+        print("Reported skill issues fixed by the installed release (tell the user):")
+        for i, v in fixed:
+            print(f"  {i['id']} (#{i['github_number']}) fixed in {v}: {i['title']}")
+        print("    → mark them resolved with their yes: `issues.py fixed --apply`")
+    if not (steps or notes or fixed):
         print("Up to date with the plugin — nothing to change.")
-    elif not dry_run:
+        return 0
+    if not dry_run:
+        if notes:
+            record_reviewed(target)
+            print(f"Recorded upgrades.reviewed = {upgrade_notes.installed_version()} (these suggestions won't be "
+                  "offered again).")
         print("Review with `git diff` / `git status`, then commit.")
+    elif notes:
+        print("A run without --dry-run applies the one-time updates and records that the suggestions were reviewed.")
     return 0
 
 
@@ -334,6 +374,8 @@ def main():
 
     if not a.dry_run:
         config_set.edit_file(target / "homelab.yaml", [("set", f"components.{n}", n in comps) for n in COMPONENTS])
+        if "homelab.yaml" in created:  # a new repo has every current feature: no upgrade notes for it
+            record_reviewed(target)
         if not (target / ".git").exists():
             r = git("init", "-b", "main", cwd=target)
             print(r.stdout.strip() or r.stderr.strip())

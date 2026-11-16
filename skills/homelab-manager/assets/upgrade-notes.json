@@ -1,0 +1,55 @@
+{
+  "_doc": [
+    "Opt-in changes a release brings to existing homelab repos: things init_repo.py --sync-managed must NOT do",
+    "by itself (user-owned files, config choices, snapshots to regenerate, steps on external systems).",
+    "init_repo.py --sync-managed [--dry-run] lists the ones that apply to the repo and are newer than its",
+    "upgrades.reviewed version (homelab.yaml), as 'suggested, needs your yes'. Maintainers: add a note for",
+    "every release that adds something an existing repo has to adopt by hand.",
+    "Fields: version, id, kind (config | template | regenerate | manual), text, action, when.",
+    "when (all must hold): component (enabled), config_empty (dotted key unset/empty), config_set (dotted key set),",
+    "file_lacks [path, text] (file exists and lacks text), vmids_outside_ranges (snapshot VMIDs don't fit).",
+    "Placeholders in action: {HM} skill dir, {template} template file of file_lacks, {detail} computed hint."
+  ],
+  "notes": [
+    {
+      "version": "0.10.0",
+      "id": "proxmox-tls-check",
+      "kind": "manual",
+      "when": {"component": "proxmox", "config_set": "proxmox.endpoint"},
+      "text": "check_env.py now verifies the Proxmox certificate and spots a private CA trusted only in the macOS keychain.",
+      "action": "Run `python3 {HM}/scripts/check_env.py` once; if it prints a proxmox.ca_cert hint, apply it with the user's yes."
+    },
+    {
+      "version": "0.11.0",
+      "id": "vmid-scheme",
+      "kind": "config",
+      "when": {"component": "proxmox", "config_empty": "vmid_scheme", "vmids_outside_ranges": true},
+      "text": "Optional vmid_scheme in homelab.yaml derives VM/LXC IDs from the network; your existing VMIDs don't follow vmid_ranges, so new IDs from the ranges would break your convention.",
+      "action": "{detail}"
+    },
+    {
+      "version": "0.11.0",
+      "id": "tokens-guest-agent",
+      "kind": "template",
+      "when": {"component": "proxmox", "file_lacks": ["docs/proxmox-tokens.md", "HomelabAgentAudit"]},
+      "text": "docs/proxmox-tokens.md has an optional section granting the read-only token the guest-agent privilege, so the inventory can read VM IPs.",
+      "action": "If the user wants VM IPs: copy the 'Optional — VM IPs from the QEMU guest agent' paragraph and its pveum block from {template} into docs/proxmox-tokens.md, and have the user run those pveum lines on Proxmox."
+    },
+    {
+      "version": "0.11.0",
+      "id": "inventory-guest-ips",
+      "kind": "regenerate",
+      "when": {"component": "proxmox", "file_lacks": ["discovery/proxmox.json", "\"guest_ip_sources\""]},
+      "text": "proxmox_inventory.py --details now records the IPs running guests report; discovery/proxmox.json was made by an older version.",
+      "action": "Refresh it: `python3 {HM}/scripts/proxmox_inventory.py --details` (read-only)."
+    },
+    {
+      "version": "0.11.0",
+      "id": "drift-guests-network",
+      "kind": "regenerate",
+      "when": {"file_lacks": ["discovery/drift.md", "## Proxmox guests ↔ network"]},
+      "text": "drift_report.py has a new 'Proxmox guests ↔ network' section matching scanned addresses to guests; it supersedes any hand-made guest/network mapping.",
+      "action": "After refreshing discovery/proxmox.json (--details) and network.json, re-run `python3 {HM}/scripts/drift_report.py`."
+    }
+  ]
+}

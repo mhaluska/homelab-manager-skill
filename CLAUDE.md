@@ -6,6 +6,10 @@
   Pushing the tag runs `.github/workflows/release.yml`: it checks plugin.json matches the tag and
   publishes a GitHub release with that version's CHANGELOG section (`.github/release_notes.py`).
   Run the unit tests locally before tagging (they target macOS). Push at most 3 tags at once.
+- A release that adds something existing repos must adopt by hand (new homelab.yaml key, a section of a
+  user-owned template doc, a snapshot format, a step on Proxmox) gets an entry in
+  `skills/homelab-manager/assets/upgrade-notes.json`; changes `--sync-managed` can make itself go in
+  `init_repo.upgrades()` instead.
 - Hosting: GitHub (`mhaluska/homelab-manager-skill`, public). Issues via `gh`, never `glab`.
 - Commits: use the identity in this clone's `git config user.name/user.email` (set by the maintainer).
 - Scripts: Python 3 stdlib only (the target Mac has no pip packages); YAML via `yq`.

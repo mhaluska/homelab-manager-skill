@@ -56,6 +56,25 @@ class UpdateCheckTests(unittest.TestCase):
         self.assertEqual((r.returncode, r.stdout), (0, ""))
         self.assertIn("failed", self.run_hook("--force").stdout)
 
+    def test_old_repo_gets_suggestions_in_session_context(self):
+        self.tag(self.have)
+        repo = self.d / "repo"
+        scripts = ROOT / "skills" / "homelab-manager" / "scripts"
+        subprocess.run([sys.executable, str(scripts / "init_repo.py"), str(repo), "--components", "proxmox"],
+                       check=True, capture_output=True)
+        r = subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True, env=self.env, cwd=repo)
+        self.assertEqual(r.stdout, "")                                    # new repo: nothing to say
+        subprocess.run(["yq", "-i", "del(.upgrades)", str(repo / "homelab.yaml")], check=True)
+        doc = repo / "docs" / "proxmox-tokens.md"
+        doc.write_text(doc.read_text().replace("HomelabAgentAudit", "Custom"))
+        out = json.loads(subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True,
+                                        env=self.env, cwd=repo).stdout)
+        self.assertIn("1 suggested opt-in change(s)", out["systemMessage"])
+        ctx = out["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("guest-agent privilege", ctx)
+        self.assertIn("--sync-managed --dry-run", ctx)
+        self.assertIn("needs the user's yes", ctx)
+
     def test_hook_registered(self):
         hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text())["hooks"]
         self.assertIn("update_check.py", hooks["SessionStart"][0]["hooks"][0]["command"])

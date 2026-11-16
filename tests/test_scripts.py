@@ -819,6 +819,156 @@ class TokenAclTests(unittest.TestCase):
         self.assertIn("Up to date", run("init_repo.py", str(self.d), "--sync-managed", cwd=self.d).stdout)
 
 
+class UpgradeNotesTests(unittest.TestCase):
+    """#11: opt-in changes of newer releases are suggested after an upgrade, never applied by themselves."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        run("init_repo.py", str(self.d), "--components", "proxmox", cwd=self.d)
+        self.cfg = self.d / "homelab.yaml"
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def sync(self, *args):
+        return run("init_repo.py", str(self.d), "--sync-managed", *args, cwd=self.d)
+
+    def make_old(self):
+        """A repo set up by 0.10.x: no upgrades.reviewed, older tokens doc, snapshots without the new data."""
+        subprocess.run(["yq", "-i", "del(.upgrades) | del(.vmid_scheme)", str(self.cfg)], check=True)
+        run("config_set.py", "proxmox.endpoint=https://pve.example.test:8006", cwd=self.d)
+        doc = self.d / "docs/proxmox-tokens.md"
+        doc.write_text(re.sub(r"\nOptional — VM IPs.*?\n```\n", "", doc.read_text(), flags=re.S))
+        lxc = lambda vmid, tag, ip: {"vmid": vmid, "name": f"g{vmid}", "type": "lxc", "template": False,
+                                     "config": {"net0": f"name=eth0,bridge=vmbr0,ip={ip}/24,tag={tag}"}}
+        (self.d / "discovery/proxmox.json").write_text(json.dumps({"guests": [
+            lxc(1020015, 1020, "10.20.0.15"), lxc(1020016, 1020, "10.20.0.16"), lxc(30007, 30, "10.30.0.7")]}))
+        (self.d / "discovery/drift.md").write_text("# Drift\n\n## Proxmox ↔ OpenTofu\n")
+        return doc
+
+    def test_new_repo_records_version_and_has_nothing_to_suggest(self):
+        self.assertRegex(yq(".upgrades.reviewed", self.cfg), r'^"\d+\.\d+\.\d+"$')
+        self.assertIn("Up to date", self.sync("--dry-run").stdout)
+
+    def test_old_repo_gets_suggestions_once_and_nothing_is_applied(self):
+        doc = self.make_old()
+        before = {f: f.read_text() for f in (doc, self.cfg, self.d / "discovery/proxmox.json")}
+        out = self.sync("--dry-run").stdout
+        self.assertNotIn("Up to date", out)
+        self.assertIn("Suggested by newer releases (opt-in", out)
+        self.assertIn("[0.10.0 · manual step]", out)                              # check_env TLS
+        self.assertIn("vmid_scheme={vlan}{octet:03d}", out)                         # inferred from the snapshot
+        self.assertIn("[0.11.0 · template section]", out)
+        self.assertIn(str(SCRIPTS.parent / "assets/repo-template/docs/proxmox-tokens.md"), out)
+        self.assertIn("proxmox_inventory.py --details", out)
+        self.assertIn("drift_report.py", out)
+        self.assertEqual({f: f.read_text() for f in before}, before)               # dry run writes nothing
+        out = self.sync().stdout
+        self.assertIn("Recorded upgrades.reviewed", out)
+        self.assertEqual(doc.read_text(), before[doc])                              # suggestions never applied
+        self.assertEqual(yq(".vmid_scheme", self.cfg), "null")
+        self.assertIn("Up to date", self.sync("--dry-run").stdout)                 # not offered again
+
+    def test_reviewed_version_and_repo_state_filter_notes(self):
+        self.make_old()
+        run("config_set.py", "upgrades.reviewed=0.10.0", "vmid_scheme={vlan}{octet:03d}", cwd=self.d)
+        Path(self.d, "discovery/drift.md").write_text("## Proxmox guests ↔ network\n")
+        out = run("upgrade_notes.py", "--json", cwd=self.d).stdout
+        ids = [n["id"] for n in json.loads(out)]
+        self.assertEqual(ids, ["tokens-guest-agent", "inventory-guest-ips"])
+        ids = [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", "--all", cwd=self.d).stdout)]
+        self.assertIn("proxmox-tls-check", ids)
+        subprocess.run(["yq", "-i", ".components.proxmox = false", str(self.cfg)], check=True)
+        self.assertEqual(json.loads(run("upgrade_notes.py", "--json", cwd=self.d).stdout), [])
+
+    def test_notes_file_is_well_formed(self):
+        notes = json.loads((SCRIPTS.parent / "assets/upgrade-notes.json").read_text())["notes"]
+        have = json.loads((ROOT / ".claude-plugin/plugin.json").read_text())["version"]
+        changelog = (ROOT / "CHANGELOG.md").read_text()
+        sys.path.insert(0, str(SCRIPTS))
+        import upgrade_notes
+        self.assertEqual(len({n["id"] for n in notes}), len(notes))
+        for n in notes:
+            self.assertIn(n["kind"], upgrade_notes.KIND_LABEL)
+            self.assertLessEqual(upgrade_notes.vtuple(n["version"]), upgrade_notes.vtuple(have))
+            self.assertIn(f"## {n['version']} ", changelog)
+            self.assertTrue(set(n["when"]) <= {"component", "config_empty", "config_set", "file_lacks",
+                                               "vmids_outside_ranges"}, n["id"])
+            if "file_lacks" in n["when"] and n["kind"] == "template":
+                self.assertIn(n["when"]["file_lacks"][1],
+                              (SCRIPTS.parent / "assets/repo-template" / n["when"]["file_lacks"][0]).read_text())
+
+
+FAKE_GH_CLOSED = """#!/usr/bin/env python3
+import json, sys
+if sys.argv[1:3] == ["issue", "list"]:
+    print(json.dumps([{"number": 9, "stateReason": "COMPLETED"}, {"number": 4242, "stateReason": "COMPLETED"},
+                      {"number": 77, "stateReason": "NOT_PLANNED"}]))
+"""
+
+
+class FixedIssuesTests(unittest.TestCase):
+    """#12: reported entries fixed by the installed release are pointed out and can be resolved."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        run("init_repo.py", str(self.d), "--components", "ansible", cwd=self.d)
+        sys.path.insert(0, str(SCRIPTS))
+        import issues
+        self.m = issues
+        for t in ("guard splits commands inside quotes", "drift crash", "something not yet fixed", "seen again later"):
+            run("issues.py", "add", "--title", t, "--kind", "guard", cwd=self.d)
+        path = self.d / "skill_issues.md"
+        items = issues.load(path)
+        for i, (num, ver) in zip(items, ((9, "0.10.0"), (8, "0.11.0"), (4242, "0.10.0"), (10, "0.10.0"))):
+            i.update(status="reported", github_number=num, github_url=f"https://github.com/o/r/issues/{num}",
+                     plugin_version=ver)
+        items[3]["last_seen_version"] = "0.11.0"   # still seen with the release that claims the fix
+        issues.save(path, items)
+        self.path = path
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def test_changelog_refs(self):
+        refs = self.m.changelog_refs()
+        self.assertEqual((refs[9], refs[5], refs[1]), ("0.11.0", "0.10.0", "0.7.0"))
+
+    def test_fixed_lists_hints_and_resolves(self):
+        out = run("issues.py", "fixed", cwd=self.d).stdout
+        self.assertIn("SKILL-001  #9 fixed in 0.11.0", out)
+        for other in ("SKILL-002", "SKILL-003", "SKILL-004"):  # found with 0.11.0 / not in changelog / seen again
+            self.assertNotIn(other, out)
+        self.assertIn("Fixed by the installed release: SKILL-001 (#9, 0.11.0)", run("issues.py", "list", cwd=self.d).stdout)
+        out = run("init_repo.py", str(self.d), "--sync-managed", "--dry-run", cwd=self.d).stdout
+        self.assertIn("SKILL-001 (#9) fixed in 0.11.0", out)
+        self.assertIn("issues.py fixed --apply", out)
+        self.assertEqual(self.m.find(self.m.load(self.path), "SKILL-001")["status"], "reported")  # dry run
+        self.assertIn("Resolved 1 entry", run("issues.py", "fixed", "--apply", cwd=self.d).stdout)
+        i = self.m.find(self.m.load(self.path), "SKILL-001")
+        self.assertEqual(i["status"], "resolved")
+        self.assertIn("fixed in homelab-manager 0.11.0 (#9)", i["body"])
+        self.assertIn("None of the reported entries", run("issues.py", "fixed", cwd=self.d).stdout)
+        self.assertIn("Up to date", run("init_repo.py", str(self.d), "--sync-managed", "--dry-run", cwd=self.d).stdout)
+
+    def test_github_closed_as_completed(self):
+        fake = self.d / "fake-gh"
+        fake.write_text(FAKE_GH_CLOSED)
+        fake.chmod(0o755)
+        env = {**os.environ, "HM_GH": str(fake), "HM_ISSUES_REPO": "o/r"}
+        r = subprocess.run([sys.executable, str(SCRIPTS / "issues.py"), "fixed", "--github"], cwd=self.d,
+                           capture_output=True, text=True, env=env)
+        self.assertIn("SKILL-001  #9 fixed in 0.11.0", r.stdout)
+        self.assertIn("SKILL-003  #4242 closed as completed on GitHub", r.stdout)
+        self.assertEqual(r.stdout.count("SKILL-001"), 1)
+
+    def test_seen_again_records_version(self):
+        run("issues.py", "add", "--title", "x", "--kind", "script", "--key", "k:1", cwd=self.d)
+        run("issues.py", "add", "--title", "x", "--kind", "script", "--key", "k:1", cwd=self.d)
+        have = json.loads((ROOT / ".claude-plugin/plugin.json").read_text())["version"]
+        self.assertEqual(self.m.find(self.m.load(self.path), "SKILL-005")["last_seen_version"], have)
+
+
 class ProxmoxTlsAndPermissionTests(unittest.TestCase):
     def setUp(self):
         sys.path.insert(0, str(SCRIPTS))
@@ -964,7 +1114,8 @@ class ConfigSetTests(unittest.TestCase):
         run("init_repo.py", str(d), "--components", "ansible", cwd=self.d)
         new, old = (d / "homelab.yaml").read_text().splitlines(), self.orig.splitlines()
         self.assertEqual(len(new), len(old))
-        self.assertEqual([l for l in new if l not in old],
+        self.assertRegex(next(l for l in new if l.startswith("  reviewed:")), r'^  reviewed: "\d+\.\d+\.\d+" +# ')
+        self.assertEqual([l for l in new if l not in old and not l.startswith("  reviewed:")],
                          ["  proxmox: false      # Proxmox VE VMs/LXC via OpenTofu",
                           "  templates: false    # Packer VM templates (needs proxmox)",
                           "  discovery: false    # nmap discovery in authorized ranges"])

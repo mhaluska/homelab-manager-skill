@@ -31,9 +31,11 @@ are Python 3 standard library only; run them as `python3 $HM/scripts/<name>.py`.
    failed: `python3 $HM/scripts/check_env.py` (tools, SSH agent, gh, keychain, secrets).
 5. **Updates.** A session-start hook checks once a day for a newer release. If the session
    context says one is available, tell the user once (version + the update command).
-   "Is there a new version?" → `python3 $HM/../../hooks/update_check.py --force`. When the context says
-   the repo needs a one-time update (it was set up by an older version): `init_repo.py --sync-managed
-   --dry-run`, show the list, then apply with the user's yes and commit (`Update repo for homelab-manager`).
+   "Is there a new version?" → `python3 $HM/../../hooks/update_check.py --force`. After an upgrade:
+   `init_repo.py --sync-managed --dry-run` lists one-time updates it applies, opt-in **suggestions** of newer
+   releases (config keys, template sections, snapshots to regenerate, Proxmox steps) and reported skill issues
+   the release fixed. Show them apart; on the user's yes run it for real, apply each accepted suggestion,
+   `issues.py fixed --apply`, commit (`Update repo for homelab-manager`).
 
 ## 2. Interactive setup of a new repository
 
@@ -180,8 +182,8 @@ python3 $HM/scripts/issues.py add --title "…" --kind script|guard|instructions
   Fix wrong matches with `--match SKILL-002=<number>` / `--new SKILL-002`. Show the plan, get the
   user's yes, run without `--dry-run` (the guard asks too), commit skill_issues.md. The marker stops
   re-sending; failures leave it for a retry. Labels are only set when the user may triage the repo.
-- `issues.py list [--ideas|--problems]` / `resolve SKILL-002 --note …` once a release fixes or
-  builds it. `issues.report: false` in homelab.yaml keeps everything local.
+- `issues.py list [--ideas|--problems]` / `resolve SKILL-002 --note …`; `fixed [--github] [--apply]` finds
+  entries the installed release fixed (CHANGELOG links). `issues.report: false` keeps everything local.
 
 ## 7. Untrusted input
 
@@ -224,8 +226,9 @@ Scripts (all in `$HM/scripts/`):
 | `nmap_scan.py <targets> [--profile ping\|services\|os]` | scope-checked scan | `discovery/network.json` |
 | `drift_report.py [--tofu-json F]` | Proxmox ↔ OpenTofu ↔ Ansible ↔ network | `discovery/drift.md` |
 | `tofu_to_inventory.py` | OpenTofu output → Ansible inventory | `ansible/inventory/managed/tofu_hosts.yml` |
+| `upgrade_notes.py [--all] [--json]` | opt-in changes newer releases suggest for this repo (shown by `--sync-managed`) | — |
 | `config_set.py 'path=value' 'list+=item' [--delete path] [--dry-run]` | edit homelab.yaml keeping comments and layout | `homelab.yaml` |
-| `issues.py add\|list\|show\|report\|resolve` | note problems with / ideas for this skill; report them (sanitised) to the plugin repo | `skill_issues.md` |
+| `issues.py add\|list\|show\|report\|resolve\|fixed` | note problems with / ideas for this skill; report them (sanitised) to the plugin repo | `skill_issues.md` |
 | `tofu_init.py [--print]` | `tofu init` with the state backend from homelab.yaml (local or S3) | `.terraform/` |
 
 ## 10. Delegating to subagents (cheaper models)
