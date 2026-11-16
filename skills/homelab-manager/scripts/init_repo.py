@@ -6,7 +6,9 @@
     init_repo.py [TARGET_DIR] --add-components templates        # later: enable a part you skipped
     init_repo.py [TARGET_DIR] --sync-managed [--dry-run]        # refresh plugin-managed files (issue form)
 
-- Copies only the files the chosen components need. Existing files are NEVER overwritten,
+- Copies only the files the chosen components need. Existing files are NEVER overwritten
+  (an existing .claude/settings.json — e.g. from installing the plugin with project scope — gets the
+  template's permission rules merged in, so the safety settings aren't lost),
   except plugin-managed ones (MANAGED, e.g. the GitHub issue form) with --sync-managed.
 - Records the choice under `components:` in homelab.yaml — the skill ignores disabled parts.
 - `git init -b main` if needed; core.hooksPath → scripts/git-hooks (blocks committing secrets).
@@ -46,6 +48,25 @@ CORE = ["homelab.yaml", "README.md", "CLAUDE.md", "ISSUES.md", ".gitignore", ".c
         "docs/decisions.md", "scripts/", "discovery/"]
 # Owned by the plugin: kept identical to the template by --sync-managed (headers say so).
 MANAGED = [".github/ISSUE_TEMPLATE/"]
+
+
+def merge_settings(src: Path, dst: Path) -> list[str]:
+    """Add the template's permission rules and keys to an existing settings.json; never removes anything."""
+    have, want = json.loads(dst.read_text() or "{}"), json.loads(src.read_text())
+    added = []
+    for kind, rules in (want.get("permissions") or {}).items():
+        cur = have.setdefault("permissions", {}).setdefault(kind, [])
+        for rule in rules:
+            if rule not in cur:
+                cur.append(rule)
+                added.append(f"{kind}: {rule}")
+    for k, v in want.items():
+        if k != "permissions" and k not in have:
+            have[k] = v
+            added.append(k)
+    if added:
+        dst.write_text(json.dumps(have, indent=2) + "\n")
+    return added
 
 
 def sync_managed(target: Path, dry_run: bool) -> int:
@@ -134,7 +155,7 @@ def main():
         comps = existing or list(COMPONENTS)
     added = [c for c in comps if c not in existing]
 
-    created, kept = [], []
+    created, kept, merged = [], [], []
     for src in sorted(TEMPLATE.rglob("*")):
         if src.is_dir() or src.name == ".DS_Store":
             continue
@@ -143,6 +164,16 @@ def main():
             continue
         dst = target / rel
         if dst.exists():
+            if rel == ".claude/settings.json":
+                try:
+                    if a.dry_run:
+                        merged.append(rel)
+                    elif merge_settings(src, dst):
+                        merged.append(rel)
+                    continue
+                except (ValueError, OSError) as e:
+                    print(f"warning: could not merge {rel} ({e}); add the rules from the template by hand",
+                          file=sys.stderr)
             kept.append(rel)
             continue
         created.append(rel)
@@ -169,6 +200,8 @@ def main():
     print(f"{'Would create' if a.dry_run else 'Created'} {len(created)} file(s) in {target}")
     for c in created:
         print(f"  + {c}")
+    if merged:
+        print(f"{'Would merge' if a.dry_run else 'Merged'} template permission rules into: {', '.join(merged)}")
     if kept:
         print(f"Kept {len(kept)} existing file(s) unchanged")
     return 0

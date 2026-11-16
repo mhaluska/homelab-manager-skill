@@ -11,7 +11,18 @@ and patching — operated conversationally from the Claude desktop/mobile apps o
 /plugin marketplace add mhaluska/homelab-manager-skill
 /plugin install homelab-manager@homelab-manager-skill
 ```
-(Public GitHub repository, no SSH key or token needed.) Updates: once a day the plugin checks for a newer release and tells you; then run
+(Public GitHub repository, no SSH key or token needed.)
+
+**Which install scope?** Start Claude Code in your `homelab-infrastructure` repository (an empty
+folder is fine for a first setup) and install there:
+
+| Scope | Use it? | Why |
+|---|---|---|
+| **local** — *for you, in this repo only* | **Recommended** | Active only in the homelab repo. Setup then records the plugin in the repo's committed `.claude/settings.json`, so other clones of the repo offer to install it too. |
+| project — *for all collaborators* | Fine | Writes the same committed `.claude/settings.json` right away; setup adds its safety rules to it. |
+| user — *for you, everywhere* | Not recommended | The plugin's safety hook checks every shell command and the update check runs at every session start, so you'd get its approval prompts (force-push, reboots, `curl \| sh`, …) in unrelated projects too. |
+
+Updates: once a day the plugin checks for a newer release and tells you; then run
 `/plugin marketplace update homelab-manager-skill`. Release notes: [Releases](https://github.com/mhaluska/homelab-manager-skill/releases).
 
 Then open Claude Code in an empty `homelab-infrastructure` repository and say e.g.

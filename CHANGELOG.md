@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 — 2026-11-16
+- Fix: when `.claude/settings.json` already existed in the homelab repo (e.g. the plugin was installed with
+  project scope before setup), `init_repo.py` skipped it and the template's safety rules (never read private
+  keys or state, ask before `tofu apply`/`packer build`) were lost. They are now merged in; existing rules stay.
+- README: which install scope to choose (local recommended; user scope applies the safety hook everywhere).
+
 ## 0.5.0 — 2026-11-16
 - Moved to GitHub: public repository `mhaluska/homelab-manager-skill`, install over HTTPS
   (`/plugin marketplace add mhaluska/homelab-manager-skill`).

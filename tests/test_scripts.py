@@ -62,6 +62,23 @@ class InitComponentsTests(unittest.TestCase):
         comps = json.loads(yq(".components", Path(self.d) / "homelab.yaml"))
         self.assertTrue(comps["ansible"] and comps["proxmox"])
 
+    def test_existing_settings_json_gets_permissions_merged(self):
+        # e.g. the plugin was installed with project scope before setup ran
+        s = Path(self.d, ".claude/settings.json")
+        s.parent.mkdir()
+        s.write_text(json.dumps({"enabledPlugins": {"homelab-manager@homelab-manager-skill": True},
+                                 "permissions": {"allow": ["Bash(ls:*)"], "deny": ["Read(**/*.tfstate)"]}}))
+        r = run("init_repo.py", self.d, "--components", "ansible", cwd=self.d)
+        self.assertIn("Merged template permission rules", r.stdout)
+        d = json.loads(s.read_text())
+        self.assertIn("Read(~/.ssh/id_*)", d["permissions"]["deny"])
+        self.assertEqual(d["permissions"]["deny"].count("Read(**/*.tfstate)"), 1)
+        self.assertIn("Bash(tofu apply:*)", d["permissions"]["ask"])
+        self.assertEqual(d["permissions"]["allow"], ["Bash(ls:*)"])          # user's rules kept
+        self.assertTrue(d["enabledPlugins"]["homelab-manager@homelab-manager-skill"])
+        r = run("init_repo.py", self.d, "--add-components", "discovery", cwd=self.d)
+        self.assertNotIn("Merged", r.stdout)                                  # idempotent
+
     def test_first_commit_passes_secret_hook(self):
         run("init_repo.py", self.d, cwd=self.d)
         subprocess.run(["git", "add", "-A"], cwd=self.d, check=True)
