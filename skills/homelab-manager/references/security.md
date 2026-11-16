@@ -16,7 +16,11 @@ never values). Run it after setup, after macOS updates, and whenever a secret re
 ## Tokens
 
 - Two Proxmox tokens (`docs/proxmox-tokens.md`): `ro` = PVEAuditor; `rw` = custom
-  provisioning role, ideally scoped to a pool and specific storages. Privilege separation on.
+  provisioning role, ideally scoped to a pool and specific storages. Privilege separation on, so each
+  role is granted to the user `homelab@pve` **and** the token (effective rights = intersection).
+- TLS: Python scripts use OpenSSL's CA bundle, not the macOS keychain. A private CA trusted in the
+  keychain must still be exported (`security find-certificate -a -c "<CA>" -p <keychain> > file.pem`)
+  and set as `proxmox.ca_cert`; `check_env.py` detects this and prints the exact command.
 - S3 state keys (if used): a key limited to the state bucket, not the store's admin key.
 - GitHub: `gh` keeps its token in the keychain (`gh auth login`); never print it (`gh auth token` is denied).
 - Rotation: user creates the new token, updates the keychain item (`-U` overwrites),

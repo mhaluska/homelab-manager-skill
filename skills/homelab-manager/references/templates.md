@@ -56,7 +56,8 @@ references). Deletion is an approval item. Bases follow the same rule against te
 ## Failures
 
 - SSH timeout: build IP wrong/taken, bridge/VLAN wrong, or image default user mismatch.
-- `403`: provisioning token lacks `VM.Clone`/`Datastore.AllocateSpace` on the storage.
+- `403`: provisioning token lacks `VM.Clone`/`Datastore.AllocateSpace` on the storage — granted to
+  both the token and its user (privilege separation).
 - Cloud-init didn't run: base lacks a cloud-init drive — `cloud-image-base` adds one; a base
   created by hand might not.
 - Packer leaves a half-built VM on failure: it's in the template VMID range; tell the user,

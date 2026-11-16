@@ -156,7 +156,48 @@ def upgrades(target: Path) -> list[tuple[str, callable]]:
     rename = rename_issues_file(target)
     if rename:
         out.append(rename)
+    tokens = token_user_acls(target)
+    if tokens:
+        out.append(tokens)
     return out
+
+
+TOKEN_ACL = re.compile(r"^pveum acl modify (\S+) --tokens '([^'!]+)![^']+' --roles (\S+)[ \t]*$", re.M)
+PRIVSEP_NOTE = "Both tokens use privilege separation"
+
+
+def token_user_acls(target: Path):
+    """Until 0.9.1 docs/proxmox-tokens.md granted roles only to the privsep tokens, which then had no rights."""
+    f = target / "docs" / "proxmox-tokens.md"
+    if not f.is_file():
+        return None
+
+    def user_line(m):
+        return f"pveum acl modify {m.group(1)} --users {m.group(2)} --roles {m.group(3)}"
+
+    text = f.read_text()
+    missing = [m for m in TOKEN_ACL.finditer(text) if user_line(m) not in text]
+    if not missing:
+        return None
+
+    def patch():
+        t = f.read_text()
+        t = TOKEN_ACL.sub(lambda m: m.group(0) if user_line(m) in t else user_line(m) + "\n" + m.group(0), t)
+        if PRIVSEP_NOTE not in t:
+            head, sep, rest = t.partition("\n\n## ")
+            note = _template_paragraph("docs/proxmox-tokens.md", PRIVSEP_NOTE)
+            t = head.rstrip("\n") + "\n\n" + note + "\n" + sep.lstrip("\n") + rest if sep else t + "\n" + note
+        f.write_text(t)
+
+    return (f"docs/proxmox-tokens.md: grant the token roles to the user too ({len(missing)} ACL line(s); "
+            "privilege-separated tokens get no rights otherwise — run the new lines on Proxmox)", patch)
+
+
+def _template_paragraph(rel: str, start: str) -> str:
+    for para in (TEMPLATE / rel).read_text().split("\n\n"):
+        if para.startswith(start):
+            return para.rstrip("\n") + "\n"
+    raise RuntimeError(f"{rel} template has no paragraph starting {start!r}")
 
 
 def rename_issues_file(target: Path):

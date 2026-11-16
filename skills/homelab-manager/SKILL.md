@@ -62,7 +62,8 @@ read without a GUI prompt; on a headless Mac a prompt means a hung command).
 mostly confirms:
 - discovery → `network.authorized_ranges` (CIDRs the user owns and allows scanning),
   `excluded_hosts`. Never propose a range from the Mac's own IP without asking.
-- proxmox → `proxmox.endpoint`, TLS (`ca_cert` preferred over `verify_tls: false`),
+- proxmox → `proxmox.endpoint`, TLS (`ca_cert` preferred over `verify_tls: false`; `check_env.py`
+  verifies it and spots a CA trusted only in the macOS keychain),
   `defaults.admin_user`, SSH key (offer the keys from `ssh-add -L`).
 - S3 state → `opentofu.s3.endpoint`, `bucket` (and `key` if they share the bucket). Local state
   needs nothing; `tofu_init.py --print` shows where the file will live.
@@ -217,7 +218,7 @@ Scripts (all in `$HM/scripts/`):
 | Script | Purpose | Writes |
 |---|---|---|
 | `init_repo.py --components … [--dry-run]` / `--add-components …` / `--sync-managed` | scaffold, extend, or update the repo after a plugin upgrade | repo files |
-| `check_env.py [--keychain] [--json]` | tools, SSH agent, keychain self-test, secrets readable | — |
+| `check_env.py [--keychain] [--json]` | tools, SSH agent, keychain self-test, secrets readable, Proxmox TLS | — |
 | `with_secrets.py <names…> -- <cmd>` | run a command with keychain secrets in env, output redacted | — |
 | `proxmox_inventory.py [--details]` | read-only Proxmox snapshot + summary table | `discovery/proxmox.json` |
 | `nmap_scan.py <targets> [--profile ping\|services\|os]` | scope-checked scan | `discovery/network.json` |

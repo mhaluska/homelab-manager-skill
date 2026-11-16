@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check that this Mac is ready to manage the homelab.
 
-    check_env.py              tools + SSH agent + config + configured keychain items
+    check_env.py              tools + SSH agent + config + configured keychain items + Proxmox TLS
     check_env.py --keychain   also run a keychain self-test (write, read, delete a dummy item)
     check_env.py --json       machine-readable output
 
@@ -15,8 +15,12 @@ import os
 import re
 import secrets as pysecrets
 import shutil
+import socket
+import ssl
 import subprocess
 import sys
+import tempfile
+import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -140,12 +144,109 @@ def check_config_and_secrets():
     return out, cfg
 
 
+KEYCHAINS = ["/Library/Keychains/System.keychain", str(Path.home() / "Library/Keychains/login.keychain-db")]
+
+
+def _handshake(host: str, port: int, ctx: ssl.SSLContext, timeout: float = 8):
+    """None if the TLS handshake (with verification as ctx says) succeeds, else the exception."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as raw:
+            with ctx.wrap_socket(raw, server_hostname=host):
+                return None
+    except (OSError, ssl.SSLError) as e:
+        return e
+
+
+def _chain_names(host: str, port: int) -> list[str]:
+    """Common names of the issuers (and intermediates) the server presents, without verifying them."""
+    ctx = ssl._create_unverified_context()
+    try:
+        with socket.create_connection((host, port), timeout=8) as raw, ctx.wrap_socket(raw, server_hostname=host) as s:
+            chain = s.get_unverified_chain() if hasattr(s, "get_unverified_chain") else [s.getpeercert(True)]
+    except (OSError, ssl.SSLError):
+        return []
+    names = []
+    with tempfile.TemporaryDirectory() as d:
+        for i, der in enumerate(chain or []):
+            der = der if isinstance(der, bytes) else der.public_bytes(ssl._ssl.ENCODING_DER)
+            f = Path(d) / f"{i}.pem"
+            f.write_text(ssl.DER_cert_to_PEM_cert(der))
+            try:
+                info = ssl._ssl._test_decode_cert(str(f))
+            except Exception:  # private helper; detection is best effort
+                continue
+            for field in ("issuer",) + (("subject",) if i else ()):
+                for rdn in info.get(field, ()):
+                    for k, v in rdn:
+                        if k == "commonName" and v not in names:
+                            names.append(v)
+    return names
+
+
+def _keychain_ca_fix(host: str, port: int, names: list[str]):
+    """Find a keychain certificate that makes verification pass: (name, keychain) or None."""
+    for name in names:
+        for kc in KEYCHAINS:
+            if not Path(kc).exists():
+                continue
+            rc, pem, _ = run(["/usr/bin/security", "find-certificate", "-a", "-c", name, "-p", kc], timeout=10)
+            if rc != 0 or "BEGIN CERTIFICATE" not in pem:
+                continue
+            with tempfile.NamedTemporaryFile("w", suffix=".pem") as f:
+                f.write(pem)
+                f.flush()
+                if _handshake(host, port, ssl.create_default_context(cafile=f.name)) is None:
+                    return name, kc
+    return None
+
+
+def check_proxmox_tls(cfg):
+    endpoint = hmlib.get(cfg or {}, "proxmox.endpoint")
+    if not endpoint:
+        return []
+    if hmlib.get(cfg, "proxmox.verify_tls", True) is False:
+        return [{"check": "proxmox:tls", "ok": None,
+                 "detail": "verify_tls: false — certificate not checked (prefer proxmox.ca_cert)"}]
+    u = urllib.parse.urlsplit(endpoint)
+    host, port = u.hostname, u.port or (443 if u.scheme == "https" else 8006)
+    if not host:
+        return [{"check": "proxmox:tls", "ok": False, "detail": f"proxmox.endpoint {endpoint!r} is not a URL"}]
+    try:
+        ctx = hmlib.proxmox_ssl_context(cfg)
+    except hmlib.ConfigError as e:
+        return [{"check": "proxmox:tls", "ok": False, "detail": str(e)}]
+    ca = hmlib.proxmox_ca_file(cfg)
+    err = _handshake(host, port, ctx)
+    if err is None:
+        return [{"check": "proxmox:tls", "ok": True,
+                 "detail": f"{host}:{port} certificate verified ({'ca_cert ' + ca if ca else 'default CA bundle'})"}]
+    if not isinstance(err, ssl.SSLCertVerificationError):
+        return [{"check": "proxmox:tls", "ok": False, "detail": f"cannot connect to {host}:{port} ({err})"}]
+    if getattr(err, "verify_code", None) == 62:
+        return [{"check": "proxmox:tls", "ok": False,
+                 "detail": f"certificate does not match {host} ({err.verify_message}); use the name in the certificate"}]
+    names = _chain_names(host, port)
+    found = _keychain_ca_fix(host, port, names)
+    if found:
+        name, kc = found
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-").lower() or "ca"
+        return [{"check": "proxmox:tls", "ok": False,
+                 "detail": f"CA {name!r} is trusted in the macOS keychain ({kc}), but Python does not read the "
+                           f"keychain. Export it and point ca_cert at it: mkdir -p ~/.config/homelab && "
+                           f"security find-certificate -a -c \"{name}\" -p {kc} > ~/.config/homelab/{slug}.pem && "
+                           f"python3 $HM/scripts/config_set.py 'proxmox.ca_cert=~/.config/homelab/{slug}.pem'"}]
+    issuer = f" (issuer {names[0]!r})" if names else ""
+    return [{"check": "proxmox:tls", "ok": False,
+             "detail": f"certificate not trusted{issuer}: {err.verify_message}. Set proxmox.ca_cert to the CA's PEM "
+                       "(Proxmox's own CA: /etc/pve/pve-root-ca.pem on a node) rather than verify_tls: false"}]
+
+
 def main(argv):
     results = check_tools() + check_ssh_agent() + check_gh() + check_keychain_unlocked()
     if "--keychain" in argv:
         results += check_keychain_selftest()
-    cfg_results, _ = check_config_and_secrets()
-    results += cfg_results
+    cfg_results, cfg = check_config_and_secrets()
+    results += cfg_results + check_proxmox_tls(cfg)
     if "--json" in argv:
         print(json.dumps(results, indent=2))
     else:

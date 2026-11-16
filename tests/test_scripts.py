@@ -634,6 +634,110 @@ class DriftTests(unittest.TestCase):
         self.assertNotIn("100 `dns01` is in no backup job", r.stdout)
 
 
+class TokenAclTests(unittest.TestCase):
+    """#5: privilege-separated tokens only get what their user also has."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        run("init_repo.py", str(self.d), "--components", "proxmox", cwd=self.d)
+        self.doc = self.d / "docs/proxmox-tokens.md"
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def test_template_grants_user_and_token(self):
+        text = self.doc.read_text()
+        for role, tid in (("PVEAuditor", "ro"), ("HomelabProvisioner", "rw")):
+            self.assertIn(f"pveum acl modify / --users homelab@pve --roles {role}", text)
+            self.assertIn(f"pveum acl modify / --tokens 'homelab@pve!{tid}' --roles {role}", text)
+        self.assertIn("Up to date", run("init_repo.py", str(self.d), "--sync-managed", cwd=self.d).stdout)
+
+    def test_old_doc_gets_user_acls_once(self):
+        text = self.doc.read_text()
+        old = "\n".join(l for l in text.splitlines() if "--users" not in l) + "\n"
+        old = old.split("Both tokens use privilege separation")[0].rstrip("\n") + "\n\n## " + old.split("\n## ", 1)[1]
+        old = old.replace("/ --tokens 'homelab@pve!rw'", "/pool/lab --tokens 'homelab@pve!rw'")  # user-edited path
+        self.doc.write_text(old)
+        out = run("init_repo.py", str(self.d), "--sync-managed", "--dry-run", cwd=self.d).stdout
+        self.assertIn("docs/proxmox-tokens.md: grant the token roles to the user too (2 ACL line(s)", out)
+        self.assertEqual(self.doc.read_text(), old)
+        run("init_repo.py", str(self.d), "--sync-managed", cwd=self.d)
+        new = self.doc.read_text()
+        self.assertIn("pveum acl modify / --users homelab@pve --roles PVEAuditor\n"
+                      "pveum acl modify / --tokens 'homelab@pve!ro'", new)
+        self.assertIn("pveum acl modify /pool/lab --users homelab@pve --roles HomelabProvisioner\n"
+                      "pveum acl modify /pool/lab --tokens", new)
+        self.assertEqual(new.count("Both tokens use privilege separation"), 1)
+        self.assertLess(new.index("Both tokens"), new.index("## Read-only"))
+        self.assertIn("Up to date", run("init_repo.py", str(self.d), "--sync-managed", cwd=self.d).stdout)
+
+
+class ProxmoxTlsAndPermissionTests(unittest.TestCase):
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import check_env
+        import hmlib
+        import proxmox_inventory
+        self.check_env, self.hmlib, self.inv = check_env, hmlib, proxmox_inventory
+
+    def pve(self, perms):
+        import urllib.error
+        pve = self.inv.PVE("https://pve.example:8006", "homelab@pve!ro=s3cret", None)
+
+        def fake(path, **_):
+            if path == "/access/permissions":
+                return perms
+            raise urllib.error.HTTPError(path, 403, "Forbidden", {}, None)
+        pve._get = fake
+        return pve
+
+    def test_403_with_no_permissions_points_at_user_acl(self):
+        with self.assertRaises(SystemExit) as e:
+            self.pve({}).get("/cluster/status")
+        msg = str(e.exception)
+        self.assertIn("no effective permissions", msg)
+        self.assertIn("pveum acl modify / --users homelab@pve --roles PVEAuditor", msg)
+        self.assertNotIn("s3cret", msg)
+
+    def test_403_with_other_paths_lists_them(self):
+        with self.assertRaises(SystemExit) as e:
+            self.pve({"/pool/lab": {"VM.Audit": 1}}).get("/cluster/status")
+        self.assertIn("/pool/lab", str(e.exception))
+        self.assertIn("pveum user token permissions homelab@pve ro", str(e.exception))
+
+    def test_ca_cert_path_expanded_and_relative_to_repo(self):
+        cfg = {"_root": "/repo", "proxmox": {"ca_cert": "certs/ca.pem"}}
+        self.assertEqual(self.hmlib.proxmox_ca_file(cfg), "/repo/certs/ca.pem")
+        cfg["proxmox"]["ca_cert"] = "~/x.pem"
+        self.assertEqual(self.hmlib.proxmox_ca_file(cfg), str(Path.home() / "x.pem"))
+        with self.assertRaises(self.hmlib.ConfigError):
+            self.hmlib.proxmox_ssl_context(cfg)
+
+    def test_tls_check_finds_ca_trusted_only_in_keychain(self):
+        import ssl
+        from unittest import mock
+        err = ssl.SSLCertVerificationError("verify failed")
+        err.verify_code, err.verify_message = 19, "self-signed certificate in certificate chain"
+        ce = self.check_env
+        cfg = {"proxmox": {"endpoint": "https://pve.example:8006"}}
+        with mock.patch.object(ce, "_handshake", return_value=err), \
+                mock.patch.object(ce, "_chain_names", return_value=["Home Root CA"]), \
+                mock.patch.object(ce, "_keychain_ca_fix", return_value=("Home Root CA", "/Library/Keychains/System.keychain")):
+            r = ce.check_proxmox_tls(cfg)[0]
+        self.assertFalse(r["ok"])
+        self.assertIn("trusted in the macOS keychain", r["detail"])
+        self.assertIn('security find-certificate -a -c "Home Root CA" -p /Library/Keychains/System.keychain '
+                      "> ~/.config/homelab/home-root-ca.pem", r["detail"])
+        self.assertIn("proxmox.ca_cert=~/.config/homelab/home-root-ca.pem", r["detail"])
+        with mock.patch.object(ce, "_handshake", return_value=err), \
+                mock.patch.object(ce, "_chain_names", return_value=["Proxmox Virtual Environment"]), \
+                mock.patch.object(ce, "_keychain_ca_fix", return_value=None):
+            r = ce.check_proxmox_tls(cfg)[0]
+        self.assertIn("pve-root-ca.pem", r["detail"])
+        self.assertEqual(ce.check_proxmox_tls({"proxmox": {"endpoint": "https://x", "verify_tls": False}})[0]["ok"], None)
+        self.assertEqual(ce.check_proxmox_tls({}), [])
+
+
 class GuardGhTests(unittest.TestCase):
     def d(self, cmd):
         out = guard.decide(guard.evaluate(cmd, "/tmp"))

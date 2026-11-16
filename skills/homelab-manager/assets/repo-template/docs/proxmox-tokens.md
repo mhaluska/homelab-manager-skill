@@ -3,11 +3,18 @@
 Run on a Proxmox node as root (the skill shows these commands; you run them).
 Token secrets are shown once — store them straight in the keychain of the management Mac.
 
+Both tokens use privilege separation (`--privsep 1`): a token's effective rights are the
+**intersection** of its own ACL and its user's ACL. So every role is granted twice — to the user
+and to the token. Without the user ACL the tokens get nothing (403 on every call). The user has
+no password, so it cannot log in; only its tokens are used. Check a token's effective rights with
+`pveum user token permissions homelab@pve <tokenid>`.
+
 ## Read-only (discovery, drift)
 
 ```bash
 pveum user add homelab@pve --comment "homelab-manager"
 pveum user token add homelab@pve ro --privsep 1 --comment "read-only discovery"
+pveum acl modify / --users homelab@pve --roles PVEAuditor
 pveum acl modify / --tokens 'homelab@pve!ro' --roles PVEAuditor
 ```
 Keychain value: `homelab@pve!ro=<secret>` →
@@ -21,6 +28,7 @@ pveum role add HomelabProvisioner -privs "Datastore.AllocateSpace Datastore.Allo
   VM.Allocate VM.Audit VM.Clone VM.Config.CDROM VM.Config.CPU VM.Config.Cloudinit VM.Config.Disk VM.Config.HWType \
   VM.Config.Memory VM.Config.Network VM.Config.Options VM.Console VM.Migrate VM.PowerMgmt VM.Snapshot"
 pveum user token add homelab@pve rw --privsep 1 --comment "provisioning"
+pveum acl modify / --users homelab@pve --roles HomelabProvisioner
 pveum acl modify / --tokens 'homelab@pve!rw' --roles HomelabProvisioner
 ```
 `Sys.Modify` is needed only for downloading cloud images to storage (download-url); you can drop it
@@ -29,5 +37,5 @@ Privilege names change between Proxmox releases (e.g. `VM.Monitor` was removed i
 if `pveum role add` rejects one, drop it and note it here.
 Keychain service: `homelab/proxmox-rw`.
 
-Narrow it further by granting the ACL on a pool (`/pool/homelab`) and specific storages
-instead of `/` once the layout is settled.
+Narrow it further by granting the ACLs (user and token) on a pool (`/pool/homelab`) and specific
+storages instead of `/` once the layout is settled.

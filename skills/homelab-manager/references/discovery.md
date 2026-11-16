@@ -23,8 +23,12 @@ Uses the read-only token. For "show VMs and their resource usage", run it and gi
 user the table (trimmed to what they asked: e.g. only running VMs, top 5 by memory).
 `cpu_usage` is a fraction of allocated vCPUs at that instant, not an average.
 
-If it fails: 401/403 → token missing `PVEAuditor` on `/`; TLS error → set
-`proxmox.ca_cert` (fetch `/etc/pve/pve-root-ca.pem` from a node) rather than `verify_tls: false`.
+If it fails: 401 → wrong token or secret; 403 → the script reads the token's effective rights and
+says what is missing — usually `PVEAuditor` on `/` for the **user** as well as the token (privilege
+separation: a token gets only what both have). TLS error → run `check_env.py`: it checks the
+certificate and says whether the CA is trusted only in the macOS keychain (Python can't see that;
+export it to a PEM). Set `proxmox.ca_cert` (Proxmox's own CA: `/etc/pve/pve-root-ca.pem` on a node)
+rather than `verify_tls: false`.
 
 ## Network discovery (nmap)
 

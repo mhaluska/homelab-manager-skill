@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.10.0 — 2026-11-16
+- Fix ([#5](https://github.com/mhaluska/homelab-manager-skill/issues/5)): `docs/proxmox-tokens.md` granted
+  the roles only to the privilege-separated tokens. A privsep token gets the intersection of its own and
+  its user's rights, so both tokens had none (403 on every call). The template now grants each role to
+  the user `homelab@pve` too and explains why. On a 403, `proxmox_inventory.py` reads the token's
+  effective rights (`/access/permissions`) and prints the missing `pveum acl modify … --users …` command;
+  a 401 now says the token or secret is wrong.
+- Existing repos: `init_repo.py --sync-managed` adds the user ACL line above each token ACL line in
+  `docs/proxmox-tokens.md` (keeping your paths and roles) and the explanation. Run the new lines on Proxmox.
+- `check_env.py` checks the Proxmox certificate ([#4](https://github.com/mhaluska/homelab-manager-skill/issues/4)):
+  Python uses OpenSSL's CA bundle, not the macOS keychain, so a private CA trusted in the keychain still
+  failed with `CERTIFICATE_VERIFY_FAILED`. When the issuer is in the System or login keychain and
+  verification passes with it, the check prints the `security find-certificate` export and the
+  `config_set.py` command for `proxmox.ca_cert`; it also reports hostname mismatches. `proxmox.ca_cert`
+  may now use `~` or a path relative to the repo root.
+
 ## 0.9.1 — 2026-11-16
 - Fix ([#3](https://github.com/mhaluska/homelab-manager-skill/issues/3)): the `skill_issues.md` header
   refresh in `init_repo.py --sync-managed` dropped the `reported-through` marker, so `issues.py report`

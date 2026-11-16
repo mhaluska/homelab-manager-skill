@@ -58,6 +58,34 @@ def get(cfg: dict, dotted: str, default=None):
     return cur
 
 
+# --------------------------------------------------------------------------- TLS
+
+def proxmox_ca_file(cfg: dict) -> str | None:
+    """proxmox.ca_cert as a usable path: ~ expanded, relative paths taken from the repo root."""
+    ca = get(cfg, "proxmox.ca_cert")
+    if not ca:
+        return None
+    p = Path(os.path.expanduser(str(ca)))
+    if not p.is_absolute() and cfg.get("_root"):
+        p = Path(cfg["_root"]) / p
+    return str(p)
+
+
+def proxmox_ssl_context(cfg: dict):
+    """SSL context for the Proxmox API as homelab.yaml configures it.
+
+    Python (OpenSSL) does not read the macOS keychain: a CA trusted only there must be exported
+    to a PEM file and set as proxmox.ca_cert (check_env.py detects this case).
+    """
+    import ssl
+    if get(cfg, "proxmox.verify_tls", True) is False:
+        return ssl._create_unverified_context()
+    ca = proxmox_ca_file(cfg)
+    if ca and not Path(ca).is_file():
+        raise ConfigError(f"proxmox.ca_cert {ca!r} does not exist.")
+    return ssl.create_default_context(cafile=ca)
+
+
 # --------------------------------------------------------------------------- scan scope
 
 def _networks(items) -> list:

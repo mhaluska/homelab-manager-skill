@@ -26,26 +26,51 @@ from hmlib import clean  # noqa: E402
 
 
 class PVE:
-    def __init__(self, endpoint: str, token: str, verify: bool, ca: str | None):
+    def __init__(self, endpoint: str, token: str, ctx: ssl.SSLContext):
         self.base = endpoint.rstrip("/") + "/api2/json"
         self.headers = {"Authorization": f"PVEAPIToken={token}", "Accept": "application/json"}
-        if not verify:
-            self.ctx = ssl._create_unverified_context()
-        else:
-            self.ctx = ssl.create_default_context(cafile=ca or None)
+        self.token_id = token.split("=", 1)[0]  # user@realm!tokenid — never the secret
+        self.ctx = ctx
 
-    def get(self, path: str, **params):
+    def _get(self, path: str, **params):
         url = self.base + path + (("?" + urllib.parse.urlencode(params)) if params else "")
         req = urllib.request.Request(url, headers=self.headers, method="GET")
+        with urllib.request.urlopen(req, context=self.ctx, timeout=30) as r:
+            return json.load(r).get("data")
+
+    def get(self, path: str, **params):
         try:
-            with urllib.request.urlopen(req, context=self.ctx, timeout=30) as r:
-                return json.load(r).get("data")
+            return self._get(path, **params)
         except urllib.error.HTTPError as e:
-            if e.code in (401, 403):
-                raise SystemExit(f"Proxmox API refused {path} ({e.code}). The read-only token needs PVEAuditor on /.")
+            if e.code == 401:
+                raise SystemExit(f"Proxmox API refused {path} (401): the token {self.token_id!r} or its secret is "
+                                 "wrong, or the token was removed/expired. Check the keychain item (check_env.py).")
+            if e.code == 403:
+                raise SystemExit(f"Proxmox API refused {path} (403). " + self.permission_hint())
             raise
         except urllib.error.URLError as e:
-            raise SystemExit(f"Cannot reach Proxmox at {self.base}: {e.reason}")
+            hint = (" — run check_env.py: it tells whether the CA is trusted only in the macOS keychain"
+                    if isinstance(e.reason, ssl.SSLCertVerificationError) else "")
+            raise SystemExit(f"Cannot reach Proxmox at {self.base}: {e.reason}{hint}")
+
+    def permission_hint(self) -> str:
+        """Explain a 403 using the token's effective permissions (GET /access/permissions needs no privilege)."""
+        user = self.token_id.split("!", 1)[0]
+        need = "The read-only token needs PVEAuditor on /"
+        try:
+            perms = self._get("/access/permissions")
+        except (urllib.error.URLError, ValueError, OSError):
+            perms = None
+        if perms == {} or (isinstance(perms, dict) and not any(perms.values())):
+            return (f"The token {self.token_id!r} has no effective permissions at all. With privilege separation a "
+                    f"token gets only what both it and its user have, so grant the role to the user too: "
+                    f"pveum acl modify / --users {user} --roles PVEAuditor (see docs/proxmox-tokens.md).")
+        if isinstance(perms, dict):
+            paths = ", ".join(sorted(perms)[:5])
+            return (f"{need}; it has permissions only on: {paths}. Remember the user {user} needs the role too "
+                    f"(privilege separation). Check with: pveum user token permissions {user} "
+                    f"{self.token_id.split('!', 1)[-1]}")
+        return f"{need}, granted to both the token and its user {user} (privilege separation)."
 
 
 def gib(b):
@@ -156,11 +181,12 @@ def main():
         endpoint = hmlib.get(cfg, "proxmox.endpoint")
         if not endpoint:
             raise hmlib.ConfigError("proxmox.endpoint is empty in homelab.yaml.")
+        ctx = hmlib.proxmox_ssl_context(cfg)
         token = hmlib.read_secret(cfg, a.secret or hmlib.get(cfg, "proxmox.tokens.read_only", "proxmox-ro"))
     except hmlib.ConfigError as e:
         print(f"proxmox_inventory: {e}", file=sys.stderr)
         return 3
-    pve = PVE(endpoint, token, hmlib.get(cfg, "proxmox.verify_tls", True) is not False, hmlib.get(cfg, "proxmox.ca_cert"))
+    pve = PVE(endpoint, token, ctx)
     inv = collect(pve, a.details)
     if not a.summary:
         out = Path(a.out) if a.out else Path(cfg["_root"]) / "discovery" / "proxmox.json"
