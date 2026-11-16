@@ -637,12 +637,19 @@ def migrate(root: Path, dry_run: bool) -> list[str]:
     old = [i for i in items if "kind" not in i]
     text = path.read_text()
     pre_06 = OLD_HEADER_MARK in text
-    if not old and not pre_06 and HEADER.strip() in text:
-        return []
     rel = path.relative_to(root).as_posix()
-    msgs = ([f"move {len(old)} homelab issue(s) from {rel} to {ARCHIVE} (homelab problems aren't tracked any more)"]
-            if old else []) + [f"{rel}: new header — it now tracks problems with the skill itself" if pre_06 or old
-                               else f"{rel}: refresh the header (it now also collects ideas to improve the skill)"]
+    # The reported-through marker is data, not header: keep it. Before 0.6.0 it was for the homelab's own
+    # repo, so it goes then. 0.9.0 dropped it on the header refresh: recover it from git history.
+    marker = None if pre_06 or old else read_marker(path)
+    lost = None if pre_06 or old or marker else marker_from_git(root, rel)
+    if not old and not pre_06 and HEADER.strip() in text and not lost:
+        return []
+    if not old and not pre_06 and HEADER.strip() in text:
+        msgs = [f"{rel}: restore the reported-through marker ({lost}) lost by the 0.9.0 header refresh"]
+    else:
+        msgs = ([f"move {len(old)} homelab issue(s) from {rel} to {ARCHIVE} (homelab problems aren't tracked any more)"]
+                if old else []) + [f"{rel}: new header — it now tracks problems with the skill itself" if pre_06 or old
+                                   else f"{rel}: refresh the header (it now also collects ideas to improve the skill)"]
     if dry_run:
         return msgs
     if old:
@@ -654,8 +661,17 @@ def migrate(root: Path, dry_run: bool) -> list[str]:
             "kept for reference only.\n\n")
         with archive.open("a") as f:
             f.write(head + f"_Archived {today()}._\n\n" + "\n".join(render_archived(i) for i in old) + "\n")
-    path.write_text(render([i for i in items if "kind" in i], None))
+    path.write_text(render([i for i in items if "kind" in i], marker or lost))
     return msgs
+
+
+def marker_from_git(root: Path, rel: str) -> str | None:
+    """Newest reported-through marker the file ever had in git (markers only move forward)."""
+    r = subprocess.run(["git", "log", "-G", "reported-through:", "-p", "--format=", "--", rel],
+                       cwd=root, capture_output=True, text=True)
+    found = [m.group(1) for l in r.stdout.splitlines() if l[:1] in "+-"
+             for m in [MARK_RE.match(l[1:].strip())] if m]
+    return max(found, key=ts) if found and r.returncode == 0 else None
 
 
 def cmd_migrate(a, cfg):

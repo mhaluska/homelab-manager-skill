@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.1 — 2026-11-16
+- Fix ([#3](https://github.com/mhaluska/homelab-manager-skill/issues/3)): the `skill_issues.md` header
+  refresh in `init_repo.py --sync-managed` dropped the `reported-through` marker, so `issues.py report`
+  treated every open entry as never reported and could comment on GitHub issues a second time. The
+  marker is now kept (it is only dropped for pre-0.6.0 files, where it belonged to the homelab's repo).
+- Repos already synced with 0.9.0: `--sync-managed` restores the newest marker from the file's git
+  history.
+
 ## 0.9.0 — 2026-11-16
 - `skill_issues.md` now also collects **ideas to improve the skill**, as two new kinds: `improvement`
   (an existing script, flag, reference or template could work better) and `idea` (something missing).

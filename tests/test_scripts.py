@@ -536,6 +536,11 @@ PREV_README_ROW = ("| `skill_issues.md` | Problems with the homelab-manager skil
                    "to report to its GitHub repository |")
 
 
+MARKER = "2026-11-16T10:00:00.000000+00:00"
+MARKER_LINES = (f"<!-- reported-through: {MARKER} -->\n_Last reported: 2026-11-16 10:00 UTC — only issues added "
+                "or changed after this are sent next time._\n\n")
+
+
 class IdeasUpgradeTests(unittest.TestCase):
     """0.6.0–0.8.0 repos say skill_issues.md is only for problems; --sync-managed adds the ideas wording."""
 
@@ -549,10 +554,39 @@ class IdeasUpgradeTests(unittest.TestCase):
         readme.write_text(readme.read_text().replace(
             next(l for l in readme.read_text().splitlines() if l.startswith("| `skill_issues.md`")), PREV_README_ROW))
         text = issues_md.read_text()
-        issues_md.write_text("# Issues with the homelab-manager skill\n\nOld header.\n\n" + text[text.index("| ID |"):])
+        issues_md.write_text("# Issues with the homelab-manager skill\n\nOld header.\n\n" + MARKER_LINES
+                             + text[text.index("| ID |"):])
 
     def tearDown(self):
         shutil.rmtree(self.d)
+
+    def commit(self, msg):
+        subprocess.run(["git", "add", "-A"], cwd=self.d, check=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", msg],
+                       cwd=self.d, check=True)
+
+    def test_header_refresh_keeps_reported_marker(self):
+        run("init_repo.py", str(self.d), "--sync-managed", cwd=self.d)
+        text = (self.d / "skill_issues.md").read_text()
+        self.assertNotIn("Old header.", text)
+        self.assertIn(f"<!-- reported-through: {MARKER} -->", text)
+        self.assertEqual(text.count("reported-through"), 1)
+        sys.path.insert(0, str(SCRIPTS))
+        import issues
+        self.assertEqual(issues.read_marker(self.d / "skill_issues.md"), MARKER)   # what report reads
+
+    def test_marker_lost_by_090_is_restored_from_git(self):
+        self.commit("0.8.0 repo, reported")
+        issues_md = self.d / "skill_issues.md"
+        run("init_repo.py", str(self.d), "--sync-managed", cwd=self.d)
+        issues_md.write_text(issues_md.read_text().replace(MARKER_LINES, ""))   # what 0.9.0's sync left
+        self.assertNotIn("reported-through", issues_md.read_text())
+        self.commit("0.9.0 sync")
+        out = run("init_repo.py", str(self.d), "--sync-managed", "--dry-run", cwd=self.d).stdout
+        self.assertIn(f"restore the reported-through marker ({MARKER})", out)
+        run("init_repo.py", str(self.d), "--sync-managed", cwd=self.d)
+        self.assertIn(f"<!-- reported-through: {MARKER} -->", issues_md.read_text())
+        self.assertIn("Up to date", run("init_repo.py", str(self.d), "--sync-managed", cwd=self.d).stdout)
 
     def test_sync_adds_ideas_wording_once(self):
         out = run("init_repo.py", str(self.d), "--sync-managed", "--dry-run", cwd=self.d).stdout
