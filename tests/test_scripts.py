@@ -498,5 +498,94 @@ class GuardGhTests(unittest.TestCase):
         self.assertEqual(self.d("gh api -X POST repos/o/r/issues"), "ask")
 
 
+class ConfigSetTests(unittest.TestCase):
+    """config_set.py edits only the changed lines (yq -i re-serialises the file; GitHub issue #1)."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.f = self.d / "homelab.yaml"
+        shutil.copy(SCRIPTS.parent / "assets/repo-template/homelab.yaml", self.f)
+        self.orig = self.f.read_text()
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def changed(self):
+        new = self.f.read_text().splitlines()
+        return [l for l in new if l not in self.orig.splitlines()]
+
+    def test_list_append_keeps_comment_on_its_key(self):
+        r = run("config_set.py", "network.authorized_ranges+=10.0.10.0/24", "network.authorized_ranges+=10.0.10.0/24",
+                cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.changed(), ["  authorized_ranges: [10.0.10.0/24] # e.g. [10.0.10.0/24]"])
+        self.assertEqual(json.loads(yq(".network.authorized_ranges", self.f)), ["10.0.10.0/24"])
+        self.assertIn('  gateway: ""\n\nproxmox:', self.f.read_text())     # blank lines survive
+
+    def test_scalars_inline_maps_new_keys_and_delete(self):
+        r = run("config_set.py", "site.domain=home.arpa", "proxmox.verify_tls=false", "defaults.vm.cores=4",
+                'defaults.ssh_public_keys=["ssh-ed25519 AAAA me@mac"]', "templates.build_network.dns+=10.0.10.1",
+                "--delete", "discovery.ignore_unmanaged", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('  domain: "home.arpa"        # e.g. home.arpa\n', self.f.read_text())
+        self.assertIn("  verify_tls: false          # false only", self.f.read_text())
+        cfg = json.loads(yq(".", self.f))
+        self.assertEqual(cfg["defaults"]["vm"], {"cores": 4, "memory_mib": 2048, "disk_gib": 20})
+        self.assertEqual(cfg["defaults"]["ssh_public_keys"], ["ssh-ed25519 AAAA me@mac"])
+        self.assertEqual(cfg["templates"]["build_network"]["dns"], ["10.0.10.1"])
+        self.assertEqual(cfg["discovery"], None)
+        self.assertEqual(len(self.f.read_text().splitlines()), len(self.orig.splitlines()))
+
+    def test_dry_run_and_bad_input_write_nothing(self):
+        r = run("config_set.py", "--dry-run", "site.domain=x", cwd=self.d)
+        self.assertIn('+  domain: "x"', r.stdout)
+        r = run("config_set.py", "site.name.deeper=1", cwd=self.d)
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(self.f.read_text(), self.orig)
+
+    def test_scaffold_keeps_template_formatting(self):
+        d = self.d / "repo"
+        run("init_repo.py", str(d), "--components", "ansible", cwd=self.d)
+        new, old = (d / "homelab.yaml").read_text().splitlines(), self.orig.splitlines()
+        self.assertEqual(len(new), len(old))
+        self.assertEqual([l for l in new if l not in old],
+                         ["  proxmox: false      # Proxmox VE VMs/LXC via OpenTofu",
+                          "  templates: false    # Packer VM templates (needs proxmox)",
+                          "  discovery: false    # nmap discovery in authorized ranges"])
+
+
+class SkillProblemHookTests(unittest.TestCase):
+    """hooks/skill_problem.py reminds Claude to log skill problems when they happen (GitHub issue #2)."""
+
+    def hook(self, payload):
+        r = subprocess.run([sys.executable, str(ROOT / "hooks/skill_problem.py")], input=json.dumps(payload),
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0)
+        return json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"] if r.stdout.strip() else None
+
+    def payload(self, cmd, event="PostToolUse", stdout="", stderr="", error=None):
+        p = {"hook_event_name": event, "tool_name": "Bash", "tool_input": {"command": cmd},
+             "tool_response": {"stdout": stdout, "stderr": stderr}}
+        if error:
+            p["error"] = error
+        return p
+
+    def test_traceback_in_bundled_script(self):
+        tb = 'Traceback (most recent call last):\n  File "x.py", line 1\nKeyError: \'backup_jobs\'\n'
+        msg = self.hook(self.payload("python3 $HM/scripts/drift_report.py", stderr=tb))
+        self.assertIn("issues.py add --kind script --key script:drift_report:keyerror", msg)
+
+    def test_failure_asks_for_judgement(self):
+        msg = self.hook(self.payload("python3 /x/skills/homelab-manager/scripts/check_env.py",
+                                     event="PostToolUseFailure", error="Exit code 1"))
+        self.assertIn("If the cause is the skill", msg)
+
+    def test_quiet_when_fine_or_not_ours(self):
+        self.assertIsNone(self.hook(self.payload("python3 $HM/scripts/check_env.py", stdout="all good")))
+        self.assertIsNone(self.hook(self.payload("python3 my/scripts/thing.py", event="PostToolUseFailure")))
+        self.assertIsNone(self.hook(self.payload("ls", event="PostToolUseFailure")))
+        self.assertIsNone(self.hook({"tool_name": "Read"}))
+
+
 if __name__ == "__main__":
     unittest.main()

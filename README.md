@@ -53,6 +53,7 @@ OpenTofu state never goes into Git: by default it is a file on the Mac outside t
 | `skills/homelab-manager/scripts/` | Stdlib-only Python helpers (inventory, scans, drift, secrets wrapper, env check, repo init) |
 | `skills/homelab-manager/assets/repo-template/` | Scaffold for the `homelab-infrastructure` repository |
 | `hooks/guard.py` | PreToolUse hook enforcing the hard safety rules |
+| `hooks/skill_problem.py` | PostToolUse hook: when a bundled script crashes or fails, reminds Claude to note it in `ISSUES.md` right away |
 | `hooks/update_check.py` | SessionStart hook: at most once a day, checks the Git remote for a newer `vX.Y.Z` tag and tells you; flags homelab repos that need a one-time update after a plugin upgrade |
 | `agents/homelab-runner.md` | Subagent on the latest **Haiku** for fully specified commands/scripts |
 | `agents/homelab-analyst.md` | Subagent on the latest **Sonnet** for delegated work that needs reasoning |
@@ -71,7 +72,8 @@ command Claude issues (in any project, while the plugin is enabled) and:
   state edits, imports, `qm`/`pct`/`pvesh`/`ha-manager`/`pvesm` writes, ZFS destroy, Proxmox API
   writes, reboots/shutdowns, patch/upgrade playbooks outside `--check`, `packer build -force`,
   force-push, `curl | sh`, root or NSE nmap scans, reporting skill issues, other GitHub issue writes,
-  GitHub API writes, labels, releases and repository settings; **denies** printing the `gh` token;
+  GitHub API writes, labels, releases and repository settings, adding a range to `authorized_ranges`;
+  **denies** printing the `gh` token;
 - scans **scripts that a command executes** with the same rules, so generated scripts can't bypass it.
 
 It is defence in depth, not a sandbox: it inspects command text, so the restricted Proxmox

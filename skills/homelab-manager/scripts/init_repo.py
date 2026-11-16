@@ -28,6 +28,8 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import config_set  # noqa: E402
 TEMPLATE = HERE.parent / "assets" / "repo-template"
 PLUGIN_ROOT = HERE.parents[2]
 
@@ -119,11 +121,12 @@ def upgrades(target: Path) -> list[tuple[str, callable]]:
             stale = []
         if stale:
             def fix_yaml(cfg=cfg):
-                expr = " | ".join(f"del(.issues.{k})" for k in OLD_ISSUES_KEYS) + (
-                    ' | .issues.report = true'
-                    ' | .issues.file line_comment = "problems with the homelab-manager skill itself (not the homelab)"'
-                    ' | .issues.report line_comment = "offer to report them to the plugin\'s GitHub repository (sanitised, asks first)"')
-                subprocess.run(["yq", "-i", expr, str(cfg)], check=True)
+                f = subprocess.run(["yq", '.issues.file // "ISSUES.md"', str(cfg)],
+                                   capture_output=True, text=True).stdout.strip() or "ISSUES.md"
+                config_set.edit_file(cfg, [("delete", f"issues.{k}") for k in OLD_ISSUES_KEYS] + [
+                    ("set", "issues.file", f, "problems with the homelab-manager skill itself (not the homelab)"),
+                    ("set", "issues.report", True,
+                     "offer to report them to the plugin's GitHub repository (sanitised, asks first)")])
             out.append((f"homelab.yaml: issues.{', issues.'.join(stale)} → issues.report", fix_yaml))
     for rel, what, rx, new in (
             ("CLAUDE.md", "rule", OLD_CLAUDE_RULE, lambda: _template_line("CLAUDE.md", NEW_CLAUDE_RULE)),
@@ -251,8 +254,7 @@ def main():
             shutil.copy2(src, dst)
 
     if not a.dry_run:
-        expr = " | ".join(f".components.{n} = {str(n in comps).lower()}" for n in COMPONENTS)
-        subprocess.run(["yq", "-i", expr, str(target / "homelab.yaml")], check=True)
+        config_set.edit_file(target / "homelab.yaml", [("set", f"components.{n}", n in comps) for n in COMPONENTS])
         if not (target / ".git").exists():
             r = git("init", "-b", "main", cwd=target)
             print(r.stdout.strip() or r.stderr.strip())

@@ -86,6 +86,8 @@ RULES: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"\bsudo\s+nmap\b"), ASK, "Runs nmap as root (OS detection). Root nmap can do anything on this Mac."),
     (re.compile(r"\bnmap\b[^\n;&|]*\s(--script\b|--script=|-sC\b|-A\b)"), ASK, "NSE scripts are intrusive."),
     (re.compile(r"nmap_scan\.py\b[^\n;&|]*--profile[ =]os\b"), ASK, "OS detection needs `sudo nmap -O`."),
+    (re.compile(r"(config_set\.py|\byq\b[^\n;&|]*\s-i\b)[^\n;&|]*authorized_ranges\s*\+?=(?!=)"), ASK,
+     "Widens the scan scope (network.authorized_ranges): only for ranges the user owns, with their yes."),
 ]
 
 # ansible-playbook runs that change systems in high-impact ways
@@ -270,6 +272,9 @@ def decide(findings: list[tuple[str, str]]) -> dict | None:
         return None
     decision = DENY if any(d == DENY for d, _ in findings) else ASK
     reasons = list(dict.fromkeys(r for d, r in findings if d == decision))
+    if decision == DENY:
+        reasons.append("If the user confirms this command is legitimate and the guard is wrong, note it as a skill "
+                       "issue (issues.py add --kind guard) in this turn; never work around the guard.")
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": decision,
                                    "permissionDecisionReason": "homelab-manager guard: " + " | ".join(reasons)}}
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.0 — 2026-11-16
+- New `config_set.py` edits `homelab.yaml` without reflowing it (#1): `yq -i` rewrote the whole file —
+  blank lines and comment alignment were lost, and `authorized_ranges: [] # e.g. …` became a block list
+  whose comment jumped to `gateway`. It changes only the lines of the keys it edits (`path=value`,
+  `list+=item`, `list-=item`, `--delete`, `--dry-run`), keeps each inline comment on its key, and checks
+  the result with yq before writing. Setup and `--sync-managed` use it too, so new repos keep the
+  template's layout. Existing files that yq already reflowed stay as they are.
+- Skill problems are logged when they happen, not only when you ask (#2): SKILL.md makes it a rule to run
+  `issues.py add` in the same turn whenever Claude works around the skill; a new PostToolUse hook
+  (`hooks/skill_problem.py`) reminds Claude when a bundled script crashes or fails; a guard denial says
+  how to note a false alarm.
+- Guard: asks before adding a range to `network.authorized_ranges` (`config_set.py` or `yq -i`), as the
+  approval list already required.
+
 ## 0.6.0 — 2026-11-16
 - `ISSUES.md` now tracks problems with **the skill itself** — a script that crashed or gave wrong
   results, the guard blocking something legitimate (or letting something dangerous through), a template

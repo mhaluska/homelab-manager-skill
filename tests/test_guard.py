@@ -240,5 +240,25 @@ class RedactTests(unittest.TestCase):
         self.assertTrue(hmlib.clean("x" * 500).endswith("…"))
 
 
+class GuardConfigTests(unittest.TestCase):
+    def d(self, cmd):
+        out = guard.decide(guard.evaluate(cmd, "/tmp"))
+        return out["hookSpecificOutput"]["permissionDecision"] if out else None
+
+    def test_widening_scan_scope_asks(self):
+        self.assertEqual(self.d("python3 /p/config_set.py 'network.authorized_ranges+=10.0.30.0/24'"), "ask")
+        self.assertEqual(self.d("python3 /p/config_set.py 'network.authorized_ranges=[\"10.0.30.0/24\"]'"), "ask")
+        self.assertEqual(self.d("yq -i '.network.authorized_ranges += [\"10.0.30.0/24\"]' homelab.yaml"), "ask")
+        self.assertIsNone(self.d("python3 /p/config_set.py 'network.authorized_ranges-=10.0.30.0/24'"))
+        self.assertIsNone(self.d("python3 /p/config_set.py site.domain=home.arpa"))
+        self.assertIsNone(self.d("yq '.network.authorized_ranges' homelab.yaml"))
+
+    def test_deny_reason_says_how_to_log_a_false_alarm(self):
+        out = guard.decide(guard.evaluate("tofu apply -auto-approve", "/tmp"))
+        self.assertIn("issues.py add --kind guard", out["hookSpecificOutput"]["permissionDecisionReason"])
+        out = guard.decide(guard.evaluate("tofu destroy", "/tmp"))
+        self.assertNotIn("issues.py", out["hookSpecificOutput"]["permissionDecisionReason"])
+
+
 if __name__ == "__main__":
     unittest.main()

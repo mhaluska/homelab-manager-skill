@@ -67,7 +67,8 @@ mostly confirms:
 - S3 state → `opentofu.s3.endpoint`, `bucket` (and `key` if they share the bucket). Local state
   needs nothing; `tofu_init.py --print` shows where the file will live.
 - kubernetes → cluster group name(s) in Ansible and whether `kubectl` works on this Mac.
-Write answers with `yq -i '.path = "value"' homelab.yaml` (keeps comments).
+Write answers with `python3 $HM/scripts/config_set.py 'site.domain=home.arpa' 'network.authorized_ranges+=CIDR'`
+(it changes only those lines and checks the result). Not `yq -i`: it reflows the whole file and moves comments.
 Node, storage and bridge names are discovered later from the Proxmox API; don't ask for them.
 
 **Round 3 — credentials, done by the user**: show the token setup from
@@ -98,7 +99,7 @@ For every request, in this order. Skip steps that don't apply, but never skip 4�
 8. **Verify** — the resource exists and is healthy: Proxmox snapshot, guest agent IP, SSH reachable, services active, `tofu plan` shows no changes.
 9. **Record** — refresh `discovery/`, `tofu_to_inventory.py`, `docs/templates.md`, `docs/decisions.md` where relevant.
 10. **Commit** — to `main` when `git.auto_commit` is true and the change is verified. One logical change per commit, message says what and why. Never commit secrets, state or plans (the pre-commit hook also blocks them).
-11. **Report** — what changed, what failed, what's left, in a few lines. Report only what actually ran; anything skipped or assumed is labelled as such, never as a result. Problems with the skill itself → `ISSUES.md` (§6).
+11. **Report** — what changed, what failed, what's left, in a few lines. Report only what actually ran; anything skipped or assumed is labelled as such, never as a result. Skill problems hit during the task are already in `ISSUES.md` (§6): name their SKILL-IDs.
 
 Prefer idempotent operations: declarative OpenTofu and Ansible over imperative CLI
 calls. Use `qm`/`pct`/`pvesh` writes only when OpenTofu can't do it, and say why.
@@ -149,6 +150,10 @@ settings) are not tracked in a file. Report them in your reply and in the report
 script crashed or gave wrong results, the guard blocked a legitimate command or let a dangerous one
 through, a scaffolded template failed validation, these instructions or a reference were wrong,
 missing or outdated, setup misbehaved, or the user says the skill did something wrong.
+**Log it the moment you notice it, unasked, in the same turn**: whenever you work around the skill
+(fix up a script's output or a command the skill prescribes, retry with other flags, edit a scaffolded
+file to make it validate, bypass a wrong instruction), run `issues.py add` before your final report.
+Saying "fixing that" in chat is not enough. A hook reminds you when a bundled script fails.
 ```bash
 python3 $HM/scripts/issues.py add --title "…" --kind script|guard|instructions|setup|template|other \
   --key <stable-key> --body-file <details.md>
@@ -209,6 +214,7 @@ Scripts (all in `$HM/scripts/`):
 | `nmap_scan.py <targets> [--profile ping\|services\|os]` | scope-checked scan | `discovery/network.json` |
 | `drift_report.py [--tofu-json F]` | Proxmox ↔ OpenTofu ↔ Ansible ↔ network | `discovery/drift.md` |
 | `tofu_to_inventory.py` | OpenTofu output → Ansible inventory | `ansible/inventory/managed/tofu_hosts.yml` |
+| `config_set.py 'path=value' 'list+=item' [--delete path] [--dry-run]` | edit homelab.yaml keeping comments and layout | `homelab.yaml` |
 | `issues.py add\|list\|show\|report\|resolve` | note problems with this skill; report them (sanitised) to the plugin repo | `ISSUES.md` |
 | `tofu_init.py [--print]` | `tofu init` with the state backend from homelab.yaml (local or S3) | `.terraform/` |
 
