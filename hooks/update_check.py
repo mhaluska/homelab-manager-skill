@@ -8,6 +8,8 @@ Latest version = highest `vX.Y.Z` tag on the plugin's Git remote (`git ls-remote
 non-interactive, short timeout). The remote comes from HM_UPDATE_URL, the installed marketplace
 entry in ~/.claude/plugins/known_marketplaces.json, or this checkout's `origin`.
 The result is cached in ~/.cache/homelab-manager/update-check.json; a failed check is retried after 6 h.
+Also (local, no network, every session): when the working directory is a homelab repo set up by an
+older plugin version, tells Claude which one-time upgrades `init_repo.py --sync-managed` would apply.
 Never fails the session: any error → silent.
 """
 from __future__ import annotations
@@ -105,6 +107,24 @@ def update_text(have: str, latest: str) -> str:
             f"see CHANGELOG.md for what changed.")
 
 
+SCRIPTS = ROOT / "skills" / "homelab-manager" / "scripts"
+
+
+def repo_upgrades() -> list[str]:
+    """One-time upgrades pending for the homelab repo in the working directory (empty outside one)."""
+    sys.path.insert(0, str(SCRIPTS))
+    import hmlib
+    import init_repo
+    root = hmlib.find_repo_root()
+    return [desc for desc, _ in init_repo.upgrades(root)] if root else []
+
+
+def upgrade_text(steps: list[str]) -> str:
+    return ("This homelab repository was set up by an older homelab-manager and needs a one-time update: "
+            + "; ".join(steps) + f". Tell the user, run `python3 {SCRIPTS}/init_repo.py --sync-managed --dry-run`, "
+            "and after their yes run it without --dry-run and commit (`Update repo for homelab-manager`).")
+
+
 def main() -> int:
     force = "--force" in sys.argv[1:]
     try:
@@ -122,11 +142,21 @@ def main() -> int:
         else:
             print(update_text(have, latest) if newer else f"homelab-manager {have} is up to date (latest: {latest}).")
         return 0
+    try:
+        steps = repo_upgrades()
+    except Exception:  # never break a session
+        steps = []
+    notes, context = [], []
     if newer:
-        msg = update_text(have, latest)
-        print(json.dumps({"systemMessage": msg,
+        notes.append(update_text(have, latest))
+        context.append(notes[-1] + " Mention this to the user once.")
+    if steps:
+        notes.append("homelab-manager: this repository needs a one-time update for the installed plugin version.")
+        context.append(upgrade_text(steps))
+    if notes:
+        print(json.dumps({"systemMessage": " ".join(notes),
                           "hookSpecificOutput": {"hookEventName": "SessionStart",
-                                                 "additionalContext": msg + " Mention this to the user once."}}))
+                                                 "additionalContext": " ".join(context)}}))
     return 0
 
 

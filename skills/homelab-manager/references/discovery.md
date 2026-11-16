@@ -62,8 +62,9 @@ devices since the last scan (`first_seen` == `last_seen`).
    (→ deleted outside OpenTofu; a normal plan would recreate them — ask what the user wants),
    attribute drift (→ either update code to match reality, or apply to restore; ask which),
    unknown network devices.
-5. Record each finding the user doesn't fix right away in `ISSUES.md` (`issues.py add`, area `drift`,
-   key like `drift:unmanaged:vm:<vmid>`), so the list survives the conversation.
+5. The findings live in `discovery/drift.md` (regenerated each run) and your reply; they are not
+   copied anywhere else. If `drift_report.py` itself misbehaved (crash, a guest wrongly flagged),
+   that is a skill problem: note it in `ISSUES.md` (SKILL.md §6).
 6. Commit `discovery/drift.md` and refreshed snapshots with message `discovery: drift report <date>`.
 
 Never "fix" drift automatically: reality might be right and the code wrong.

@@ -1,6 +1,6 @@
 schema_version: "1.1"
 name: init-asks-components
 expected_outcome: |
-  Before creating any files, asks which parts of the homelab the user uses (Proxmox/OpenTofu, Packer templates, Ansible, discovery, Windows, appliances, Kubernetes), how OpenTofu state and issues should be handled, and invents no site values.
+  Before creating any files, asks which parts of the homelab the user uses (Proxmox/OpenTofu, Packer templates, Ansible, discovery, Windows, appliances, Kubernetes), how OpenTofu state should be stored, and invents no site values.
 context:
   scaffold_script: place-files.sh

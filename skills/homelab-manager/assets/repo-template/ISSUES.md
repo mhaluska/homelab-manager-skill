@@ -1,17 +1,19 @@
-# Issues
+# Issues with the homelab-manager skill
 
-Problems found while managing this homelab — by the homelab-manager skill (drift reports,
-audits, failed runs, things noticed along the way) or added by you.
+Problems with the **skill itself** — a script that crashed or gave wrong results, the safety hook
+blocking something legitimate (or letting something dangerous through), a template that doesn't
+validate, instructions that were wrong or missing, a setup step that misbehaved. They can be sent
+to the plugin's GitHub repository so they get fixed.
 
-- Open one on GitHub: ask Claude *"open ISSUE-003 on GitHub"* (uses `gh`, asks first).
-- Send new/changed ones to GitHub: *"report issues to GitHub"* (updates matching GitHub issues
-  instead of duplicating them; asks first).
-- Fix one: *"fix ISSUE-003"* — each issue has Evidence, a Proposed fix and a Verify command.
-  Issues opened on GitHub with the "Homelab problem" form: *"fix GitHub issue #12"*.
-- Mark one done: *"ISSUE-003 is fixed"*.
+Problems in the homelab (drift, audit findings, failed runs) are not tracked here: Claude reports
+them in chat and in `discovery/drift.md` / `docs/security-audit-<date>.md`.
+
+- Note one: *"the skill got X wrong, write it down"* — Claude adds it with `issues.py`.
+- Send new/changed ones: *"report skill issues"* — sanitised (no IPs, host names, user names,
+  secrets), checked against existing GitHub issues first, shown to you before anything is sent.
 - Managed by `issues.py`; edit the text under an issue freely, keep the `<!-- issue … -->` lines.
 
 
-| ID | Severity | Area | Title | Status | GitHub |
-|---|---|---|---|---|---|
-| — | | | No issues recorded yet. | | |
+| ID | Kind | Title | Status | GitHub |
+|---|---|---|---|---|
+| — | | No issues recorded yet. | | |

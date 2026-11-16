@@ -4,12 +4,14 @@
     init_repo.py --list-components
     init_repo.py [TARGET_DIR] --components proxmox,templates,ansible,discovery[,windows,appliances,kubernetes] [--dry-run]
     init_repo.py [TARGET_DIR] --add-components templates        # later: enable a part you skipped
-    init_repo.py [TARGET_DIR] --sync-managed [--dry-run]        # refresh plugin-managed files (issue form)
+    init_repo.py [TARGET_DIR] --sync-managed [--dry-run]        # bring a repo set up by an older plugin version up to date
 
 - Copies only the files the chosen components need. Existing files are NEVER overwritten
   (an existing .claude/settings.json — e.g. from installing the plugin with project scope — gets the
   template's permission rules merged in, so the safety settings aren't lost),
-  except plugin-managed ones (MANAGED, e.g. the GitHub issue form) with --sync-managed.
+  except plugin-managed ones (MANAGED) with --sync-managed.
+- --sync-managed also applies one-time upgrades for repos set up by older plugin versions (see upgrades());
+  the SessionStart hook (hooks/update_check.py) tells Claude when one is pending.
 - Records the choice under `components:` in homelab.yaml — the skill ignores disabled parts.
 - `git init -b main` if needed; core.hooksPath → scripts/git-hooks (blocks committing secrets).
 - Registers this plugin's marketplace in .claude/settings.json when its Git remote is known.
@@ -19,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -44,10 +47,17 @@ COMPONENTS = {
                    ["ansible/inventory/managed/group_vars/appliances.yml"]),
     "kubernetes": ("Kubernetes clusters (rolling patching with drain/uncordon)", ["ansible"], ["ansible/playbooks/hooks/"]),
 }
-CORE = ["homelab.yaml", "README.md", "CLAUDE.md", "ISSUES.md", ".gitignore", ".claude/", ".github/", "docs/README.md",
+CORE = ["homelab.yaml", "README.md", "CLAUDE.md", "ISSUES.md", ".gitignore", ".claude/", "docs/README.md",
         "docs/decisions.md", "scripts/", "discovery/"]
-# Owned by the plugin: kept identical to the template by --sync-managed (headers say so).
-MANAGED = [".github/ISSUE_TEMPLATE/"]
+# Owned by the plugin: kept identical to the template by --sync-managed (headers say so). None at the moment.
+MANAGED: list[str] = []
+# Were plugin-managed in older versions; removed by --sync-managed if still unedited-managed (header present).
+OBSOLETE = [".github/ISSUE_TEMPLATE/homelab-problem.yml", ".github/ISSUE_TEMPLATE/config.yml"]  # until 0.5.2
+MANAGED_MARK = "Managed by the homelab-manager plugin"
+OLD_CLAUDE_RULE = re.compile(r"^- Record problems you find.*?(?=^\S|\Z)", re.M | re.S)       # until 0.5.2
+NEW_CLAUDE_RULE = re.compile(r"^- Homelab problems .*?(?=^\S|\Z)", re.M | re.S)
+OLD_README_ROW = re.compile(r"^\| `ISSUES\.md` \| Problems found while managing the homelab.*$", re.M)  # until 0.5.2
+OLD_ISSUES_KEYS = ("github", "repo", "labels")                                               # until 0.5.2
 
 
 def merge_settings(src: Path, dst: Path) -> list[str]:
@@ -69,8 +79,19 @@ def merge_settings(src: Path, dst: Path) -> list[str]:
     return added
 
 
-def sync_managed(target: Path, dry_run: bool) -> int:
-    changed = []
+def _template_line(rel: str, rx: re.Pattern) -> str:
+    return rx.search((TEMPLATE / rel).read_text()).group(0)
+
+
+def _prune(d: Path, stop: Path):
+    while d != stop and d.is_dir() and not any(d.iterdir()):
+        d.rmdir()
+        d = d.parent
+
+
+def upgrades(target: Path) -> list[tuple[str, callable]]:
+    """Changes that bring a repo set up by an older plugin version in line with this one: [(description, apply)]."""
+    out = []
     for src in sorted(TEMPLATE.rglob("*")):
         rel = src.relative_to(TEMPLATE).as_posix()
         if src.is_dir() or not any(rel.startswith(m) for m in MANAGED):
@@ -78,11 +99,59 @@ def sync_managed(target: Path, dry_run: bool) -> int:
         dst = target / rel
         if dst.exists() and dst.read_bytes() == src.read_bytes():
             continue
-        changed.append(("update " if dst.exists() else "add    ") + rel)
-        if not dry_run:
+        def copy(src=src, dst=dst):
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
-    print("\n".join(("would " if dry_run else "") + c for c in changed) or "Managed files are up to date.")
+        out.append((("update " if dst.exists() else "add ") + rel, copy))
+    for rel in OBSOLETE:
+        dst = target / rel
+        if dst.is_file() and MANAGED_MARK in dst.read_text(errors="replace")[:400]:
+            def remove(dst=dst):
+                dst.unlink()
+                _prune(dst.parent, target)
+            out.append((f"remove {rel} (no longer used: homelab problems aren't tracked as issues)", remove))
+    cfg = target / "homelab.yaml"
+    if cfg.exists():
+        r = subprocess.run(["yq", "-o=json", ".issues // {} | keys", str(cfg)], capture_output=True, text=True)
+        try:
+            stale = [k for k in json.loads(r.stdout or "[]") if k in OLD_ISSUES_KEYS]
+        except ValueError:
+            stale = []
+        if stale:
+            def fix_yaml(cfg=cfg):
+                expr = " | ".join(f"del(.issues.{k})" for k in OLD_ISSUES_KEYS) + (
+                    ' | .issues.report = true'
+                    ' | .issues.file line_comment = "problems with the homelab-manager skill itself (not the homelab)"'
+                    ' | .issues.report line_comment = "offer to report them to the plugin\'s GitHub repository (sanitised, asks first)"')
+                subprocess.run(["yq", "-i", expr, str(cfg)], check=True)
+            out.append((f"homelab.yaml: issues.{', issues.'.join(stale)} → issues.report", fix_yaml))
+    for rel, what, rx, new in (
+            ("CLAUDE.md", "rule", OLD_CLAUDE_RULE, lambda: _template_line("CLAUDE.md", NEW_CLAUDE_RULE)),
+            ("README.md", "table row", OLD_README_ROW,
+             lambda: _template_line("README.md", re.compile(r"^\| `ISSUES\.md` \|.*$", re.M)))):
+        f = target / rel
+        if f.is_file() and rx.search(f.read_text()):
+            def patch(f=f, rx=rx, new=new):
+                f.write_text(rx.sub(lambda m: new(), f.read_text(), count=1))
+            out.append((f"{rel}: replace the ISSUES.md {what} (ISSUES.md is now for problems with the skill)", patch))
+    sys.path.insert(0, str(HERE))
+    import issues  # noqa: E402  (needs yq via hmlib only when homelab.yaml exists)
+    msgs = issues.migrate(target, dry_run=True)
+    if msgs:
+        out.append(("; ".join(msgs), lambda: issues.migrate(target, dry_run=False)))
+    return out
+
+
+def sync_managed(target: Path, dry_run: bool) -> int:
+    steps = upgrades(target)
+    for desc, apply in steps:
+        if not dry_run:
+            apply()
+        print(("would " if dry_run else "") + desc)
+    if not steps:
+        print("Up to date with the plugin — nothing to change.")
+    elif not dry_run:
+        print("Review with `git diff` / `git status`, then commit.")
     return 0
 
 

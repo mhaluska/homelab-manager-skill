@@ -76,7 +76,7 @@ RULES: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"\bgh\s+api\b(?![^\n;&|]*(-X|--method)\s*GET)[^\n;&|]*((-X|--method)\s*(POST|PUT|PATCH|DELETE)"
                 r"|\s(-f|-F|--field|--raw-field|--input)\b)"), ASK, "Writes to the GitHub API."),
     (re.compile(r"issues\.py\b[^\n;&|]*\s(open|report)\b(?![^\n;&|]*--dry-run)"), ASK,
-     "Publishes issues from ISSUES.md to GitHub (gh issue create / comment)."),
+     "Sends skill issues from ISSUES.md to the plugin's public GitHub repository (gh issue create / comment)."),
     # --- templates / git / misc -------------------------------------------------------
     (re.compile(r"\bpacker\s+build\b[^\n;&|]*\s-force\b"), ASK, "packer build -force overwrites an existing template."),
     (re.compile(r"\bgit\s+push\b[^\n;&|]*\s(--force|--force-with-lease|-f)\b"), ASK, "Force-push rewrites Git history."),

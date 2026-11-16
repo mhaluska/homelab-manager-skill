@@ -24,18 +24,22 @@ folder is fine for a first setup) and install there:
 
 Updates: once a day the plugin checks for a newer release and tells you; then run
 `/plugin marketplace update homelab-manager-skill`. Release notes: [Releases](https://github.com/mhaluska/homelab-manager-skill/releases).
+When an update changes what the plugin puts in your homelab repo, the next session tells you and
+Claude applies it after you agree (`init_repo.py --sync-managed`).
 
 Then open Claude Code in an empty `homelab-infrastructure` repository and say e.g.
 *"set up this repo for my homelab"*. The skill asks which parts you use (Proxmox/OpenTofu, Packer,
 Ansible, discovery, Windows, appliances, Kubernetes), scaffolds only those, checks tools and keychain
 access, and asks for the configuration it can't discover. Parts can be enabled later.
 
-Problems the skill finds are recorded in `ISSUES.md` in that repository; ask *"open ISSUE-3 on GitHub"*
-to turn one into a GitHub issue, or *"report issues to GitHub"* to send everything new since the
-last report — matching GitHub issues get a comment instead of a duplicate (via `gh`, after you confirm).
-Every issue follows one template (Summary, Affected, Evidence, Impact, Proposed fix, Verify), so
-*"fix ISSUE-3"* can start straight from the evidence; the homelab repo gets a matching GitHub issue
-form, and *"fix GitHub issue #12"* imports one you opened by hand.
+Problems in your homelab (drift, audit findings, failed runs) are reported in chat and in
+`discovery/drift.md` / `docs/security-audit-<date>.md`. Problems with **the skill itself** (a script
+that crashes, the safety hook blocking something legitimate, wrong instructions, a template that
+doesn't validate) are noted in `ISSUES.md` of your homelab repo; say *"report skill issues"* and
+Claude sends them to [this repository's issues](https://github.com/mhaluska/homelab-manager-skill/issues)
+with `gh`. Before anything is sent it redacts IPs, MACs, your domain, host and guest names, user
+name and secrets, checks for an existing issue to comment on instead of duplicating, and shows you
+the exact text. You can also open one by hand with the *Problem with the skill* form.
 
 OpenTofu state never goes into Git: by default it is a file on the Mac outside the repository
 (`~/.local/share/homelab/tofu-state/`); setup can instead put it in any S3-compatible bucket (MinIO, Garage, AWS).
@@ -49,7 +53,7 @@ OpenTofu state never goes into Git: by default it is a file on the Mac outside t
 | `skills/homelab-manager/scripts/` | Stdlib-only Python helpers (inventory, scans, drift, secrets wrapper, env check, repo init) |
 | `skills/homelab-manager/assets/repo-template/` | Scaffold for the `homelab-infrastructure` repository |
 | `hooks/guard.py` | PreToolUse hook enforcing the hard safety rules |
-| `hooks/update_check.py` | SessionStart hook: at most once a day, checks the Git remote for a newer `vX.Y.Z` tag and tells you |
+| `hooks/update_check.py` | SessionStart hook: at most once a day, checks the Git remote for a newer `vX.Y.Z` tag and tells you; flags homelab repos that need a one-time update after a plugin upgrade |
 | `agents/homelab-runner.md` | Subagent on the latest **Haiku** for fully specified commands/scripts |
 | `agents/homelab-analyst.md` | Subagent on the latest **Sonnet** for delegated work that needs reasoning |
 | `tests/` | Unit tests (`python3 -m unittest discover -s tests`) |
@@ -66,7 +70,7 @@ command Claude issues (in any project, while the plugin is enabled) and:
 - **asks the user**: `tofu apply` without a saved plan or whose plan deletes/replaces, destroy,
   state edits, imports, `qm`/`pct`/`pvesh`/`ha-manager`/`pvesm` writes, ZFS destroy, Proxmox API
   writes, reboots/shutdowns, patch/upgrade playbooks outside `--check`, `packer build -force`,
-  force-push, `curl | sh`, root or NSE nmap scans, creating/closing/commenting GitHub issues,
+  force-push, `curl | sh`, root or NSE nmap scans, reporting skill issues, other GitHub issue writes,
   GitHub API writes, labels, releases and repository settings; **denies** printing the `gh` token;
 - scans **scripts that a command executes** with the same rules, so generated scripts can't bypass it.
 
@@ -75,7 +79,7 @@ tokens and the user's review of plans remain the real boundaries.
 
 ## Requirements (checked by `check_env.py`)
 
-macOS with Homebrew: `opentofu`, `hashicorp/tap/packer`, `ansible`, `nmap`, `yq`, `jq`, git, `gh` (for GitHub issues);
+macOS with Homebrew: `opentofu`, `hashicorp/tap/packer`, `ansible`, `nmap`, `yq`, `jq`, git, `gh` (to report skill issues);
 an SSH agent with the homelab key; auto-login (unlocked login keychain).
 
 **macOS only (for now).** Secrets are read from the macOS login keychain (`security`), and setup,

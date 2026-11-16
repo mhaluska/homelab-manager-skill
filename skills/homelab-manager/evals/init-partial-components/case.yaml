@@ -1,6 +1,6 @@
 schema_version: "1.1"
 name: init-partial-components
 expected_outcome: |
-  Scaffolds only Proxmox/OpenTofu and Ansible (no packer/, no k8s hooks, no Windows vars), records components in homelab.yaml, derives the GitHub repository (example/homelab-infrastructure) from the git remote instead of asking blindly, asks only for the remaining values, verifies keychain access, and commits.
+  Scaffolds only Proxmox/OpenTofu and Ansible (no packer/, no k8s hooks, no Windows vars), records components in homelab.yaml, asks only for the remaining values, verifies keychain access, and commits.
 context:
   scaffold_script: place-files.sh

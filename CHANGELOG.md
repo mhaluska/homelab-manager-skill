@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.0 — 2026-11-16
+- `ISSUES.md` now tracks problems with **the skill itself** — a script that crashed or gave wrong
+  results, the guard blocking something legitimate (or letting something dangerous through), a template
+  that doesn't validate, wrong or missing instructions, setup trouble. *"Report skill issues"* sends
+  them to this plugin's GitHub repository (`issues.py report`): it comments on an existing matching
+  issue instead of duplicating, never creates labels, and redacts IP and MAC addresses, the site
+  domain, host and guest names, the user name, home path and secrets first. `--dry-run` shows the
+  exact text; the guard asks before anything is sent. Each entry gets an Environment section (plugin,
+  macOS and tool versions, components). `issues.report: false` keeps everything local.
+- Homelab problems (drift, audit findings, failed runs) are no longer tracked in a file: they are
+  reported in chat and in `discovery/drift.md` / `docs/security-audit-<date>.md`.
+- The homelab repo no longer gets a GitHub issue form; this repository has a *Problem with the skill* form.
+- Existing repos: the session-start hook says when a repo needs a one-time update, and
+  `init_repo.py --sync-managed` applies it after you agree — old ISSUES.md entries move to
+  `docs/issues-archive.md`, the `issues:` block in homelab.yaml, the ISSUES.md rule in CLAUDE.md and
+  README.md are updated, and the old plugin-managed issue form is removed (unless you edited it).
+- Setup no longer asks about issue tracking.
+
 ## 0.5.2 — 2026-11-16
 - Setup asks about components in two multi-select questions (core: Proxmox, Packer templates, Ansible,
   discovery; extras: Windows, appliances, Kubernetes), one checkbox per component — no more merged options

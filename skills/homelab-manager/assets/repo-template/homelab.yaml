@@ -96,10 +96,8 @@ discovery:
   ignore_unmanaged: []       # IPs you know about and don't want flagged (phones, TVs, …)
 
 issues:
-  file: ISSUES.md            # problems found by the skill are recorded here
-  github: true               # offer to report them as GitHub issues with gh
-  repo: ""                   # owner/name; empty = this repo's GitHub repository (from git remote)
-  labels: [homelab]
+  file: ISSUES.md            # problems with the homelab-manager skill itself (not the homelab)
+  report: true               # offer to report them to the plugin's GitHub repository (sanitised, asks first)
 
 git:
   branch: main

@@ -1,0 +1,51 @@
+# Same sections as ISSUES.md entries written by issues.py (skills/homelab-manager/assets/issue-template.md).
+name: Problem with the skill
+description: A script, the safety hook, a template, the instructions or the setup of homelab-manager did something wrong.
+title: "[kind] "
+labels: ["skill-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Claude can file these for you: say *"report skill issues"* in your homelab repo (it redacts host details).
+        **This repository is public: no secrets, IP addresses, host names or other details of your network.**
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What the skill did wrong — one or two sentences. Put the kind in the title (script, guard, instructions, setup, template).
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What you asked, and the commands or scripts that ran.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: Error message, wrong output or wrong decision.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Trimmed output or traceback, with host details removed.
+      render: shell
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Plugin version, macOS version, tool versions (tofu, packer, ansible, gh), enabled components.
+      placeholder: "homelab-manager 0.6.0 · macOS 26.1 · OpenTofu v1.10 · ansible core 2.19 · components: proxmox, ansible"
+  - type: textarea
+    id: fix
+    attributes:
+      label: Proposed fix
+      description: Optional — the change you'd suggest.

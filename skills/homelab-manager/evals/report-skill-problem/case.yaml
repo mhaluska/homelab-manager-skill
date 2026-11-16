@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: report-skill-problem
+expected_outcome: |
+  Treats the crash as a problem with the skill itself: adds it to ISSUES.md with issues.py add --kind script (Steps to reproduce, Actual, Evidence filled), runs issues.py report --dry-run, shows the sanitised text (dns01 and 10.0.10.5 redacted) and the target repository, and asks before sending anything to GitHub.
+context:
+  scaffold_script: place-files.sh

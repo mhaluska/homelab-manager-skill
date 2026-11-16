@@ -36,10 +36,10 @@ Read-only by default; report findings with severity and a proposed fix, change n
   shouldn't be (telnet, SMBv1, plain HTTP admin UIs).
 - **Mac Mini**: FileVault / auto-login trade-off (tell the user, don't change), firewall,
   macOS updates pending (`softwareupdate -l`), SSH agent keys.
-Write the report to `docs/security-audit-<date>.md`, add each finding to `ISSUES.md`
-(`issues.py add --area security --key audit:<check>:<host>`), offer to report the high-severity ones
-to GitHub, and commit. On a public repo, keep exploitable detail (IPs, versions with known holes)
-out of the issue text, or keep those findings in ISSUES.md only — ask the user.
+Write the report to `docs/security-audit-<date>.md` (findings by severity, each with evidence, fix and
+a verify command), summarise the high-severity ones in your reply, offer to fix them, and commit. The
+report is the record: findings are not tracked anywhere else, and never sent to GitHub — if the
+homelab repo is public, ask before committing exploitable detail (IPs, versions with known holes).
 
 ## Hard rules (also enforced by hooks/guard.py)
 

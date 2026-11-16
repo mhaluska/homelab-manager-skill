@@ -1,6 +1,0 @@
-schema_version: "1.1"
-name: track-problems
-expected_outcome: |
-  Records the real problems (VM 104 test-old not managed by OpenTofu; dns01 references template 9049 which no longer exists) as separate ISSUES.md entries via issues.py with severities and stable keys, shows what a GitHub issue would contain, and asks for confirmation before creating any GitHub issue.
-context:
-  scaffold_script: place-files.sh
