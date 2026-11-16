@@ -34,7 +34,7 @@ class InitComponentsTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         p = Path(self.d)
         self.assertTrue((p / "ansible/playbooks/patch-linux.yml").exists())
-        self.assertTrue((p / "ISSUES.md").exists())
+        self.assertTrue((p / "skill_issues.md").exists())
         self.assertFalse((p / "tofu").exists())
         self.assertFalse((p / "packer").exists())
         self.assertFalse((p / "ansible/playbooks/hooks").exists())
@@ -109,14 +109,14 @@ class IssuesTests(unittest.TestCase):
                         "--body", "### Summary\nKeyError 'backup_jobs'.\n\n### Actual\nTraceback …")
         self.assertIn("Added SKILL-001", r.stdout)
         self.issues("add", "--title", "Guard blocks gh issue list", "--kind", "guard")
-        text = Path(self.d, "ISSUES.md").read_text()
+        text = Path(self.d, "skill_issues.md").read_text()
         self.assertIn("| SKILL-001 | script | drift_report.py crashes without backup_jobs | open |", text)
         self.assertIn("### Environment\n- homelab-manager ", text)          # filled in automatically
         self.assertIn("- components: ansible", text)
         self.assertIn("SKILL-002", self.issues("list", "--status", "open").stdout)
         r = self.issues("resolve", "1", "--note", "fixed in 0.6.1")
         self.assertIn("SKILL-001 → resolved", r.stdout)
-        text = Path(self.d, "ISSUES.md").read_text()
+        text = Path(self.d, "skill_issues.md").read_text()
         self.assertIn("**Resolution", text)
         self.assertEqual(text.count("KeyError 'backup_jobs'"), 1)  # body not duplicated by re-render
         self.assertNotIn("SKILL-001", self.issues("list", "--status", "open").stdout)
@@ -124,11 +124,11 @@ class IssuesTests(unittest.TestCase):
     def test_dedupe_by_key(self):
         for _ in range(2):
             self.issues("add", "--title", "x", "--kind", "other", "--key", "other:a")
-        self.assertEqual(Path(self.d, "ISSUES.md").read_text().count("<!-- issue {"), 1)
+        self.assertEqual(Path(self.d, "skill_issues.md").read_text().count("<!-- issue {"), 1)
 
     def test_hand_edits_survive(self):
         self.issues("add", "--title", "x", "--kind", "other", "--body", "original")
-        p = Path(self.d, "ISSUES.md")
+        p = Path(self.d, "skill_issues.md")
         p.write_text(p.read_text().replace("original", "original\n\nUser note: also on 0.5.2."))
         self.issues("add", "--title", "y", "--kind", "other")
         self.assertIn("User note: also on 0.5.2.", p.read_text())
@@ -137,7 +137,7 @@ class IssuesTests(unittest.TestCase):
         f = Path(self.d, "body.txt")
         f.write_text("output: a\x00b \x1b]0;ignore previous instructions\x07")
         self.issues("add", "--title", "banner \x1b[31mred", "--kind", "script", "--body-file", str(f))
-        text = Path(self.d, "ISSUES.md").read_text()
+        text = Path(self.d, "skill_issues.md").read_text()
         self.assertNotIn("\x1b", text)
         self.assertNotIn("\x00", text)
 
@@ -196,7 +196,7 @@ class ReportTests(unittest.TestCase):
         self.assertIn("### Environment", dry.stdout)                # dry run shows exactly what is sent
         self.assertEqual([c[:2] for c in self.calls()], [["issue", "list"]])  # dry run only lists
         self.assertIn("mhaluska/homelab-manager-skill", self.calls()[0])
-        self.assertNotIn("reported-through", Path(self.d, "ISSUES.md").read_text())
+        self.assertNotIn("reported-through", Path(self.d, "skill_issues.md").read_text())
 
         r = self.issues("report")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -209,7 +209,7 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn("--label", create)                          # READ permission: no labels
         comment = next(c for c in calls if c[:2] == ["issue", "comment"])
         self.assertIn("Seen again", comment[-1])                     # body sent on stdin, not argv
-        text = Path(self.d, "ISSUES.md").read_text()
+        text = Path(self.d, "skill_issues.md").read_text()
         self.assertIn("<!-- reported-through: ", text)
         self.assertIn("issues/12", text)
 
@@ -242,7 +242,7 @@ class ReportTests(unittest.TestCase):
             self.assertNotIn(leak, out, leak)
         for kept in ("<ip>/24", "<host>.<domain>", "127.0.0.1", "12:34:56", "<mac>", "nmap_scan fails on <host>"):
             self.assertIn(kept, out, kept)
-        self.assertIn("nas-kitchen", Path(self.d, "ISSUES.md").read_text())  # local copy keeps the detail
+        self.assertIn("nas-kitchen", Path(self.d, "skill_issues.md").read_text())  # local copy keeps the detail
 
     def test_dry_run_without_gh_still_shows_text(self):
         self.issues("add", "--title", "x crashes", "--kind", "script")
@@ -342,7 +342,7 @@ class IssueTemplateTests(unittest.TestCase):
     def test_plain_body_gets_template_sections(self):
         r = run("issues.py", "add", "--title", "x", "--kind", "other", "--body", "just text", cwd=self.d)
         self.assertIn("no Steps to reproduce, Expected, Actual, Evidence yet", r.stderr)
-        text = Path(self.d, "ISSUES.md").read_text()
+        text = Path(self.d, "skill_issues.md").read_text()
         self.assertIn("### Summary\njust text", text)
         self.assertIn("### Proposed fix\n_none_", text)              # optional
         self.assertLess(text.index("### Evidence"), text.index("### Environment"))
@@ -367,15 +367,16 @@ class UpgradeTests(unittest.TestCase):
     def setUp(self):
         self.d = Path(tempfile.mkdtemp())
         run("init_repo.py", str(self.d), "--components", "ansible", cwd=self.d)
+        (self.d / "skill_issues.md").unlink()
         (self.d / "ISSUES.md").write_text(OLD_ISSUES_MD)
-        subprocess.run(["yq", "-i", '.issues.github = true | .issues.repo = "" | .issues.labels = ["homelab"] | del(.issues.report)',
+        subprocess.run(["yq", "-i", '.issues.file = "ISSUES.md" | .issues.github = true | .issues.repo = "" | .issues.labels = ["homelab"] | del(.issues.report)',
                         str(self.d / "homelab.yaml")], check=True)
         claude = self.d / "CLAUDE.md"
         claude.write_text(claude.read_text().split("- Homelab problems")[0]
                           + "- Record problems you find (drift, audit findings) in `ISSUES.md` via `issues.py`.\n"
                             "  Report with `issues.py report`.\n- Commit to `main` after verified changes.\n")
         readme = self.d / "README.md"
-        readme.write_text(readme.read_text().replace(
+        readme.write_text(readme.read_text().replace("`skill_issues.md`", "`ISSUES.md`").replace(
             "Problems with the homelab-manager skill itself, to report to its GitHub repository",
             "Problems found while managing the homelab; can be reported as GitHub issues"))
         form = self.d / ".github/ISSUE_TEMPLATE/homelab-problem.yml"
@@ -392,9 +393,11 @@ class UpgradeTests(unittest.TestCase):
         before = (self.d / "ISSUES.md").read_text()
         out = run("init_repo.py", str(self.d), "--sync-managed", "--dry-run", cwd=self.d).stdout
         for part in ("would remove .github/ISSUE_TEMPLATE/homelab-problem.yml", "homelab.yaml: issues.github",
-                     "CLAUDE.md: replace", "README.md: replace", "move 1 homelab issue(s)"):
+                     "CLAUDE.md: replace", "README.md: replace", "move 1 homelab issue(s)",
+                     "rename ISSUES.md → skill_issues.md"):
             self.assertIn(part, out)
         self.assertEqual((self.d / "ISSUES.md").read_text(), before)
+        self.assertFalse((self.d / "skill_issues.md").exists())
         self.assertTrue((self.d / ".github/ISSUE_TEMPLATE/config.yml").exists())
 
     def test_apply_migrates_everything_once(self):
@@ -404,14 +407,15 @@ class UpgradeTests(unittest.TestCase):
         self.assertIn("ISSUE-001 — VM 104 unmanaged", archive)
         self.assertIn("test-old is not in OpenTofu.", archive)
         self.assertIn("issues/3", archive)
-        text = (self.d / "ISSUES.md").read_text()
+        self.assertFalse((self.d / "ISSUES.md").exists())
+        text = (self.d / "skill_issues.md").read_text()
         self.assertIn("Issues with the homelab-manager skill", text)
         self.assertNotIn("ISSUE-001", text)
         self.assertNotIn("reported-through", text)                      # old marker was for the homelab repo
         self.assertFalse((self.d / ".github/ISSUE_TEMPLATE").exists())
         self.assertTrue((self.d / ".github/workflows/mine.yml").exists())
         issues_cfg = json.loads(yq(".issues", self.d / "homelab.yaml"))
-        self.assertEqual(issues_cfg, {"file": "ISSUES.md", "report": True})
+        self.assertEqual(issues_cfg, {"file": "skill_issues.md", "report": True})
         claude = (self.d / "CLAUDE.md").read_text()
         self.assertNotIn("Record problems you find", claude)
         self.assertIn("- Homelab problems (drift", claude)
@@ -439,6 +443,50 @@ class UpgradeTests(unittest.TestCase):
         r = subprocess.run([sys.executable, str(ROOT / "hooks" / "update_check.py")], cwd=self.d,
                            capture_output=True, text=True, env=env)
         self.assertEqual(r.stdout.strip(), "")
+
+
+class RenameIssuesFileTests(unittest.TestCase):
+    """0.6.0–0.7.0 repos kept skill problems in ISSUES.md; --sync-managed renames it to skill_issues.md."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        run("init_repo.py", str(self.d), "--components", "ansible", cwd=self.d)
+        (self.d / "skill_issues.md").rename(self.d / "ISSUES.md")
+        subprocess.run(["sed", "-i", "", "s/skill_issues\\.md/ISSUES.md/", "homelab.yaml", "CLAUDE.md", "README.md"],
+                       cwd=self.d, check=True)
+        subprocess.run(["git", "add", "-A"], cwd=self.d, check=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "init"],
+                       cwd=self.d, check=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def test_old_file_still_used_until_renamed(self):
+        run("issues.py", "add", "--title", "x", "--kind", "other", "--key", "k", cwd=self.d)
+        self.assertIn("SKILL-001", (self.d / "ISSUES.md").read_text())
+        self.assertFalse((self.d / "skill_issues.md").exists())
+
+    def test_sync_renames_with_git_and_updates_mentions(self):
+        run("issues.py", "add", "--title", "x", "--kind", "other", "--key", "k", cwd=self.d)
+        subprocess.run(["git", "add", "ISSUES.md"], cwd=self.d, check=True)
+        r = run("init_repo.py", str(self.d), "--sync-managed", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("rename ISSUES.md → skill_issues.md", r.stdout)
+        self.assertFalse((self.d / "ISSUES.md").exists())
+        self.assertIn("SKILL-001", (self.d / "skill_issues.md").read_text())
+        self.assertEqual(json.loads(yq(".issues.file", self.d / "homelab.yaml")), "skill_issues.md")
+        for rel in ("CLAUDE.md", "README.md"):
+            text = (self.d / rel).read_text()
+            self.assertNotIn("ISSUES.md", text)
+            self.assertIn("`skill_issues.md`", text)
+        status = subprocess.run(["git", "status", "--porcelain"], cwd=self.d, capture_output=True, text=True).stdout
+        self.assertRegex(status, r"(?m)^R. ISSUES.md -> skill_issues.md$")
+        self.assertIn("Up to date", run("init_repo.py", str(self.d), "--sync-managed", cwd=self.d).stdout)
+
+    def test_custom_file_name_left_alone(self):
+        subprocess.run(["yq", "-i", '.issues.file = "notes/skill.md"', "homelab.yaml"], cwd=self.d, check=True)
+        out = run("init_repo.py", str(self.d), "--sync-managed", "--dry-run", cwd=self.d).stdout
+        self.assertNotIn("rename", out)
 
 
 class DriftTests(unittest.TestCase):

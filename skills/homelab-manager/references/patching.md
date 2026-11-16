@@ -58,4 +58,4 @@ host's state (package manager lock? broken dependency? service down?), and propo
 Never retry a cluster member's reboot loop more than once without the user.
 List failed, skipped and unreachable hosts in your report (and in `discovery/updates.json` for
 check-updates); the next run picks them up again. A playbook or hook of the skill that is itself
-broken is a skill problem for `ISSUES.md` (SKILL.md §6).
+broken is a skill problem for `skill_issues.md` (SKILL.md §6).

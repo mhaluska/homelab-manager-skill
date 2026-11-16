@@ -35,7 +35,7 @@ access, and asks for the configuration it can't discover. Parts can be enabled l
 Problems in your homelab (drift, audit findings, failed runs) are reported in chat and in
 `discovery/drift.md` / `docs/security-audit-<date>.md`. Problems with **the skill itself** (a script
 that crashes, the safety hook blocking something legitimate, wrong instructions, a template that
-doesn't validate) are noted in `ISSUES.md` of your homelab repo; say *"report skill issues"* and
+doesn't validate) are noted in `skill_issues.md` of your homelab repo; say *"report skill issues"* and
 Claude sends them to [this repository's issues](https://github.com/mhaluska/homelab-manager-skill/issues)
 with `gh`. Before anything is sent it redacts IPs, MACs, your domain, host and guest names, user
 name and secrets, checks for an existing issue to comment on instead of duplicating, and shows you
@@ -53,7 +53,7 @@ OpenTofu state never goes into Git: by default it is a file on the Mac outside t
 | `skills/homelab-manager/scripts/` | Stdlib-only Python helpers (inventory, scans, drift, secrets wrapper, env check, repo init) |
 | `skills/homelab-manager/assets/repo-template/` | Scaffold for the `homelab-infrastructure` repository |
 | `hooks/guard.py` | PreToolUse hook enforcing the hard safety rules |
-| `hooks/skill_problem.py` | PostToolUse hook: when a bundled script crashes or fails, reminds Claude to note it in `ISSUES.md` right away |
+| `hooks/skill_problem.py` | PostToolUse hook: when a bundled script crashes or fails, reminds Claude to note it in `skill_issues.md` right away |
 | `hooks/update_check.py` | SessionStart hook: at most once a day, checks the Git remote for a newer `vX.Y.Z` tag and tells you; flags homelab repos that need a one-time update after a plugin upgrade |
 | `agents/homelab-runner.md` | Subagent on the latest **Haiku** for fully specified commands/scripts |
 | `agents/homelab-analyst.md` | Subagent on the latest **Sonnet** for delegated work that needs reasoning |

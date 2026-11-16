@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Problems with the homelab-manager skill itself: kept in ISSUES.md, reported to the plugin's GitHub repository.
+"""Problems with the homelab-manager skill itself: kept in skill_issues.md, reported to the plugin's GitHub repository.
 
     issues.py add --title T --kind script|guard|instructions|setup|template|other
                   [--body-file F | --body TEXT] [--key K]
@@ -121,8 +121,15 @@ def read_marker(path: Path) -> str | None:
     return None
 
 
+FILE = "skill_issues.md"
+LEGACY_FILE = "ISSUES.md"   # until 0.7.0; init_repo.py --sync-managed renames it
+
+
 def issues_path(cfg) -> Path:
-    return Path(cfg["_root"]) / (hmlib.get(cfg, "issues.file") or "ISSUES.md")
+    root = Path(cfg["_root"])
+    if hmlib.get(cfg, "issues.file"):
+        return root / hmlib.get(cfg, "issues.file")
+    return root / LEGACY_FILE if (root / LEGACY_FILE).exists() and not (root / FILE).exists() else root / FILE
 
 
 def load(path: Path) -> list[dict]:
@@ -187,7 +194,7 @@ def find(items, ident: str) -> dict:
     for i in items:
         if i["id"] == ident:
             return i
-    raise SystemExit(f"{ident} not found in ISSUES.md")
+    raise SystemExit(f"{ident} not found in the skill issues file")
 
 
 def sections(body: str) -> dict[str, str]:
@@ -543,7 +550,7 @@ def cmd_report(a, cfg):
                 print("  body:\n" + indent(issue_body(i, cfg)))
     if a.dry_run:
         print("\nDry run — nothing sent. Read the text above: anything still site-specific? Edit the issue in "
-              "ISSUES.md and re-run. Override matches with --match ID=NUMBER or --new ID.")
+              "skill_issues.md and re-run. Override matches with --match ID=NUMBER or --new ID.")
         return 0
     failed = []
     for st in plan:
@@ -602,7 +609,7 @@ def migrate(root: Path, dry_run: bool) -> list[str]:
         cfg = hmlib.load_config(root)
         path = issues_path(cfg)
     except hmlib.ConfigError:
-        path = Path(root) / "ISSUES.md"
+        path = Path(root) / (LEGACY_FILE if (Path(root) / LEGACY_FILE).exists() else FILE)
     if not path.exists():
         return []
     items = load(path)
@@ -629,7 +636,7 @@ def migrate(root: Path, dry_run: bool) -> list[str]:
 
 def cmd_migrate(a, cfg):
     msgs = migrate(Path(cfg["_root"]), a.dry_run)
-    print("\n".join(("would " if a.dry_run else "") + m for m in msgs) or "ISSUES.md is already in the current format.")
+    print("\n".join(("would " if a.dry_run else "") + m for m in msgs) or "skill_issues.md is already in the current format.")
     return 0
 
 

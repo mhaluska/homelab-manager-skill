@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0 — 2026-11-16
+- `ISSUES.md` is now **`skill_issues.md`**: the old name looked like the homelab repo's own issue list,
+  but the file only holds problems with the homelab-manager skill. New repos get the new name.
+- Existing repos: the session-start hook offers the one-time update, and `init_repo.py --sync-managed`
+  renames the file (`git mv` when it is tracked, so its history follows), sets `issues.file`, and
+  updates the mentions in the repo's CLAUDE.md and README.md. A custom `issues.file` is left alone.
+  Until then `issues.py` keeps using the old `ISSUES.md`.
+
 ## 0.7.0 — 2026-11-16
 - New `config_set.py` edits `homelab.yaml` without reflowing it (#1): `yq -i` rewrote the whole file —
   blank lines and comment alignment were lost, and `authorized_ranges: [] # e.g. …` became a block list

@@ -6,7 +6,7 @@ with the `homelab-manager` plugin.
 | Path | Purpose |
 |---|---|
 | `homelab.yaml` | Site configuration: enabled components, networks, Proxmox endpoint, defaults, keychain item names |
-| `ISSUES.md` | Problems with the homelab-manager skill itself, to report to its GitHub repository |
+| `skill_issues.md` | Problems with the homelab-manager skill itself, to report to its GitHub repository |
 | `discovery/` | Generated snapshots: `proxmox.json`, `network.json`, `updates.json`, `drift.md` |
 | `packer/` | VM template builds (official cloud images → versioned templates) |
 | `tofu/` | OpenTofu modules and environments (state on the Mac outside the repo, or in an S3 bucket — never in Git) |

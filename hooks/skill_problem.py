@@ -3,7 +3,7 @@
 
 When a Bash command that ran one of this skill's scripts ($HM/scripts/*.py) crashed with a
 Python traceback, or exited non-zero, this adds a reminder to Claude's context to note it in
-ISSUES.md (`issues.py add`) in the same turn — so skill problems are logged when they happen,
+skill_issues.md (`issues.py add`) in the same turn — so skill problems are logged when they happen,
 not only when the user asks. A plain non-zero exit is often the homelab or the input
 (unreachable host, refused scan), so that reminder asks Claude to judge; a traceback is always
 a skill bug. Never blocks anything; any error → silent.

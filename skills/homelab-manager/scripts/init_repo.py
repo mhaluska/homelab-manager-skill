@@ -49,7 +49,7 @@ COMPONENTS = {
                    ["ansible/inventory/managed/group_vars/appliances.yml"]),
     "kubernetes": ("Kubernetes clusters (rolling patching with drain/uncordon)", ["ansible"], ["ansible/playbooks/hooks/"]),
 }
-CORE = ["homelab.yaml", "README.md", "CLAUDE.md", "ISSUES.md", ".gitignore", ".claude/", "docs/README.md",
+CORE = ["homelab.yaml", "README.md", "CLAUDE.md", "skill_issues.md", ".gitignore", ".claude/", "docs/README.md",
         "docs/decisions.md", "scripts/", "discovery/"]
 # Owned by the plugin: kept identical to the template by --sync-managed (headers say so). None at the moment.
 MANAGED: list[str] = []
@@ -59,6 +59,7 @@ MANAGED_MARK = "Managed by the homelab-manager plugin"
 OLD_CLAUDE_RULE = re.compile(r"^- Record problems you find.*?(?=^\S|\Z)", re.M | re.S)       # until 0.5.2
 NEW_CLAUDE_RULE = re.compile(r"^- Homelab problems .*?(?=^\S|\Z)", re.M | re.S)
 OLD_README_ROW = re.compile(r"^\| `ISSUES\.md` \| Problems found while managing the homelab.*$", re.M)  # until 0.5.2
+LEGACY_ISSUES, NEW_ISSUES = "ISSUES.md", "skill_issues.md"                                   # until 0.7.0
 OLD_ISSUES_KEYS = ("github", "repo", "labels")                                               # until 0.5.2
 
 
@@ -121,8 +122,8 @@ def upgrades(target: Path) -> list[tuple[str, callable]]:
             stale = []
         if stale:
             def fix_yaml(cfg=cfg):
-                f = subprocess.run(["yq", '.issues.file // "ISSUES.md"', str(cfg)],
-                                   capture_output=True, text=True).stdout.strip() or "ISSUES.md"
+                f = subprocess.run(["yq", '.issues.file // "skill_issues.md"', str(cfg)],
+                                   capture_output=True, text=True).stdout.strip() or "skill_issues.md"
                 config_set.edit_file(cfg, [("delete", f"issues.{k}") for k in OLD_ISSUES_KEYS] + [
                     ("set", "issues.file", f, "problems with the homelab-manager skill itself (not the homelab)"),
                     ("set", "issues.report", True,
@@ -131,18 +132,45 @@ def upgrades(target: Path) -> list[tuple[str, callable]]:
     for rel, what, rx, new in (
             ("CLAUDE.md", "rule", OLD_CLAUDE_RULE, lambda: _template_line("CLAUDE.md", NEW_CLAUDE_RULE)),
             ("README.md", "table row", OLD_README_ROW,
-             lambda: _template_line("README.md", re.compile(r"^\| `ISSUES\.md` \|.*$", re.M)))):
+             lambda: _template_line("README.md", re.compile(r"^\| `skill_issues\.md` \|.*$", re.M)))):
         f = target / rel
         if f.is_file() and rx.search(f.read_text()):
             def patch(f=f, rx=rx, new=new):
                 f.write_text(rx.sub(lambda m: new(), f.read_text(), count=1))
-            out.append((f"{rel}: replace the ISSUES.md {what} (ISSUES.md is now for problems with the skill)", patch))
+            out.append((f"{rel}: replace the issues {what} (the file is now for problems with the skill)", patch))
     sys.path.insert(0, str(HERE))
     import issues  # noqa: E402  (needs yq via hmlib only when homelab.yaml exists)
     msgs = issues.migrate(target, dry_run=True)
     if msgs:
         out.append(("; ".join(msgs), lambda: issues.migrate(target, dry_run=False)))
+    rename = rename_issues_file(target)
+    if rename:
+        out.append(rename)
     return out
+
+
+def rename_issues_file(target: Path):
+    """ISSUES.md → skill_issues.md (until 0.7.0): the old name read like the homelab's own issue list."""
+    old, new = target / LEGACY_ISSUES, target / NEW_ISSUES
+    cfg = target / "homelab.yaml"
+    if not old.is_file() or new.exists() or not cfg.exists():
+        return None
+    configured = subprocess.run(["yq", ".issues.file // \"\"", str(cfg)], capture_output=True, text=True).stdout.strip()
+    if configured not in ("", LEGACY_ISSUES):
+        return None                       # the user chose their own file name: leave it
+    def apply():
+        tracked = git("ls-files", "--error-unmatch", LEGACY_ISSUES, cwd=target).returncode == 0
+        if tracked:
+            git("mv", LEGACY_ISSUES, NEW_ISSUES, cwd=target)
+        else:
+            old.rename(new)
+        config_set.edit_file(cfg, [("set", "issues.file", NEW_ISSUES)])
+        for rel in ("CLAUDE.md", "README.md"):
+            f = target / rel
+            if f.is_file() and f"`{LEGACY_ISSUES}`" in f.read_text():
+                f.write_text(f.read_text().replace(f"`{LEGACY_ISSUES}`", f"`{NEW_ISSUES}`"))
+    return (f"rename {LEGACY_ISSUES} → {NEW_ISSUES} (the old name looked like the homelab's own issue list); "
+            f"update issues.file and the mentions in CLAUDE.md / README.md", apply)
 
 
 def sync_managed(target: Path, dry_run: bool) -> int:

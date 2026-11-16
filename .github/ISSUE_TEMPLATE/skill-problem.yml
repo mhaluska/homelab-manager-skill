@@ -1,4 +1,4 @@
-# Same sections as ISSUES.md entries written by issues.py (skills/homelab-manager/assets/issue-template.md).
+# Same sections as skill_issues.md entries written by issues.py (skills/homelab-manager/assets/issue-template.md).
 name: Problem with the skill
 description: A script, the safety hook, a template, the instructions or the setup of homelab-manager did something wrong.
 title: "[kind] "

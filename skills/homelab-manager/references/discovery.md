@@ -64,7 +64,7 @@ devices since the last scan (`first_seen` == `last_seen`).
    unknown network devices.
 5. The findings live in `discovery/drift.md` (regenerated each run) and your reply; they are not
    copied anywhere else. If `drift_report.py` itself misbehaved (crash, a guest wrongly flagged),
-   that is a skill problem: note it in `ISSUES.md` (SKILL.md §6).
+   that is a skill problem: note it in `skill_issues.md` (SKILL.md §6).
 6. Commit `discovery/drift.md` and refreshed snapshots with message `discovery: drift report <date>`.
 
 Never "fix" drift automatically: reality might be right and the code wrong.
