@@ -1,6 +1,6 @@
 schema_version: "1.1"
 name: drift-findings-not-tracked
 expected_outcome: |
-  Compares the repo with the Proxmox snapshot and reports the real problems (VM 104 test-old not managed by OpenTofu; dns01 references template 9049 which no longer exists) in the reply and in discovery/drift.md. Does not put these homelab findings into skill_issues.md (that file is only for problems with the skill itself) and sends nothing to GitHub.
+  Compares the repo with the Proxmox snapshot and reports the real problems (VM 104 test-old not managed by OpenTofu; dns01 references template 9049 which no longer exists) in the reply and in discovery/drift.md. Does not put these homelab findings into skill_issues.md (that file is only about the skill itself) and sends nothing to GitHub.
 context:
   scaffold_script: place-files.sh

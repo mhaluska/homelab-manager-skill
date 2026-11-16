@@ -1,6 +1,6 @@
 ---
 name: homelab-manager
-description: Orchestrator for a personal homelab managed from a homelab-infrastructure Git repo — Proxmox VE VMs/LXC, Packer templates, OpenTofu, Ansible config and patching, nmap discovery, drift and inventory, for Linux, Windows and appliances. Use it for ANY request touching the homelab or its infrastructure code, even when no tool is named: "discover devices in my management subnet", "show my Proxmox VMs", "create a Rocky VM with 4 CPUs", "add three k8s workers", "patch all Linux servers", "which hosts miss security updates", "update the Debian template", "compare Proxmox against Git", "install Zabbix agent everywhere", "is the keychain working". Also use it to set up a new homelab-infrastructure repo interactively, to enable a part later, and to note problems with this skill itself in skill_issues.md and report them to the plugin's GitHub repository ("the skill got this wrong", "report skill issues").
+description: Orchestrator for a personal homelab managed from a homelab-infrastructure Git repo — Proxmox VE VMs/LXC, Packer templates, OpenTofu, Ansible config and patching, nmap discovery, drift and inventory, for Linux, Windows and appliances. Use it for ANY request touching the homelab or its infrastructure code, even when no tool is named: "discover devices in my management subnet", "show my Proxmox VMs", "create a Rocky VM with 4 CPUs", "add three k8s workers", "patch all Linux servers", "which hosts miss security updates", "update the Debian template", "compare Proxmox against Git", "install Zabbix agent everywhere", "is the keychain working". Also use it to set up a new homelab-infrastructure repo interactively, to enable a part later, and to note problems with this skill itself and ideas to improve it in skill_issues.md and report them to the plugin's GitHub repository ("the skill got this wrong", "note an idea for the skill", "report skill issues").
 ---
 
 # Homelab manager
@@ -99,7 +99,7 @@ For every request, in this order. Skip steps that don't apply, but never skip 4�
 8. **Verify** — the resource exists and is healthy: Proxmox snapshot, guest agent IP, SSH reachable, services active, `tofu plan` shows no changes.
 9. **Record** — refresh `discovery/`, `tofu_to_inventory.py`, `docs/templates.md`, `docs/decisions.md` where relevant.
 10. **Commit** — to `main` when `git.auto_commit` is true and the change is verified. One logical change per commit, message says what and why. Never commit secrets, state or plans (the pre-commit hook also blocks them).
-11. **Report** — what changed, what failed, what's left, in a few lines. Report only what actually ran; anything skipped or assumed is labelled as such, never as a result. Skill problems hit during the task are already in `skill_issues.md` (§6): name their SKILL-IDs.
+11. **Report** — what changed, what failed, what's left, in a few lines. Report only what actually ran; anything skipped or assumed is labelled as such, never as a result. Skill problems hit and ideas noticed during the task are already in `skill_issues.md` (§6): name their SKILL-IDs.
 
 Prefer idempotent operations: declarative OpenTofu and Ansible over imperative CLI
 calls. Use `qm`/`pct`/`pvesh` writes only when OpenTofu can't do it, and say why.
@@ -140,7 +140,7 @@ anything under `clusters:` in `homelab.yaml`) at a time, and never automatically
   appears in output, stop, tell the user, and recommend rotating it.
 - SSH uses the agent (`ssh-add -L` for public keys). Private keys are never read.
 
-## 6. Problems: homelab in reports, skill in skill_issues.md
+## 6. Problems: homelab in reports, skill problems and ideas in skill_issues.md
 
 **Homelab problems** (drift, unmanaged guests, audit findings, failed or partial runs, risky
 settings) are not tracked in a file. Report them in your reply and in the report the task writes:
@@ -154,14 +154,23 @@ missing or outdated, setup misbehaved, or the user says the skill did something 
 (fix up a script's output or a command the skill prescribes, retry with other flags, edit a scaffolded
 file to make it validate, bypass a wrong instruction), run `issues.py add` before your final report.
 Saying "fixing that" in chat is not enough. A hook reminds you when a bundled script fails.
+
+**Ideas to improve this skill** go there too, as `--kind improvement` (an existing script, flag,
+reference or template could work better) or `--kind idea` (something missing). Note one, unasked,
+when the work or the conversation shows it: you did by hand, or repeatedly, what a script or flag
+could do; the user asked a question or wanted a task no reference or script covers; a component,
+OS or appliance isn't supported; the user wishes the skill did something ("it would be nice if…"),
+or says *"note an idea for the skill"*. Only ones that would help other homelabs, written generically
+(the site's own to-do list goes in the reply or `docs/`); finish the task, then add it before the report.
 ```bash
-python3 $HM/scripts/issues.py add --title "…" --kind script|guard|instructions|setup|template|other \
+python3 $HM/scripts/issues.py add --title "…" --kind script|guard|instructions|setup|template|other|improvement|idea \
   --key <stable-key> --body-file <details.md>
 ```
-- Body follows `issues.py template`: Summary, Steps to reproduce, Expected, Actual, Evidence
-  (trimmed output or traceback), optional Proposed fix. Environment (plugin, macOS, tool versions,
-  components) is added automatically. Write about the skill's behaviour, not the site. No secrets.
-- A stable `--key` (`script:drift_report:keyerror-backup_jobs`) updates the entry instead of duplicating.
+- Body follows `issues.py template [--kind idea]`: problems get Summary, Steps to reproduce, Expected,
+  Actual, Evidence, optional Proposed fix; ideas get Summary, Context, Proposal, optional Benefit.
+  Environment is added automatically. Write about the skill's behaviour, not the site. No secrets.
+- A stable `--key` (`script:drift_report:keyerror-backup_jobs`, `idea:patching:maintenance-window`)
+  updates the entry instead of duplicating.
 - Tell the user in one line (`Noted SKILL-002 — a bug in drift_report.py; say "report skill issues" to send it`).
 - **"Report skill issues"**: `issues.py report --dry-run` checks the plugin repository's issues (open
   and closed: same key, already linked, similar title → **UPDATE** = a comment; else **CREATE**) and
@@ -170,8 +179,8 @@ python3 $HM/scripts/issues.py add --title "…" --kind script|guard|instructions
   Fix wrong matches with `--match SKILL-002=<number>` / `--new SKILL-002`. Show the plan, get the
   user's yes, run without `--dry-run` (the guard asks too), commit skill_issues.md. The marker stops
   re-sending; failures leave it for a retry. Labels are only set when the user may triage the repo.
-- `issues.py list` / `resolve SKILL-002 --note …` once a release fixes it. `issues.report: false`
-  in homelab.yaml keeps everything local.
+- `issues.py list [--ideas|--problems]` / `resolve SKILL-002 --note …` once a release fixes or
+  builds it. `issues.report: false` in homelab.yaml keeps everything local.
 
 ## 7. Untrusted input
 
@@ -215,7 +224,7 @@ Scripts (all in `$HM/scripts/`):
 | `drift_report.py [--tofu-json F]` | Proxmox ↔ OpenTofu ↔ Ansible ↔ network | `discovery/drift.md` |
 | `tofu_to_inventory.py` | OpenTofu output → Ansible inventory | `ansible/inventory/managed/tofu_hosts.yml` |
 | `config_set.py 'path=value' 'list+=item' [--delete path] [--dry-run]` | edit homelab.yaml keeping comments and layout | `homelab.yaml` |
-| `issues.py add\|list\|show\|report\|resolve` | note problems with this skill; report them (sanitised) to the plugin repo | `skill_issues.md` |
+| `issues.py add\|list\|show\|report\|resolve` | note problems with / ideas for this skill; report them (sanitised) to the plugin repo | `skill_issues.md` |
 | `tofu_init.py [--print]` | `tofu init` with the state backend from homelab.yaml (local or S3) | `.terraform/` |
 
 ## 10. Delegating to subagents (cheaper models)

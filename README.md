@@ -41,6 +41,11 @@ with `gh`. Before anything is sent it redacts IPs, MACs, your domain, host and g
 name and secrets, checks for an existing issue to comment on instead of duplicating, and shows you
 the exact text. You can also open one by hand with the *Problem with the skill* form.
 
+The same file collects **ideas to improve the skill** (kinds `improvement` and `idea`): Claude notes
+one when it does by hand what a script could do, when you ask about or want something the skill
+doesn't cover, or when you say *"it would be nice if…"* / *"note an idea for the skill"*. They are
+written generically and reported the same way, or opened by hand with the *Idea for the skill* form.
+
 OpenTofu state never goes into Git: by default it is a file on the Mac outside the repository
 (`~/.local/share/homelab/tofu-state/`); setup can instead put it in any S3-compatible bucket (MinIO, Garage, AWS).
 

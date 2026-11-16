@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.0 — 2026-11-16
+- `skill_issues.md` now also collects **ideas to improve the skill**, as two new kinds: `improvement`
+  (an existing script, flag, reference or template could work better) and `idea` (something missing).
+  Claude notes one unasked when the work or the conversation shows it — a step done by hand that a
+  script could do, a question or task no reference covers, an unsupported component or appliance, or
+  the user's *"it would be nice if…"* / *"note an idea for the skill"* — written generically, never the
+  site's own to-do list. Ideas have their own sections (Summary, Context, Proposal, optional Benefit;
+  `issues.py template --kind idea`), are reported like problems (`[improvement]` / `[idea]` titles,
+  `enhancement` label when the reporter may triage), and `issues.py list --ideas|--problems` filters them.
+  This repository has a new *Idea for the skill* issue form.
+- Existing repos: `init_repo.py --sync-managed` (offered by the session-start hook) refreshes the
+  `skill_issues.md` header and updates the rule in CLAUDE.md and the row in README.md; entries are kept.
+
 ## 0.8.0 — 2026-11-16
 - `ISSUES.md` is now **`skill_issues.md`**: the old name looked like the homelab repo's own issue list,
   but the file only holds problems with the homelab-manager skill. New repos get the new name.

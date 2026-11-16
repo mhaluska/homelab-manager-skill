@@ -1,0 +1,43 @@
+# Same sections as idea entries in skill_issues.md written by issues.py (skills/homelab-manager/assets/idea-template.md).
+name: Idea for the skill
+description: Something homelab-manager could do better (improvement) or a feature it is missing (idea).
+title: "[idea] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Claude notes these as it works and can file them for you: say *"report skill issues"* in your homelab repo (it redacts host details).
+        **This repository is public: no secrets, IP addresses, host names or other details of your network.**
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What could work better, or what is missing — one or two sentences. Use `[improvement]` or `[idea]` in the title.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: How it came up — the task or question, and where the skill fell short.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What the skill could do (a script, a flag, a reference section, a template, a rule).
+    validations:
+      required: true
+  - type: textarea
+    id: benefit
+    attributes:
+      label: Benefit
+      description: Optional — who gains and how.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Plugin version, macOS version, enabled components.
+      placeholder: "homelab-manager 0.9.0 · macOS 26.1 · components: proxmox, ansible"

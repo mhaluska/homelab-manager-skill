@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Problems with the homelab-manager skill itself: kept in skill_issues.md, reported to the plugin's GitHub repository.
+"""Problems with the homelab-manager skill itself, and ideas to improve it: kept in skill_issues.md,
+reported to the plugin's GitHub repository.
 
-    issues.py add --title T --kind script|guard|instructions|setup|template|other
+    issues.py add --title T --kind script|guard|instructions|setup|template|other|improvement|idea
                   [--body-file F | --body TEXT] [--key K]
     issues.py list [--status open|reported|resolved|all]
     issues.py show SKILL-002
@@ -11,14 +12,17 @@
                                               # "reported through" marker so they aren't sent again
     issues.py resolve SKILL-002 [--note TEXT]
     issues.py reopen SKILL-002
-    issues.py template                        # the sections every issue body follows
-    issues.py migrate [--dry-run]             # repos set up before 0.6.0: move homelab entries to
-                                              # docs/issues-archive.md (init_repo.py --sync-managed runs it)
+    issues.py template [--kind K]             # the sections an entry's body follows (problem or idea)
+    issues.py migrate [--dry-run]             # older repos: move pre-0.6.0 homelab entries to
+                                              # docs/issues-archive.md, refresh the file's header
+                                              # (init_repo.py --sync-managed runs it)
 
 What belongs here: a bundled script crashed or gave wrong results, the guard hook blocked a
 legitimate command or let a dangerous one through, a template failed to validate, the skill's
 instructions were wrong, missing or outdated, the setup misbehaved, or the user says the skill
-did something wrong. Problems in the homelab (drift, audit findings, failed patch runs) are NOT
+did something wrong. Also ideas (kinds improvement / idea): an existing feature that could work
+better, or a missing one, noticed while working in the repo or from the user's questions and
+wishes — written generically, so they help any homelab. Problems in the homelab (drift, audit findings, failed patch runs) are NOT
 tracked here: they are reported in chat and in discovery/drift.md or docs/security-audit-<date>.md.
 
 The plugin repository is public. `report` sanitises everything it sends (IP and MAC addresses, the
@@ -45,16 +49,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hmlib  # noqa: E402
 
-KINDS = ("script", "guard", "instructions", "setup", "template", "other")
+PROBLEM_KINDS = ("script", "guard", "instructions", "setup", "template", "other")
+IDEA_KINDS = ("improvement", "idea")     # an existing feature could be better / a new one
+KINDS = PROBLEM_KINDS + IDEA_KINDS
 STATUSES = ("open", "reported", "resolved")
 META_RE = re.compile(r"^<!-- issue (\{.*\}) -->$")
 MARK_RE = re.compile(r"^<!-- reported-through: (\S+) -->$")
 KEY_RE = re.compile(r"<!-- hm-key: (\S+) -->")
 HEADING_RE = re.compile(r"^## (ISSUE|SKILL)-\d+ ")
-TEMPLATE = Path(__file__).resolve().parent.parent / "assets" / "issue-template.md"
+ASSETS = Path(__file__).resolve().parent.parent / "assets"
+TEMPLATE = ASSETS / "issue-template.md"
+IDEA_TEMPLATE = ASSETS / "idea-template.md"
 PLUGIN_JSON = hmlib.PLUGIN_ROOT / ".claude-plugin" / "plugin.json"
 SECTIONS = ["Summary", "Steps to reproduce", "Expected", "Actual", "Evidence", "Environment", "Proposed fix"]
 OPTIONAL = {"Proposed fix"}
+IDEA_SECTIONS = ["Summary", "Context", "Proposal", "Benefit", "Environment"]
+IDEA_OPTIONAL = {"Benefit"}
 TRIAGE = {"ADMIN", "MAINTAIN", "WRITE", "TRIAGE"}
 GH = os.environ.get("HM_GH", "gh")  # overridable for tests
 MATCH_THRESHOLD = 0.5
@@ -64,13 +74,16 @@ HEADER = """# Issues with the homelab-manager skill
 
 Problems with the **skill itself** — a script that crashed or gave wrong results, the safety hook
 blocking something legitimate (or letting something dangerous through), a template that doesn't
-validate, instructions that were wrong or missing, a setup step that misbehaved. They can be sent
-to the plugin's GitHub repository so they get fixed.
+validate, instructions that were wrong or missing, a setup step that misbehaved — and **ideas** to
+improve it (kinds `improvement` and `idea`): something that could work better, or a feature that
+was missing for a task or a question. They can be sent to the plugin's GitHub repository so they
+get fixed or built.
 
 Problems in the homelab (drift, audit findings, failed runs) are not tracked here: Claude reports
 them in chat and in `discovery/drift.md` / `docs/security-audit-<date>.md`.
 
-- Note one: *"the skill got X wrong, write it down"* — Claude adds it with `issues.py`.
+- Note one: *"the skill got X wrong, write it down"* or *"note an idea for the skill: …"* — Claude
+  adds it with `issues.py`; it also notes ones it finds itself and tells you.
 - Send new/changed ones: *"report skill issues"* — sanitised (no IPs, host names, user names,
   secrets), checked against existing GitHub issues first, shown to you before anything is sent.
 - Managed by `issues.py`; edit the text under an issue freely, keep the `<!-- issue … -->` lines.
@@ -210,18 +223,23 @@ def sections(body: str) -> dict[str, str]:
     return {k: "\n".join(v).strip() for k, v in out.items()}
 
 
-def structure(body: str, env: str | None = None) -> tuple[str, list[str]]:
+def is_idea(kind: str) -> bool:
+    return kind in IDEA_KINDS
+
+
+def structure(body: str, env: str | None = None, kind: str = "other") -> tuple[str, list[str]]:
     """Return the body in template order plus the required sections that had to be marked unknown."""
+    names, optional = (IDEA_SECTIONS, IDEA_OPTIONAL) if is_idea(kind) else (SECTIONS, OPTIONAL)
     sec = {k: ("" if v == "_No response_" else v) for k, v in sections(body).items()}
     if sec.get("") and "Summary" not in sec:
         sec["Summary"] = sec.pop("")
     if env is not None:
         sec["Environment"] = env
     lead = sec.pop("", "")
-    blank = [n for n in SECTIONS if n not in OPTIONAL and (not sec.get(n) or sec[n] == "_unknown_")]
+    blank = [n for n in names if n not in optional and (not sec.get(n) or sec[n] == "_unknown_")]
     parts = [lead] if lead else []
-    for n in SECTIONS + [k for k in sec if k not in SECTIONS]:
-        parts.append(f"### {n}\n{sec.get(n) or ('_none_' if n in OPTIONAL else '_unknown_')}")
+    for n in names + [k for k in sec if k not in names]:
+        parts.append(f"### {n}\n{sec.get(n) or ('_none_' if n in optional else '_unknown_')}")
     return "\n\n".join(parts), blank
 
 
@@ -349,7 +367,7 @@ def sanitize(text: str, cfg) -> str:
 # ---- commands ----
 
 def cmd_template(a, cfg=None):
-    print(TEMPLATE.read_text().rstrip())
+    print((IDEA_TEMPLATE if is_idea(a.kind or "") else TEMPLATE).read_text().rstrip())
     return 0
 
 
@@ -358,10 +376,11 @@ def cmd_add(a, cfg):
     items = load(path)
     body = Path(a.body_file).read_text() if a.body_file else (a.body or "")
     body = "\n".join(hmlib.clean(l, 500) for l in body.splitlines())
-    body, blank = structure(body, environment(cfg))
+    body, blank = structure(body, environment(cfg), a.kind)
     if blank:
         print(f"note: no {', '.join(blank)} yet — fill {'it' if len(blank) == 1 else 'them'} in "
-              "(issues.py template shows what goes where)", file=sys.stderr)
+              f"(issues.py template{' --kind ' + a.kind if is_idea(a.kind) else ''} shows what goes where)",
+              file=sys.stderr)
     if a.key:
         for i in items:
             if i.get("key") == a.key and i["status"] != "resolved":
@@ -384,9 +403,10 @@ def cmd_add(a, cfg):
 
 def cmd_list(a, cfg):
     items = load(issues_path(cfg))
-    sel = [i for i in items if a.status == "all" or i["status"] == a.status]
+    sel = [i for i in items if (a.status == "all" or i["status"] == a.status)
+           and (not a.ideas or is_idea(i.get("kind", ""))) and (not a.problems or not is_idea(i.get("kind", "")))]
     if not sel:
-        print("No issues." if a.status == "all" else f"No {a.status} issues.")
+        print("Nothing recorded." if a.status == "all" else f"No {a.status} entries.")
     for i in sel:
         print(f"{i['id']}  {i.get('kind', '?'):<12} {i['status']:<8} {i['title']}"
               + (f"  {i['github_url']}" if i.get("github_url") else ""))
@@ -430,7 +450,8 @@ def labels_to_use(i, repo, cfg) -> list[str]:
         have = {l["name"] for l in json.loads(r.stdout or "[]")} if r.returncode == 0 else set()
     except ValueError:
         have = set()
-    return [l for l in ("skill-report", f"kind:{i['kind']}") if l in have]
+    wanted = ("enhancement", f"kind:{i['kind']}") if is_idea(i.get("kind", "")) else ("skill-report", f"kind:{i['kind']}")
+    return [l for l in wanted if l in have]
 
 
 def create_issue(i, repo, cfg) -> str | None:
@@ -604,7 +625,7 @@ def render_archived(i: dict) -> str:
 
 
 def migrate(root: Path, dry_run: bool) -> list[str]:
-    """Homelab problems are no longer tracked: move old entries to docs/issues-archive.md, reset the header."""
+    """Homelab problems are no longer tracked: move old entries to docs/issues-archive.md; refresh an outdated header."""
     try:
         cfg = hmlib.load_config(root)
         path = issues_path(cfg)
@@ -614,11 +635,14 @@ def migrate(root: Path, dry_run: bool) -> list[str]:
         return []
     items = load(path)
     old = [i for i in items if "kind" not in i]
-    if not old and OLD_HEADER_MARK not in path.read_text():
+    text = path.read_text()
+    pre_06 = OLD_HEADER_MARK in text
+    if not old and not pre_06 and HEADER.strip() in text:
         return []
     rel = path.relative_to(root).as_posix()
     msgs = ([f"move {len(old)} homelab issue(s) from {rel} to {ARCHIVE} (homelab problems aren't tracked any more)"]
-            if old else []) + [f"{rel}: new header — it now tracks problems with the skill itself"]
+            if old else []) + [f"{rel}: new header — it now tracks problems with the skill itself" if pre_06 or old
+                               else f"{rel}: refresh the header (it now also collects ideas to improve the skill)"]
     if dry_run:
         return msgs
     if old:
@@ -647,13 +671,18 @@ def main():
     p.add_argument("--title", required=True)
     p.add_argument("--kind", choices=KINDS, required=True,
                    help="script: a bundled script failed · guard: hook blocked/allowed wrongly · instructions: "
-                        "SKILL.md/references wrong or missing · setup · template: scaffolded files don't work")
+                        "SKILL.md/references wrong or missing · setup · template: scaffolded files don't work · "
+                        "improvement: an existing feature could work better · idea: a missing feature")
     p.add_argument("--key", help="stable dedupe key, e.g. script:drift_report:keyerror-backup_jobs")
     p.add_argument("--body")
     p.add_argument("--body-file")
     p = sp.add_parser("list")
     p.add_argument("--status", choices=STATUSES + ("all",), default="all")
-    sp.add_parser("template")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--ideas", action="store_true", help="only improvements and ideas")
+    g.add_argument("--problems", action="store_true", help="only problems")
+    p = sp.add_parser("template")
+    p.add_argument("--kind", choices=KINDS)
     p = sp.add_parser("migrate")
     p.add_argument("--dry-run", action="store_true")
     p = sp.add_parser("report")

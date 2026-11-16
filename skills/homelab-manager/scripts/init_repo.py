@@ -59,6 +59,11 @@ MANAGED_MARK = "Managed by the homelab-manager plugin"
 OLD_CLAUDE_RULE = re.compile(r"^- Record problems you find.*?(?=^\S|\Z)", re.M | re.S)       # until 0.5.2
 NEW_CLAUDE_RULE = re.compile(r"^- Homelab problems .*?(?=^\S|\Z)", re.M | re.S)
 OLD_README_ROW = re.compile(r"^\| `ISSUES\.md` \| Problems found while managing the homelab.*$", re.M)  # until 0.5.2
+PREV_CLAUDE_RULE = re.compile(r"^- Homelab problems .*`skill_issues\.md` is only for problems with the\n.*?(?=^\S|\Z)",
+                              re.M | re.S)                                                  # 0.6.0–0.8.0
+PREV_README_ROW = re.compile(r"^\| `skill_issues\.md` \| Problems with the homelab-manager skill itself, "
+                             r"to report to its GitHub repository \|$", re.M)               # 0.6.0–0.8.0
+NEW_README_ROW = re.compile(r"^\| `skill_issues\.md` \|.*$", re.M)
 LEGACY_ISSUES, NEW_ISSUES = "ISSUES.md", "skill_issues.md"                                   # until 0.7.0
 OLD_ISSUES_KEYS = ("github", "repo", "labels")                                               # until 0.5.2
 
@@ -125,19 +130,24 @@ def upgrades(target: Path) -> list[tuple[str, callable]]:
                 f = subprocess.run(["yq", '.issues.file // "skill_issues.md"', str(cfg)],
                                    capture_output=True, text=True).stdout.strip() or "skill_issues.md"
                 config_set.edit_file(cfg, [("delete", f"issues.{k}") for k in OLD_ISSUES_KEYS] + [
-                    ("set", "issues.file", f, "problems with the homelab-manager skill itself (not the homelab)"),
+                    ("set", "issues.file", f, "problems with / ideas for the homelab-manager skill itself (not the homelab)"),
                     ("set", "issues.report", True,
                      "offer to report them to the plugin's GitHub repository (sanitised, asks first)")])
             out.append((f"homelab.yaml: issues.{', issues.'.join(stale)} → issues.report", fix_yaml))
-    for rel, what, rx, new in (
-            ("CLAUDE.md", "rule", OLD_CLAUDE_RULE, lambda: _template_line("CLAUDE.md", NEW_CLAUDE_RULE)),
-            ("README.md", "table row", OLD_README_ROW,
-             lambda: _template_line("README.md", re.compile(r"^\| `skill_issues\.md` \|.*$", re.M)))):
+    for rel, what, rx, new, why in (
+            ("CLAUDE.md", "rule", OLD_CLAUDE_RULE, lambda: _template_line("CLAUDE.md", NEW_CLAUDE_RULE),
+             "the file is now for problems with the skill"),
+            ("README.md", "table row", OLD_README_ROW, lambda: _template_line("README.md", NEW_README_ROW),
+             "the file is now for problems with the skill"),
+            ("CLAUDE.md", "rule", PREV_CLAUDE_RULE, lambda: _template_line("CLAUDE.md", NEW_CLAUDE_RULE),
+             "the file now also collects ideas to improve the skill"),
+            ("README.md", "table row", PREV_README_ROW, lambda: _template_line("README.md", NEW_README_ROW),
+             "the file now also collects ideas to improve the skill")):
         f = target / rel
         if f.is_file() and rx.search(f.read_text()):
             def patch(f=f, rx=rx, new=new):
                 f.write_text(rx.sub(lambda m: new(), f.read_text(), count=1))
-            out.append((f"{rel}: replace the issues {what} (the file is now for problems with the skill)", patch))
+            out.append((f"{rel}: replace the issues {what} ({why})", patch))
     sys.path.insert(0, str(HERE))
     import issues  # noqa: E402  (needs yq via hmlib only when homelab.yaml exists)
     msgs = issues.migrate(target, dry_run=True)

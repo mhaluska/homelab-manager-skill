@@ -121,6 +121,37 @@ class IssuesTests(unittest.TestCase):
         self.assertEqual(text.count("KeyError 'backup_jobs'"), 1)  # body not duplicated by re-render
         self.assertNotIn("SKILL-001", self.issues("list", "--status", "open").stdout)
 
+    def test_idea_kinds_use_their_own_sections(self):
+        r = self.issues("add", "--title", "Keep a dated history of drift reports", "--kind", "improvement",
+                        "--key", "idea:drift:history",
+                        "--body", "### Summary\nOnly the latest drift.md is kept.\n\n### Context\nWeekly checks.\n\n"
+                                  "### Proposal\nWrite discovery/drift-<date>.md too.")
+        self.assertIn("Added SKILL-001", r.stdout)
+        self.assertEqual(r.stderr, "")                                 # Benefit is optional: no nag
+        self.issues("add", "--title", "Support OPNsense backups", "--kind", "idea")
+        text = Path(self.d, "skill_issues.md").read_text()
+        self.assertIn("| SKILL-001 | improvement | Keep a dated history of drift reports | open |", text)
+        self.assertIn("### Context\nWeekly checks.\n\n### Proposal\nWrite", text)
+        self.assertIn("### Benefit\n_none_", text)
+        self.assertNotIn("Steps to reproduce", text.split("## SKILL-001")[1])
+        self.assertIn("### Proposal\n_unknown_", text.split("## SKILL-002")[1])
+        self.assertIn("ideas", text.split("| ID |")[0])               # header explains ideas are welcome
+        self.assertIn("--kind idea", self.issues("add", "--title", "z", "--kind", "idea").stderr)
+        ideas = self.issues("list", "--ideas").stdout
+        self.assertIn("SKILL-001", ideas)
+        self.assertIn("SKILL-002", ideas)
+        self.issues("add", "--title", "bug", "--kind", "script")
+        self.assertNotIn("SKILL-004", ideas)
+        problems = self.issues("list", "--problems").stdout
+        self.assertIn("SKILL-004", problems)
+        self.assertNotIn("SKILL-001", problems)
+
+    def test_template_per_kind(self):
+        self.assertIn("### Steps to reproduce", self.issues("template").stdout)
+        idea = self.issues("template", "--kind", "idea").stdout
+        self.assertIn("### Proposal", idea)
+        self.assertNotIn("Steps to reproduce", idea)
+
     def test_dedupe_by_key(self):
         for _ in range(2):
             self.issues("add", "--title", "x", "--kind", "other", "--key", "other:a")
@@ -154,7 +185,7 @@ if sys.argv[1:3] == ["issue", "list"]:
         {"number": 9, "title": "Something else", "state": "CLOSED", "url": "https://github.com/o/r/issues/9",
          "body": "<!-- hm-key: guard:gh-issue-list -->"}]))
 elif sys.argv[1:3] == ["label", "list"]:
-    print(json.dumps([{"name": "skill-report"}, {"name": "kind:template"}]))
+    print(json.dumps([{"name": "skill-report"}, {"name": "kind:template"}, {"name": "enhancement"}]))
 elif sys.argv[1:3] == ["issue", "create"]:
     print("https://github.com/o/r/issues/12")
 elif sys.argv[1:3] == ["repo", "view"]:
@@ -224,6 +255,13 @@ class ReportTests(unittest.TestCase):
         self.issues("report", env={**self.env, "FAKE_GH_PERM": "WRITE"})
         create = next(c for c in self.calls() if c[:2] == ["issue", "create"])
         self.assertEqual(create[create.index("--label") + 1], "skill-report,kind:template")
+
+    def test_idea_labels(self):
+        self.issues("add", "--title", "Dated drift history", "--kind", "improvement")
+        self.issues("report", env={**self.env, "FAKE_GH_PERM": "WRITE"})
+        create = next(c for c in self.calls() if c[:2] == ["issue", "create"])
+        self.assertEqual(create[create.index("--title") + 1], "[improvement] Dated drift history")
+        self.assertEqual(create[create.index("--label") + 1], "enhancement")  # kind:improvement doesn't exist
 
     def test_sanitised_before_sending(self):
         subprocess.run(["yq", "-i", '.site.domain = "lab.example.net" | .proxmox.endpoint = "https://pve7.lab.example.net:8006"',
@@ -376,9 +414,9 @@ class UpgradeTests(unittest.TestCase):
                           + "- Record problems you find (drift, audit findings) in `ISSUES.md` via `issues.py`.\n"
                             "  Report with `issues.py report`.\n- Commit to `main` after verified changes.\n")
         readme = self.d / "README.md"
-        readme.write_text(readme.read_text().replace("`skill_issues.md`", "`ISSUES.md`").replace(
-            "Problems with the homelab-manager skill itself, to report to its GitHub repository",
-            "Problems found while managing the homelab; can be reported as GitHub issues"))
+        row = next(l for l in readme.read_text().splitlines() if l.startswith("| `skill_issues.md`"))
+        readme.write_text(readme.read_text().replace(
+            row, "| `ISSUES.md` | Problems found while managing the homelab; can be reported as GitHub issues |"))
         form = self.d / ".github/ISSUE_TEMPLATE/homelab-problem.yml"
         form.parent.mkdir(parents=True)
         form.write_text("# Managed by the homelab-manager plugin — `init_repo.py --sync-managed` overwrites local edits.\nname: x\n")
@@ -487,6 +525,51 @@ class RenameIssuesFileTests(unittest.TestCase):
         subprocess.run(["yq", "-i", '.issues.file = "notes/skill.md"', "homelab.yaml"], cwd=self.d, check=True)
         out = run("init_repo.py", str(self.d), "--sync-managed", "--dry-run", cwd=self.d).stdout
         self.assertNotIn("rename", out)
+
+
+PREV_CLAUDE_RULE = """- Homelab problems (drift, audit findings, failed runs) are reported in chat and in `discovery/drift.md` /
+  `docs/security-audit-<date>.md`; they are not tracked in a file. `skill_issues.md` is only for problems with the
+  homelab-manager skill itself (script bugs, wrong instructions, guard false alarms), added with `issues.py`;
+  `issues.py report` sends them, sanitised and after the user's yes, to the plugin's GitHub repository.
+"""
+PREV_README_ROW = ("| `skill_issues.md` | Problems with the homelab-manager skill itself, "
+                   "to report to its GitHub repository |")
+
+
+class IdeasUpgradeTests(unittest.TestCase):
+    """0.6.0–0.8.0 repos say skill_issues.md is only for problems; --sync-managed adds the ideas wording."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        run("init_repo.py", str(self.d), "--components", "ansible", cwd=self.d)
+        run("issues.py", "add", "--title", "x", "--kind", "script", "--body", "### Summary\nkept", cwd=self.d)
+        claude, readme, issues_md = self.d / "CLAUDE.md", self.d / "README.md", self.d / "skill_issues.md"
+        rule = claude.read_text().split("- Homelab problems")[1].split("\n- ")[0]
+        claude.write_text(claude.read_text().replace("- Homelab problems" + rule + "\n", PREV_CLAUDE_RULE))
+        readme.write_text(readme.read_text().replace(
+            next(l for l in readme.read_text().splitlines() if l.startswith("| `skill_issues.md`")), PREV_README_ROW))
+        text = issues_md.read_text()
+        issues_md.write_text("# Issues with the homelab-manager skill\n\nOld header.\n\n" + text[text.index("| ID |"):])
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def test_sync_adds_ideas_wording_once(self):
+        out = run("init_repo.py", str(self.d), "--sync-managed", "--dry-run", cwd=self.d).stdout
+        for part in ("CLAUDE.md: replace the issues rule (the file now also collects ideas",
+                     "README.md: replace the issues table row (the file now also collects ideas",
+                     "skill_issues.md: refresh the header"):
+            self.assertIn(part, out)
+        r = run("init_repo.py", str(self.d), "--sync-managed", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        claude = (self.d / "CLAUDE.md").read_text()
+        self.assertIn("ideas to", claude)
+        self.assertIn("- Commit to `main`", claude)                     # following rule kept
+        self.assertIn("ideas to improve it", (self.d / "README.md").read_text())
+        text = (self.d / "skill_issues.md").read_text()
+        self.assertNotIn("Old header.", text)
+        self.assertIn("### Summary\nkept", text)                         # entries survive
+        self.assertIn("Up to date", run("init_repo.py", str(self.d), "--sync-managed", cwd=self.d).stdout)
 
 
 class DriftTests(unittest.TestCase):

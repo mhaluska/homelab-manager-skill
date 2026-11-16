@@ -1,0 +1,4 @@
+# Windows over OpenSSH (key from the SSH agent, no passwords in Git).
+ansible_connection: ssh
+ansible_shell_type: powershell
+ansible_become_method: runas

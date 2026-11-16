@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: note-skill-idea
+expected_outcome: |
+  Does the drift check and reports the findings (VM 104 test-old unmanaged; dns01 references the missing template 9049) in the reply and discovery/drift.md. Treats the user's wish as an idea for the skill: adds it to skill_issues.md with issues.py add --kind improvement or --kind idea (Summary, Context, Proposal), written generically without this site's host names or IPs, tells the user in one line with its SKILL-ID, and sends nothing to GitHub.
+context:
+  scaffold_script: place-files.sh

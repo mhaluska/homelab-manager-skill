@@ -88,5 +88,5 @@ components:
   appliances: false
   kubernetes: false
 issues:
-  file: skill_issues.md            # problems with the homelab-manager skill itself (not the homelab)
+  file: skill_issues.md            # problems with / ideas for the homelab-manager skill itself (not the homelab)
   report: true               # offer to report them to the plugin's GitHub repository (sanitised, asks first)
