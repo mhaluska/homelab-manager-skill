@@ -2,7 +2,7 @@
 
 ## 0.5.0 — 2026-11-16
 - Moved to GitHub: public repository `mhaluska/homelab-manager-skill`, install over HTTPS
-  (`/plugin marketplace add https://github.com/mhaluska/homelab-manager-skill.git`).
+  (`/plugin marketplace add mhaluska/homelab-manager-skill`).
 - Issues go to GitHub with `gh`: `issues.py open` / `report` create issues,
   comment on matching ones, and create missing `severity:*` / `area:*` labels. `check_env.py` checks `gh auth status`.
 - Guard: asks before `gh issue` writes, label/release/repo/secret changes and GitHub API writes; denies

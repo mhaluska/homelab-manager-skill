@@ -37,7 +37,7 @@ def main(argv):
         if have != version:
             raise SystemExit(f"plugin.json version {have} != tag {tag}")
     body = section((ROOT / "CHANGELOG.md").read_text(), version)
-    print(f"{body}\n\n---\n**Install**\n```\n/plugin marketplace add https://github.com/{REPO}.git\n"
+    print(f"{body}\n\n---\n**Install**\n```\n/plugin marketplace add {REPO}\n"
           f"/plugin install homelab-manager@homelab-manager-skill\n```\n"
           f"**Update**: `/plugin marketplace update homelab-manager-skill`")
     return 0
