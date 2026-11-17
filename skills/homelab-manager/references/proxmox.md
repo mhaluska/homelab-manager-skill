@@ -80,6 +80,34 @@ For guests listed as "Not managed by OpenTofu" in the drift report:
 Never import by recreating. If a guest can't be represented without replacement, leave it
 unmanaged and record why in `docs/decisions.md`.
 
+## Backup jobs
+
+drift_report.py lists guests "in no backup job" (from `/cluster/backup` in `discovery/proxmox.json`). Before
+changing anything, show the user the jobs (`jq .backup_jobs discovery/proxmox.json`: schedule, storage,
+`all`/`vmid`/`exclude`/`pool`) and ask which job each guest belongs in. Often the fix is an `all` job with
+`exclude`, or a pool job, rather than a longer VMID list.
+
+- **Declarative (preferred)**: `proxmox_backup_job` (bpg provider) in the environment's own file, e.g.
+  `tofu/environments/homelab/backup-jobs.tf`. Import the existing job first, so nothing is recreated:
+  ```hcl
+  import {
+    to = proxmox_backup_job.daily
+    id = "<job id>"          # backup_jobs[].id
+  }
+  resource "proxmox_backup_job" "daily" {
+    id       = "<job id>"
+    schedule = "<as now>"
+    storage  = "<as now>"
+    vmid     = ["101", "102"] # or all = true + exclude = [...], or pool = "..."
+    # copy every other setting the job has now (mode, compress, retention/prune_backups, notification)
+  }
+  ```
+  Plan until it shows `1 to import` and only the intended change, then approval and apply.
+- **Token rights**: editing a job needs `Datastore.Allocate` on the job's storage (plus `VM.Backup` on the
+  pool for pool jobs); the provisioning role doesn't have it, so the API answers 403. Offer the optional grant
+  in `docs/proxmox-tokens.md` ("Backup jobs") — the user runs it on a node — or the GUI instead:
+  Datacenter → Backup → the job → Edit → add the guests. Re-run `proxmox_inventory.py` and drift afterwards.
+
 ## Cloud-init and SSH keys
 
 Keys come from `defaults.ssh_public_keys` (agent public keys). Cloud-init user data only

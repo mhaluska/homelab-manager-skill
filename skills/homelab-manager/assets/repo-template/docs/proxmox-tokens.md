@@ -54,3 +54,18 @@ Keychain service: `homelab/proxmox-rw`.
 
 Narrow it further by granting the ACLs (user and token) on a pool (`/pool/homelab`) and specific
 storages instead of `/` once the layout is settled.
+
+### Backup jobs (optional)
+
+Only if the skill should manage vzdump backup jobs (`proxmox_backup_job`, adding unbacked guests the drift
+report finds). Creating or editing a job needs `Datastore.Allocate` on the job's storage: it also lets the token
+change or remove that storage's definition, so grant it on the backup storage only, never on `/`. An ACL on
+a more specific path replaces the role inherited from `/` there, so the role carries the provisioning
+storage rights too:
+```bash
+pveum role add HomelabBackupJobs -privs "Datastore.Allocate Datastore.AllocateSpace Datastore.AllocateTemplate Datastore.Audit"
+pveum acl modify /storage/<backup-storage> --users homelab@pve --roles HomelabBackupJobs
+pveum acl modify /storage/<backup-storage> --tokens 'homelab@pve!rw' --roles HomelabBackupJobs
+```
+Pool-based jobs also need `VM.Backup` on `/pool/<pool>`. Without this grant, edit jobs in the GUI
+(Datacenter → Backup).
