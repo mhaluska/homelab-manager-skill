@@ -1320,3 +1320,16 @@ class NmapInterfaceTests(unittest.TestCase):  # issue 18
         db = {"hosts": {"10.0.10.5": {}, "10.0.10.40": {}, "10.0.11.2": {}, "fe80::1": {}}}
         self.assertEqual(self.n.live_hosts(db, ["10.0.10.0/24"]), ["10.0.10.5", "10.0.10.40"])
         self.assertEqual(self.n.live_hosts(db, ["10.0.10.1-10"]), ["10.0.10.5"])
+
+    def test_merge_guesses_from_all_scans(self):  # issue 21
+        ports = [{"port": 22, "service": "ssh", "product": "OpenSSH Debian"},
+                 {"port": 3128, "service": "http", "product": "Proxmox VE spiceproxy"}]
+        svc = self.n.merge_host({}, {"ip": "10.0.10.2", "os": [], "ports": ports}, "services", "t1")
+        self.assertEqual(svc["device_type_guess"], "hypervisor")
+        os_scan = self.n.merge_host(svc, {"ip": "10.0.10.2", "os": [{"name": "Linux 6.x"}], "ports": ports}, "os", "t2")
+        self.assertEqual(os_scan["device_type_guess"], "hypervisor")
+        again = self.n.merge_host(os_scan, {"ip": "10.0.10.2", "os": [], "ports": ports[:1]}, "services", "t3")
+        self.assertEqual(again["os"], [{"name": "Linux 6.x"}])   # earlier OS evidence kept and used
+        ping = self.n.merge_host(os_scan, {"ip": "10.0.10.2", "os": [], "ports": []}, "ping", "t4")
+        self.assertEqual(ping["device_type_guess"], "hypervisor")
+        self.assertEqual(ping["first_seen"], "t1")

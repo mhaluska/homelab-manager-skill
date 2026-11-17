@@ -273,6 +273,16 @@ class DeviceGuessTests(unittest.TestCase):
         self.assertEqual(self.g({"vendor": None, "os": [], "hostnames": ["ilo-srv1.lan"], "ports": []}), "bmc")
 
 
+    def test_os_scan_keeps_hypervisor(self):  # GitHub issue #21
+        ports = [{"service": "ssh", "product": "OpenSSH 9.2p1 Debian"}, {"service": "rpcbind", "product": None},
+                 {"service": "http", "product": "Proxmox VE spiceproxy"}]
+        self.assertEqual(self.g({"vendor": None, "os": [], "ports": ports}), "hypervisor")
+        linux = [{"name": "Linux 5.0 - 6.2"}, {"name": "Linux 4.15"}]
+        self.assertEqual(self.g({"vendor": None, "os": linux, "ports": ports}), "hypervisor")
+        cups = [{"service": "ssh", "product": "OpenSSH"}, {"service": "ipp", "product": "CUPS 2.4"}]
+        self.assertEqual(self.g({"vendor": None, "os": linux, "ports": cups}), "linux")  # weak hints still lose
+
+
 class RedactTests(unittest.TestCase):
     def test_redact(self):
         s = "token=homelab@pve!rw=0123-abcd-secret"

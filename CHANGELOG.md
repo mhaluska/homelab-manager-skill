@@ -4,6 +4,10 @@
 - Fix ([#24](https://github.com/mhaluska/homelab-manager-skill/issues/24)): `issues.py add` with the key of an
   open entry now replaces its title, kind and body (the old title was kept) and says what changed; an `add`
   without a body keeps the recorded details and only refreshes Environment.
+- Fix ([#21](https://github.com/mhaluska/homelab-manager-skill/issues/21)): `nmap_scan.py --profile os` no longer
+  downgrades a `hypervisor` guess to `linux`. A product name that identifies the box (Proxmox, TrueNAS, iDRAC…)
+  wins over generic Linux evidence, and `device_type_guess` is recomputed from everything known about the host,
+  so a later scan never loses what an earlier one found. Re-run a scan to re-guess existing hosts.
 
 ## 0.12.4 — 2026-11-17
 - Fix ([#18](https://github.com/mhaluska/homelab-manager-skill/issues/18)): `nmap_scan.py --profile os` no longer
