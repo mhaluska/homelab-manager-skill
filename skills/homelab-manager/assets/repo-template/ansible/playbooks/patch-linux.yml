@@ -17,6 +17,7 @@
 # snapshot=true: first checks that every target can be snapshotted (pve_snapshot.py / lxd_snapshot.py check)
 # and refuses otherwise, before anything is snapshotted or patched; -e snapshot_missing=skip patches those
 # without one. Hosts with the host var lxd_host are LXD/Incus instances (e.g. on a NAS): lxd_snapshot.py.
+# Proxmox guests of another site (their site_<name> group, sites: in homelab.yaml) use that site's Proxmox.
 # Then a disk-only Proxmox snapshot of each guest (pve_snapshot.py create, name snapshot_name,
 # default prepatch-<date>) right before it is updated; the guest is the inventory short name or the host var
 # proxmox_vmid. Needs hm_scripts (the skill's scripts directory). Remove the snapshots after a successful run
@@ -57,23 +58,27 @@
     # LXD/Incus instances (host var lxd_host: their LXD/Incus host) are snapshotted with lxd_snapshot.py
     hm_lxd_hosts: "{{ ansible_play_hosts_all | map('extract', hostvars) | selectattr('lxd_host', 'defined')
                       | map(attribute='inventory_hostname') | list }}"
-    # the other hosts → guest for pve_snapshot.py (the host var proxmox_vmid, else the short name)
-    hm_snap_ids: >-
+    # the other hosts, per site (their site_<name> group; none = the default site '') → guest for
+    # pve_snapshot.py (the host var proxmox_vmid, else the short name): VMIDs are unique only within a site
+    hm_snap_by_site: >-
       {%- set out = {} -%}
       {%- for h in ansible_play_hosts_all if h not in hm_lxd_hosts -%}
-        {%- set _ = out.update({h: (hostvars[h].proxmox_vmid | default(hostvars[h].inventory_hostname_short)) | string}) -%}
+        {%- set st = hostvars[h].group_names | select('match', '^site_') | map('regex_replace', '^site_', '')
+                     | first | default('') -%}
+        {%- set _ = out.setdefault(st, {}).update(
+              {h: (hostvars[h].proxmox_vmid | default(hostvars[h].inventory_hostname_short)) | string}) -%}
       {%- endfor -%}
       {{ out }}
     # inventory host → why it can't be snapshotted
     hm_snap_bad: >-
       {%- set out = {} -%}
-      {%- if hm_snap_check.stdout is defined -%}
-        {%- set r = hm_snap_check.stdout | from_json -%}
+      {%- for res in hm_snap_check.results | default([]) if res.stdout is defined -%}
+        {%- set r = res.stdout | from_json -%}
         {%- set why = r.not_a_guest | combine(r.no_snapshot) -%}
-        {%- for h, id in hm_snap_ids.items() if id in why -%}
-          {%- set _ = out.update({h: why[id]}) -%}
+        {%- for h, id in hm_snap_by_site[res.item].items() if id in why -%}
+          {%- set _ = out.update({h: (res.item ~ ': ' if res.item else '') ~ why[id]}) -%}
         {%- endfor -%}
-      {%- endif -%}
+      {%- endfor -%}
       {%- if hm_lxd_check.stdout is defined -%}
         {%- set r = hm_lxd_check.stdout | from_json -%}
         {%- set _ = out.update(r.not_a_guest | combine(r.no_snapshot)) -%}
@@ -110,17 +115,20 @@
       run_once: true
       when: snapshot | default(false) | bool
 
-    - name: snapshot=true — can every target be snapshotted? (pve_snapshot.py check, read-only)
+    - name: snapshot=true — can every Proxmox guest be snapshotted? (pve_snapshot.py check per site, read-only)
       ansible.builtin.command:
-        argv: "{{ ['python3', hm_scripts ~ '/pve_snapshot.py', 'check', '--json'] + hm_snap_ids.values() | unique }}"
+        argv: >-
+          {{ ['python3', hm_scripts ~ '/pve_snapshot.py', 'check', '--json'] + (['--site', item] if item else [])
+             + hm_snap_by_site[item].values() | unique }}
         chdir: "{{ playbook_dir }}/../.."
+      loop: "{{ hm_snap_by_site.keys() | list }}"
       register: hm_snap_check
       failed_when: hm_snap_check.rc not in [0, 1]
       changed_when: false
       check_mode: false
       delegate_to: localhost
       run_once: true
-      when: snapshot | default(false) | bool and hm_snap_ids | length > 0
+      when: snapshot | default(false) | bool
 
     - name: snapshot=true — can every LXD/Incus instance be snapshotted? (lxd_snapshot.py check, read-only)
       ansible.builtin.command:
@@ -249,9 +257,12 @@
       ansible.builtin.command:
         argv: >-
           {{ (['python3', hm_scripts ~ '/lxd_snapshot.py', 'create', inventory_hostname] if lxd_host is defined
-              else ['python3', hm_scripts ~ '/pve_snapshot.py', 'create', (proxmox_vmid | default(inventory_hostname_short)) | string])
+              else ['python3', hm_scripts ~ '/pve_snapshot.py', 'create', (proxmox_vmid | default(inventory_hostname_short)) | string]
+                   + (['--site', hm_site] if hm_site else []))
              + ['--name', snapshot_name] }}
         chdir: "{{ playbook_dir }}/../.."
+      vars:
+        hm_site: "{{ group_names | select('match', '^site_') | map('regex_replace', '^site_', '') | first | default('') }}"
       delegate_to: localhost
       become: false
       changed_when: "'done' in snap.stdout"
