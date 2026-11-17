@@ -19,7 +19,9 @@ counts; the play's last task lists them. They are findings too: report them in t
 
 1. Fresh `check-updates.yml` → who actually needs patches. Skip hosts with nothing pending.
 2. Group the targets:
-   - **Independent hosts** — can go in parallel batches (`-e patch_serial=25%`).
+   - **Independent hosts** — in parallel batches of `ansible.patch_serial` (homelab.yaml; new repos 5,
+     unset = 1); `-e patch_serial=<n|n%>` overrides it for one run. The playbook forces 1 (and refuses a
+     larger `-e patch_serial`) for cluster members, `patch_requires_approval` hosts and runs with hooks.
    - **Cluster groups** (`clusters:` in homelab.yaml, plus anything obviously clustered:
      k8s, etcd, Galera/Patroni, Proxmox nodes) — separate run per cluster, `serial: 1`,
      with that cluster's `pre_hook`/`post_hook` from `homelab.yaml` (drain/uncordon, maintenance mode):
@@ -40,7 +42,8 @@ counts; the play's last task lists them. They are findings too: report them in t
      use "Patch Proxmox nodes" below, one node at a time, each node an explicit approval.
    - **Critical singletons** the user cares about (DNS, the Git server, the gateway): ask
      whether to include them, and patch them last.
-3. Plan for the user: hosts per batch, security-only or full, reboot policy.
+3. Plan for the user: the batch size (state it: the batch can't change mid-run without interrupting the
+   package manager), security-only or full, reboot policy.
    Reboots default **off** (`reboot=never`; `if_required` reboots when needed, `always` every host — old
    name `allow_reboot=true` = `if_required`); the run reports `reboot_pending` with the reason and
    `restart_pending`. Offer `-e restart_services=true` (restarts those services, except dbus and logind, when

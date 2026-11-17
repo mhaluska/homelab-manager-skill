@@ -5,7 +5,10 @@
 #       [-e snapshot=true -e hm_scripts=$HM/scripts] [-e autoremove=false] [-e purge=true]
 #       [-e pre_hook=… -e post_hook=… -e health_check=…] [-e order=vip_holder_last -e vip=<ip>]
 #
-# Safe defaults: one host at a time (serial 1), stop at the first failure, NO reboots.
+# Safe defaults: stop at the first failure, NO reboots. Batch size: -e patch_serial=<n|n%>, else
+# ansible.patch_serial in homelab.yaml, else 1. Always one host at a time (and a larger -e patch_serial is
+# refused) when a target is in a `clusters:` group, has patch_requires_approval, or the run has cluster
+# settings (pre_hook, post_hook, health_check, order).
 # reboot: never (default), if_required (old name: allow_reboot=true) or always (e.g. an app cluster that
 # should come back from a clean boot). A reboot is required for a newer kernel than the running one (also on
 # plain Debian, which has no /var/run/reboot-required), needs-restarting -r or the reboot-required flag.
@@ -35,11 +38,35 @@
   hosts: "{{ target | default('__no_target__') }}"
   gather_facts: false
   become: false
+  vars:
+    hm_site: >-
+      {{ (lookup('ansible.builtin.file', playbook_dir ~ '/../../homelab.yaml', errors='ignore') or '{}') | from_yaml or {} }}
+    hm_cluster_hosts: >-
+      {%- set out = [] -%}
+      {%- for c in hm_site.clusters | default([], true) if c.ansible_group | default('') in groups -%}
+        {%- set _ = out.extend(groups[c.ansible_group]) -%}
+      {%- endfor -%}
+      {{ out }}
+    hm_cluster_run: "{{ pre_hook is defined or post_hook is defined or health_check is defined or order is defined }}"
+    # hosts that must be patched one at a time: cluster members, guarded hosts, or any host of a cluster run
+    hm_one_at_a_time: >-
+      {{ ansible_play_hosts_all if hm_cluster_run | bool else
+         ansible_play_hosts_all | select('in', hm_cluster_hosts) | list
+         + (ansible_play_hosts_all | map('extract', hostvars) | selectattr('patch_requires_approval', 'defined')
+            | selectattr('patch_requires_approval') | map(attribute='inventory_hostname') | list) }}
   tasks:
     - name: Refuse to run without an explicit target
       ansible.builtin.assert:
         that: target is defined and target | length > 0
         fail_msg: "Pass -e target=<group or host>."
+      run_once: true
+
+    - name: Clusters are patched one host at a time
+      ansible.builtin.assert:
+        that: patch_serial is not defined or patch_serial | string == '1' or hm_one_at_a_time | length == 0
+        fail_msg: >-
+          patch_serial={{ patch_serial | default('') }} with cluster or guarded hosts ({{ hm_one_at_a_time | unique | join(', ') }}):
+          patch them in their own run with serial 1.
       run_once: true
 
     - name: order=vip_holder_last needs the VIP
@@ -59,7 +86,7 @@
     - name: Patch order
       ansible.builtin.add_host:
         name: "{{ item }}"
-        groups: hm_patch_order
+        groups: "{{ ['hm_patch_order'] + (['hm_one_at_a_time'] if item in hm_one_at_a_time else []) }}"
       loop: "{{ (ansible_play_hosts_all | reject('in', holders) | list) + holders }}"  # keeps inventory order
       vars:
         holders: >-
@@ -71,7 +98,11 @@
 
 - name: Patch Linux hosts
   hosts: hm_patch_order
-  serial: "{{ patch_serial | default(1) }}"
+  # hostvars aren't available here: the first play put one-at-a-time hosts into hm_one_at_a_time
+  serial: >-
+    {{ 1 if groups.hm_one_at_a_time | default([]) | length > 0
+       else patch_serial | default(((lookup('ansible.builtin.file', playbook_dir ~ '/../../homelab.yaml', errors='ignore')
+                                     or '{}') | from_yaml or {}).ansible.patch_serial | default(1, true), true) }}
   max_fail_percentage: 0
   any_errors_fatal: true
   become: true

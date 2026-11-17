@@ -83,6 +83,8 @@ opentofu:
 
 ansible:
   default_linux_group: linux
+  patch_serial: 5            # patch-linux.yml batch size for independent hosts (n or "25%");
+                             # clusters and patch_requires_approval hosts always go one at a time
 
 # Groups that must be changed one host at a time (patching, reboots, upgrades).
 clusters: []

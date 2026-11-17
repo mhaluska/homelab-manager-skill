@@ -157,6 +157,14 @@
       "when": {"component": "appliances", "file_missing": "ansible/playbooks/unifi-info.yml"},
       "text": "New read-only UniFi support (#33): a unifi inventory group (raw SSH only) and playbooks/unifi-info.yml reading the controller's Integration API into discovery/unifi.json. Device changes go through the controller.",
       "action": "If the user has UniFi devices: copy {template} and ansible/inventory/managed/group_vars/unifi.yml from the template, add a `unifi` child group under appliances in hosts.yml, then follow references/windows-appliances.md 'Controller-managed devices'."
+    },
+    {
+      "version": "0.17.0",
+      "id": "patch-serial",
+      "kind": "config",
+      "when": {"component": "ansible", "config_empty": "ansible.patch_serial"},
+      "text": "patch-linux.yml takes its batch size for independent hosts from ansible.patch_serial in homelab.yaml (#45); without it hosts are still patched one at a time. Cluster members and patch_requires_approval hosts always go one at a time.",
+      "action": "Ask the user how many independent hosts to patch at once (new repos use 5), then `python3 {HM}/scripts/config_set.py 'ansible.patch_serial=5'` with their value."
     }
   ]
 }
