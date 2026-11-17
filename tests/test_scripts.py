@@ -783,6 +783,19 @@ class GuestNetworkMappingTests(unittest.TestCase):
         self.assertEqual(inv.guest_ips(pve, vm(901), "lxc", {}, src)[0]["ip"], "10.0.10.53")
 
 
+    def test_details_keep_what_pins_a_guest_to_its_node(self):  # issue 23
+        sys.path.insert(0, str(SCRIPTS))
+        import proxmox_inventory as inv
+        conf = {"scsi0": "ceph:vm-1-disk-0,size=32G", "efidisk0": "local-zfs:vm-1-disk-1", "hostpci0": "0000:01:00",
+                "usb0": "host=1-2", "startup": "order=2,up=30", "onboot": 1, "description": "hi", "lock": "backup",
+                "unused0": "local-zfs:vm-1-disk-2", "tpmstate0": "local-zfs:vm-1-disk-3", "args": "-cpu host"}
+        out = inv.guest_config(conf)
+        for k in ("scsi0", "efidisk0", "hostpci0", "usb0", "startup", "onboot", "unused0", "tpmstate0"):
+            self.assertIn(k, out)
+        self.assertNotIn("lock", out)
+        self.assertNotIn("args", out)
+        self.assertEqual(out["description"], "[untrusted] hi")
+
     def test_no_guests_hint_names_narrow_acl(self):  # GitHub issue #14
         sys.path.insert(0, str(SCRIPTS))
         import proxmox_inventory as inv

@@ -151,6 +151,21 @@ def no_guests_hint(pve: "PVE") -> str | None:
     return None
 
 
+CONFIG_PREFIXES = ("net", "scsi", "virtio", "sata", "ide", "rootfs", "mp", "ipconfig",  # network, disks
+                   "efidisk", "tpmstate", "unused", "hostpci", "usb", "dev")       # + what pins a guest to its node
+CONFIG_KEYS = {"agent", "ostype", "ciuser", "sshkeys", "boot", "machine", "bios", "cores", "sockets", "memory",
+               "onboot", "startup", "description"}
+
+
+def guest_config(conf: dict) -> dict:
+    """The parts of a guest config the snapshot keeps: network, disks, passthrough devices, boot settings."""
+    out = {k: clean(v, 300) for k, v in conf.items()
+           if k.startswith(CONFIG_PREFIXES) or k in CONFIG_KEYS}
+    if "description" in out:
+        out["description"] = "[untrusted] " + out["description"]
+    return out
+
+
 def gib(b):
     return round((b or 0) / 1024**3, 1)
 
@@ -210,12 +225,7 @@ def collect(pve: PVE, details: bool) -> dict:
                 conf = pve.get(f"/nodes/{g['node']}/{kind}/{g['vmid']}/config") or {}
             except SystemExit:
                 continue
-            g["config"] = {k: clean(v, 300) for k, v in conf.items()
-                           if k.startswith(("net", "scsi", "virtio", "sata", "ide", "rootfs", "mp", "ipconfig"))
-                           or k in ("agent", "ostype", "ciuser", "sshkeys", "boot", "machine", "bios", "cores",
-                                    "sockets", "memory", "onboot", "description")}
-            if "description" in g["config"]:
-                g["config"]["description"] = "[untrusted] " + g["config"]["description"]
+            g["config"] = guest_config(conf)
             if g["status"] == "running":
                 g["ips"] = guest_ips(pve, g, kind, conf, ip_sources)
 
