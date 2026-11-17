@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.13.0 — 2026-11-17
+
 ## 0.12.4 — 2026-11-17
 - Fix ([#18](https://github.com/mhaluska/homelab-manager-skill/issues/18)): `nmap_scan.py --profile os` no longer
   ARP-sweeps through a local VM bridge whose router answers for every address. It scans from the interface
