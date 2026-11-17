@@ -1030,6 +1030,7 @@ class TokenAclTests(unittest.TestCase):
     def test_old_doc_gets_user_acls_once(self):
         text = self.doc.read_text()
         text = re.sub(r"\nOptional — VM IPs.*?\n```\n", "", text, flags=re.S)  # added in 0.11.0
+        text = re.sub(r"\n### Backup jobs \(optional\).*?\n```\n", "", text, flags=re.S)  # added in 0.17.0
         old = "\n".join(l for l in text.splitlines() if "--users" not in l) + "\n"
         old = old.split("Both tokens use privilege separation")[0].rstrip("\n") + "\n\n## " + old.split("\n## ", 1)[1]
         old = old.replace("/ --tokens 'homelab@pve!rw'", "/pool/lab --tokens 'homelab@pve!rw'")  # user-edited path

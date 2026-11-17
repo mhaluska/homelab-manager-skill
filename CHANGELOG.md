@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.17.0 — 2026-11-17
+- Patching batches ([#45](https://github.com/mhaluska/homelab-manager-skill/issues/45)): `patch-linux.yml` takes the batch size for independent hosts from new
+  `ansible.patch_serial` in homelab.yaml (new repos: 5; unset: 1), or `-e patch_serial`. Cluster members,
+  `patch_requires_approval` hosts and runs with hooks always go one at a time; a larger `-e patch_serial` is refused.
+- Old kernels ([#46](https://github.com/mhaluska/homelab-manager-skill/issues/46)): `patch-linux.yml` autoremoves (apt and dnf) after the reboot, when the old kernel is no
+  longer running (`-e autoremove=false` skips it); `-e purge=true` also purges configuration left by removed
+  Debian packages. `check-updates.yml` reports `autoremovable` and `config_leftovers`.
+- Fix ([#43](https://github.com/mhaluska/homelab-manager-skill/issues/43)): `check-updates.yml` writes failed and unreachable hosts to `discovery/updates.json` with `error`
+  and `last_ok_at`, and lists them at the end; Debian package lists are refreshed with `apt-get`, so archived
+  releases that can't install `python3-apt` still report.
+- Fix ([#41](https://github.com/mhaluska/homelab-manager-skill/issues/41)): `proxmox_inventory.py` stores backup job `vmid`/`exclude` as lists of IDs, no longer cut at 200
+  characters; `drift_report.py` warns about cut-off lists in older snapshots instead of reporting covered guests
+  as unbacked, and honours per-job `exclude` and pool jobs.
+- Backup jobs ([#42](https://github.com/mhaluska/homelab-manager-skill/issues/42)): references/proxmox.md "Backup jobs" (import the job as `proxmox_backup_job`, or the GUI);
+  `docs/proxmox-tokens.md` offers an optional `Datastore.Allocate` grant on the backup storage only. The drift
+  report points there.
+- Containers ([#40](https://github.com/mhaluska/homelab-manager-skill/issues/40)): new read-only `playbooks/docker-containers.yml` (Docker/Podman containers and Kubernetes
+  runtimes → `discovery/containers.json`). The drift report lists container addresses, also from hand-written
+  `discovery/<nas>-containers.json`, instead of calling them unmanaged; discovery.md covers NAS container hosts.
+- Fix ([#47](https://github.com/mhaluska/homelab-manager-skill/issues/47)): `issues.py report` no longer redacts plain words a site also uses as names ("storage", "host") in
+  running text, never redacts inside a placeholder (`<<host>>`), lists the plain words it redacted, and takes
+  `--keep WORD`.
+- Upgrade notes for the playbooks, `ansible.patch_serial` and the token doc: `init_repo.py --sync-managed`.
+
 ## 0.16.0 — 2026-11-17
 - Language: new `site.language` in homelab.yaml (setup asks, or takes the language the user writes in). Claude
   replies and writes docs, commit messages and new code comments in it; identifiers and plugin-managed files
