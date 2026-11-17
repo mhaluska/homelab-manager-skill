@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.21.0 — 2026-11-17
+- Sites, part 2 ([#52](https://github.com/mhaluska/homelab-manager-skill/issues/52)): provisioning and node patching at other sites.
+  - `init_repo.py --add-site N` scaffolds the site's OpenTofu environment `tofu/environments/N` (its own state)
+    and `group_vars/site_N.yml`. `with_secrets.py` sets `TF_VAR_proxmox_site` / `PKR_VAR_proxmox_site` from the
+    token's site, and a `site.tf` in each environment refuses a plan with another site's token.
+  - `tofu_init.py --site N`, `tofu_to_inventory.py --site N` (→ `tofu_hosts-N.yml`, hosts in `site_N`; another
+    environment no longer overwrites `tofu_hosts.yml`). A set `opentofu.local.path` / `opentofu.s3.key` must
+    contain `{env}` once there are several environments, so they never share a state.
+  - The drift report compares each site with its own state; `check_env.py` checks each site's environment.
+  - VMIDs: `--next-vmid … --site N` uses that site's snapshot and environment; a site may set its own
+    `vmid_ranges`, `vmid_scheme` and `templates`. `network.vlans` entries may name a `site`.
+  - Packer: `packer/linux/site-N.pkrvars.hcl` with `site = "N"`; a token of another site fails the build.
+  - `pve_node_plan.py --site N` (→ `pve-patch-N-<node>.json`); `patch-proxmox-node.yml` takes the plan of the
+    node's site and supports standalone nodes (no cluster).
+- Upgrade notes for `patch-proxmox-node.yml` and the Packer template: `init_repo.py --sync-managed`.
+
 ## 0.20.0 — 2026-11-17
 - Sites ([#52](https://github.com/mhaluska/homelab-manager-skill/issues/52), part 1): new optional `sites:` in homelab.yaml for more than one location (a rented server,
   family's house), the default site first; each other site may have its own `proxmox` block with its own tokens,

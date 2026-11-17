@@ -267,6 +267,34 @@
       },
       "text": "patch-linux.yml -e snapshot=true snapshots Proxmox guests on their own site's Proxmox (site_<name> groups, sites: in homelab.yaml) (#52).",
       "action": "Replace ansible/playbooks/patch-linux.yml with {template}, carrying over any local edits (show the user the diff first)."
+    },
+    {
+      "version": "0.21.0",
+      "id": "patch-proxmox-node-sites",
+      "kind": "template",
+      "when": {
+        "component": "ansible",
+        "file_lacks": [
+          "ansible/playbooks/patch-proxmox-node.yml",
+          "pve_corosync"
+        ]
+      },
+      "text": "patch-proxmox-node.yml patches nodes of other sites (the plan of the node's site_<name> group) and standalone nodes, whose quorum check failed before (#52).",
+      "action": "Replace ansible/playbooks/patch-proxmox-node.yml with {template}, carrying over any local edits (show the user the diff first)."
+    },
+    {
+      "version": "0.21.0",
+      "id": "packer-site-check",
+      "kind": "template",
+      "when": {
+        "component": "templates",
+        "file_lacks": [
+          "packer/linux/linux.pkr.hcl",
+          "site_note"
+        ]
+      },
+      "text": "The Packer template takes a site file per site (site-<name>.pkrvars.hcl) and refuses to build with another site's token (#52). Only needed with sites: in homelab.yaml.",
+      "action": "Replace packer/linux/linux.pkr.hcl with {template} and add the site and proxmox_site variables from the template's packer/linux/variables.pkr.hcl, carrying over any local edits (show the user the diff first); run packer validate."
     }
   ]
 }
