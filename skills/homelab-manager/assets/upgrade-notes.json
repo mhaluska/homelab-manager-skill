@@ -8,6 +8,7 @@
     "Fields: version, id, kind (config | template | regenerate | manual), text, action, when.",
     "when (all must hold): component (enabled), config_empty (dotted key unset/empty), config_set (dotted key set),",
     "file_lacks [path, text] (file exists and lacks text), file_has [path, text] (file exists and has text),",
+    "file_missing path (a file a release added is not in the repo; {template} is its template),",
     "vmids_outside_ranges (snapshot VMIDs don't fit), agent_ips_unread (discovery/proxmox.json says the guest",
     "agent IPs were not read: guest_ip_sources.agent present and not ok).",
     "Placeholders in action: {HM} skill dir, {template} template file of file_lacks, {detail} computed hint."
@@ -68,6 +69,14 @@
       "when": {"component": "ansible", "file_lacks": ["ansible/playbooks/check-updates.yml", "updates_merged"]},
       "text": "check-updates.yml now merges into discovery/updates.json (each host with its own collected_at); the old play rewrote it with only the hosts of -e target=<group>.",
       "action": "Replace the final 'Write discovery/updates.json' play of ansible/playbooks/check-updates.yml with the one in {template}, keeping any local edits above it."
+    },
+    {
+      "version": "0.13.0",
+      "id": "patch-proxmox-node",
+      "kind": "template",
+      "when": {"component": "ansible", "file_missing": "ansible/playbooks/patch-proxmox-node.yml"},
+      "text": "New patch-proxmox-node.yml patches one Proxmox node at a time: guests on shared storage are live-migrated (and back), HA guests go through node maintenance, pinned guests are shut down and restored. pve_node_plan.py makes its plan.",
+      "action": "If the user manages Proxmox nodes with Ansible: copy {template} and the tasks/pve-migrate.yml next to it into ansible/playbooks/ (new files)."
     }
   ]
 }

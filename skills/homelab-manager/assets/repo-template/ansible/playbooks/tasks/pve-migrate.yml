@@ -1,0 +1,19 @@
+# Migrate one guest between Proxmox nodes and wait until it runs on the target.
+# Used by patch-proxmox-node.yml. Vars: guest ({vmid, type}), src, dst (Proxmox node names).
+# VMs migrate live (--online), containers with a restart (--restart). pvesh proxies to the source node.
+- name: "Migrate {{ guest.type }} {{ guest.vmid }} {{ src }} → {{ dst }}"
+  ansible.builtin.command: >-
+    pvesh create /nodes/{{ src }}/{{ 'qemu' if guest.type == 'vm' else 'lxc' }}/{{ guest.vmid }}/migrate
+    --target {{ dst }} {{ '--online 1' if guest.type == 'vm' else '--restart 1' }}
+  changed_when: true
+
+- name: "Wait for {{ guest.vmid }} running on {{ dst }}"
+  ansible.builtin.command: pvesh get /cluster/resources --type vm --output-format json
+  register: pve_mig_res
+  changed_when: false
+  check_mode: false
+  vars:
+    now_guest: "{{ pve_mig_res.stdout | default('[]') | from_json | selectattr('vmid', 'equalto', guest.vmid | int) | first | default({}) }}"
+  until: now_guest.node | default('') == dst and now_guest.status | default('') == 'running'
+  retries: "{{ pve_migrate_wait_retries | default(90) }}"
+  delay: 10

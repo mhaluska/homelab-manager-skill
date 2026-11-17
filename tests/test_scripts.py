@@ -990,7 +990,7 @@ class UpgradeNotesTests(unittest.TestCase):
             self.assertIn(n["kind"], upgrade_notes.KIND_LABEL)
             self.assertLessEqual(upgrade_notes.vtuple(n["version"]), upgrade_notes.vtuple(have))
             self.assertIn(f"## {n['version']} ", changelog)
-            self.assertTrue(set(n["when"]) <= {"component", "config_empty", "config_set", "file_lacks", "file_has",
+            self.assertTrue(set(n["when"]) <= {"component", "config_empty", "config_set", "file_lacks", "file_has", "file_missing",
                                                "vmids_outside_ranges", "agent_ips_unread"}, n["id"])
             if "file_lacks" in n["when"] and n["kind"] == "template":
                 self.assertIn(n["when"]["file_lacks"][1],
@@ -1171,6 +1171,20 @@ class PveNodePlanTests(unittest.TestCase):  # issue 23
         self.assertEqual(r.returncode, 4)
         self.assertIn("Do NOT patch", r.stdout)
         self.assertFalse((d / "discovery/pve-patch-pve1.json").exists())
+
+
+class PveNodePlaybookUpgradeTests(unittest.TestCase):  # issue 23
+    def test_new_playbook_offered_to_existing_repos(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        run("init_repo.py", str(d), "--components", "proxmox,ansible", cwd=d)
+        ids = lambda: [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", "--all", cwd=d).stdout)]
+        self.assertTrue((d / "ansible/playbooks/tasks/pve-migrate.yml").is_file())
+        self.assertNotIn("patch-proxmox-node", ids())
+        (d / "ansible/playbooks/patch-proxmox-node.yml").unlink()
+        notes = json.loads(run("upgrade_notes.py", "--json", "--all", cwd=d).stdout)
+        note = next(n for n in notes if n["id"] == "patch-proxmox-node")
+        self.assertIn("repo-template/ansible/playbooks/patch-proxmox-node.yml", note["action"])
 
 
 class FixedIssuesTests(unittest.TestCase):

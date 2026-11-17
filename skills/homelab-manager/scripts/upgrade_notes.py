@@ -67,6 +67,11 @@ def _check(note: dict, cfg: dict, root: Path) -> tuple[bool, dict]:
         if not f.is_file() or text not in f.read_text(errors="replace"):
             return False, ph
         ph["template"] = str(TEMPLATE / rel)
+    if w.get("file_missing"):
+        rel = w["file_missing"]
+        if (root / rel).exists():
+            return False, ph
+        ph["template"] = str(TEMPLATE / rel)
     if w.get("agent_ips_unread"):
         try:
             agent = (json.loads((root / "discovery" / "proxmox.json").read_text()).get("guest_ip_sources") or {}).get("agent")

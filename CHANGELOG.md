@@ -28,6 +28,14 @@
   storage per guest, refuses while the cluster isn't quorate or another node is offline, and writes
   `discovery/pve-patch-<node>.json`. `proxmox_inventory.py --details` now records passthrough devices,
   EFI/TPM/unused disks and the startup order it needs.
+  New `ansible/playbooks/patch-proxmox-node.yml -e proxmox_patch_node=<host> [-e allow_reboot=true]` executes
+  that plan after checking it against the live cluster (quorum, all nodes online, same guests running):
+  upgrades packages while guests run, and only when a reboot is needed and allowed moves guests off
+  (migrate, HA maintenance, clean shutdown in reverse startup order — if one fails the stopped ones are
+  started again and nothing reboots), reboots, waits for quorum and Proxmox services, restores guests and
+  migrates them back (`-e migrate_back=false` leaves them), then asserts every guest that ran runs again.
+  It records the state before patching in `discovery/pve-patch-<node>-state.json`. Upgrade notes can now
+  offer files a release added (`file_missing`); existing repos are offered the new playbook.
 
 ## 0.12.4 — 2026-11-17
 - Fix ([#18](https://github.com/mhaluska/homelab-manager-skill/issues/18)): `nmap_scan.py --profile os` no longer

@@ -182,6 +182,9 @@ class GuardInfraTests(unittest.TestCase):
     def test_playbooks(self):
         self.assertEqual(decision("ansible-playbook playbooks/patch-linux.yml -e target=linux", self.d), "ask")
         self.assertIsNone(decision("ansible-playbook playbooks/patch-linux.yml -e target=linux --check --diff", self.d))
+        self.assertEqual(decision("ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=pve1", self.d), "ask")
+        self.assertEqual(decision("ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=pve1 "
+                                  "-e allow_reboot=true", self.d), "ask")
         self.assertIsNone(decision("ansible-playbook playbooks/check-updates.yml", self.d))
         self.assertIsNone(decision("ansible-playbook playbooks/zabbix-agent2.yml -l web01", self.d))
         self.assertEqual(decision("ansible-playbook playbooks/site.yml -e allow_reboot=true", self.d), "ask")
