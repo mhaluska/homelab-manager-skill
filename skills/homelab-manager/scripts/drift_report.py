@@ -2,6 +2,7 @@
 """Compare what is running against what Git declares.
 
     drift_report.py [--env homelab] [--tofu-json FILE] [--no-tofu] [--out discovery/drift.md]
+    drift_report.py --stale        # is discovery/drift.md older than its inputs? exit 0 fresh, 1 stale, 2 missing
 
 Sources (all read-only):
   live      discovery/proxmox.json   (proxmox_inventory.py)  and discovery/network.json (nmap_scan.py)
@@ -11,7 +12,9 @@ Sources (all read-only):
 
 Reports: Proxmox guests not managed by OpenTofu, managed resources missing in Proxmox,
 attribute drift (cores, memory, node, status), Ansible hosts that don't exist, which scanned
-addresses are Proxmox guests (by config/agent IP, MAC, DNS name), and network devices nobody manages. Attribute drift inside OpenTofu itself is best seen
+addresses are Proxmox guests (by config/agent IP, MAC, DNS name), and network devices nobody manages.
+An inventory host's other addresses (router/switch secondary IPs, multi-homed NAS or firewall) go in the host
+var `hm_extra_ips: [10.0.20.1, …]`: they count as that host's, listed as secondary, not as unmanaged devices. Attribute drift inside OpenTofu itself is best seen
 with `tofu plan -refresh-only`; this report covers the gaps between the sources.
 """
 from __future__ import annotations
@@ -121,6 +124,32 @@ def load_tofu(args, root: Path, env: str):
     return json.loads(r.stdout or "{}"), f"tofu show -json ({d.relative_to(root)})"
 
 
+STALE_INPUTS = ["homelab.yaml", "ansible/inventory", "discovery/proxmox.json", "discovery/network.json"]
+
+
+def newest_inputs(root: Path, than: float) -> list[str]:
+    """Inputs of the report changed after `than` (an mtime): files, or the newest file under a directory."""
+    out = []
+    for rel in STALE_INPUTS:
+        p = root / rel
+        files = [f for f in p.rglob("*") if f.is_file()] if p.is_dir() else ([p] if p.is_file() else [])
+        if any(f.stat().st_mtime > than for f in files):
+            out.append(rel)
+    return out
+
+
+def extra_ips(v: dict) -> list[str]:
+    """hm_extra_ips host var: addresses besides ansible_host (CIDR suffixes allowed)."""
+    raw = v.get("hm_extra_ips") or []
+    out = []
+    for x in raw if isinstance(raw, list) else str(raw).replace(",", " ").split():
+        try:
+            out.append(str(ipaddress.ip_interface(str(x).strip()).ip))
+        except ValueError:
+            continue
+    return out
+
+
 def load_ansible(root: Path):
     inv = root / "ansible" / "inventory" / "managed"
     if not inv.exists():
@@ -146,6 +175,7 @@ def main():
     ap.add_argument("--tofu-json")
     ap.add_argument("--no-tofu", action="store_true")
     ap.add_argument("--out")
+    ap.add_argument("--stale", action="store_true", help="only check whether drift.md is older than its inputs")
     a = ap.parse_args()
     try:
         cfg = hmlib.load_config()
@@ -154,6 +184,15 @@ def main():
         return 3
     root = Path(cfg["_root"])
     env = a.env or hmlib.get(cfg, "opentofu.environment", "homelab")
+    if a.stale:
+        report = Path(a.out) if a.out else root / "discovery" / "drift.md"
+        if not report.is_file():
+            print(f"{report.relative_to(root)} missing — run drift_report.py")
+            return 2
+        newer = newest_inputs(root, report.stat().st_mtime)
+        print(f"stale: changed since the report: {', '.join(newer)} — regenerate it before using it" if newer
+              else "fresh: no input changed since the report")
+        return 1 if newer else 0
 
     px_file, net_file = root / "discovery" / "proxmox.json", root / "discovery" / "network.json"
     px = json.loads(px_file.read_text()) if px_file.exists() else None
@@ -257,7 +296,7 @@ def main():
         for h, v in ans.items():
             ip = v.get("ansible_host")
             in_px = h.lower().split(".")[0] in live_names or (ip or "").lower() in guest_ips
-            in_net = ip in net_ips if ip else False
+            in_net = bool(({ip} | set(extra_ips(v))) & net_ips) if ip else bool(set(extra_ips(v)) & net_ips)
             if px and net and not in_px and not in_net:
                 ghosts.append(f"- `{h}` ({ip or 'no ansible_host'}) — not a Proxmox guest and not seen on the network")
         if ghosts:
@@ -290,7 +329,8 @@ def main():
 
     if net:
         known_ips = {v.get("ansible_host") for v in ans.values() if v.get("ansible_host")}
-        known_ips |= set(matched)
+        secondary = {ip: h for h, v in ans.items() for ip in extra_ips(v)}
+        known_ips |= set(matched) | set(secondary)
         for node_nets in (px or {}).get("networks", {}).values():
             for n in node_nets:
                 if n.get("cidr"):
@@ -307,6 +347,10 @@ def main():
                   for ip, h in sorted(unknown)]
         else:
             L.append("None.")
+        seen_secondary = sorted((ip for ip in secondary if ip in net["hosts"]), key=ipaddress.ip_address)
+        if seen_secondary:
+            L += ["", f"Secondary addresses of inventory hosts (`hm_extra_ips`, {len(seen_secondary)}):", ""]
+            L += [f"- {ip} → `{secondary[ip]}` (secondary)" for ip in seen_secondary]
         L.append("")
 
     L.append(f"**Total findings: {issues}** (unmanaged network devices listed separately)")

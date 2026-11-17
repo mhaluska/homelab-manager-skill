@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -751,6 +752,44 @@ class DriftTests(unittest.TestCase):
         self.assertIn("No storage accepts `backup` content", r.stdout)
         self.assertIn("104 `test-old` is in no backup job", r.stdout)
         self.assertNotIn("100 `dns01` is in no backup job", r.stdout)
+
+
+class DriftExtraIpsTests(unittest.TestCase):
+    """#31: hm_extra_ips makes a host's other addresses known; --stale says when drift.md is out of date."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        run("init_repo.py", self.d, "--components", "ansible,discovery", cwd=self.d)
+        Path(self.d, "ansible/inventory/managed/hosts.yml").write_text(
+            "all:\n  children:\n    appliances:\n      hosts:\n        router1:\n          ansible_host: 10.0.10.1\n"
+            "          hm_extra_ips: [10.0.20.1, 10.0.30.1/24]\n")
+        host = {"mac": None, "hostnames": [], "device_type_guess": "router", "vendor": None}
+        net = {"updated_at": "2026-01-01", "hosts": {ip: host for ip in ("10.0.10.1", "10.0.20.1", "10.0.30.1", "10.0.10.9")}}
+        Path(self.d, "discovery/network.json").write_text(json.dumps(net))
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def test_secondary_ips_are_not_unmanaged(self):
+        r = run("drift_report.py", "--no-tofu", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        unmanaged = r.stdout.split("## Network devices not in managed inventory")[1]
+        self.assertIn("1 device(s)", unmanaged)
+        self.assertIn("10.0.10.9", unmanaged)
+        self.assertIn("- 10.0.20.1 → `router1` (secondary)", unmanaged)
+        self.assertIn("- 10.0.30.1 → `router1` (secondary)", unmanaged)
+
+    def test_stale(self):
+        self.assertEqual(run("drift_report.py", "--stale", cwd=self.d).returncode, 2)
+        run("drift_report.py", "--no-tofu", cwd=self.d)
+        drift = Path(self.d, "discovery/drift.md")
+        os.utime(drift, (time.time() + 60, time.time() + 60))
+        r = run("drift_report.py", "--stale", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        os.utime(drift, (time.time() - 3600, time.time() - 3600))
+        r = run("drift_report.py", "--stale", cwd=self.d)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("ansible/inventory", r.stdout)
 
 
 class GuestNetworkMappingTests(unittest.TestCase):

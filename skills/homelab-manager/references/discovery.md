@@ -102,8 +102,11 @@ references/ansible.md step 3–4); a full scan never edits the inventory.
    unknown network devices. Scanned addresses that are Proxmox guests (matched by config or
    agent IP, MAC, DNS name = guest name; needs `--details`) are listed under *Proxmox guests ↔
    network*, not as unknown devices. If VM IPs weren't read (the token lacks
-   `VM.GuestAgent.Audit`), say so and point to `docs/proxmox-tokens.md`.
-5. The findings live in `discovery/drift.md` (regenerated each run) and your reply; they are not
+   `VM.GuestAgent.Audit`), say so and point to `docs/proxmox-tokens.md`. A device's other addresses (router or
+   switch secondary IPs, multi-homed NAS/firewall) belong in its host var `hm_extra_ips: [ip, …]`, not in
+   `discovery.ignore_unmanaged`: the report then lists them as that host's secondary addresses.
+5. The findings live in `discovery/drift.md` (regenerated each run; before quoting an existing one, run
+   `drift_report.py --stale`: exit 1 = the inventory, `homelab.yaml` or a snapshot changed since) and your reply; they are not
    copied anywhere else. If `drift_report.py` itself misbehaved (crash, a guest wrongly flagged),
    that is a skill problem: note it in `skill_issues.md` (SKILL.md §6).
 6. Commit `discovery/drift.md` and refreshed snapshots with message `discovery: drift report <date>`.
