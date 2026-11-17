@@ -1716,3 +1716,130 @@ class SshProbeTests(unittest.TestCase):  # issue 25
         self.assertEqual(p.suggest_group({"kernel": "FreeBSD 14.1-RELEASE", "os_freebsd": "14.1",
                                           "product": "pfSense 2.7.2"}), "appliances")
         self.assertEqual(p.suggest_group({"kernel": "FreeBSD 14.1-RELEASE", "os_freebsd": "14.1"}), "freebsd")
+
+
+FAKE_ROS_SSH = r'''#!/usr/bin/env python3
+import json, os, sys
+host, cmd = sys.argv[-2], sys.argv[-1]
+with open(os.environ["FAKE_SSH_LOG"], "a") as f:
+    f.write(json.dumps(sys.argv[1:]) + "\n")
+if host == "10.0.0.9":
+    sys.stderr.write("auditor@10.0.0.9: Permission denied (publickey).\n"); sys.exit(255)
+chr_ = host == "10.0.0.2"
+out = {
+ "/system identity print without-paging": "  name: " + ("core-chr" if chr_ else "sw-rack") + "\n",
+ "/system resource print without-paging": (
+   "                   uptime: 3w2d4h\n                  version: " + ("7.15.3" if chr_ else "7.16.1") + " (stable)\n"
+   "              free-memory: 400.0MiB\n             total-memory: 512.0MiB\n"
+   "           free-hdd-space: " + ("80.0MiB" if chr_ else "3.1MiB") + "\n          total-hdd-space: 128.0MiB\n"
+   "        architecture-name: " + ("x86_64" if chr_ else "arm") + "\n"
+   "               board-name: " + ("CHR QEMU Standard PC (i440FX + PIIX, 1996)" if chr_ else "CRS326-24G-2S+") + "\n"),
+ "/system routerboard print without-paging": "       routerboard: yes\n             model: CRS326-24G-2S+\n"
+   "  current-firmware: 7.12\n  upgrade-firmware: 7.16.1\n",
+ "/system package update print without-paging": "          channel: stable\n  installed-version: "
+   + ("7.15.3" if chr_ else "7.16.1") + "\n     latest-version: 7.16.1\n",
+ "/system license print without-paging": ("  system-id: abc\n      level: free\n  next-renewal-at: 2026-12-01 10:00:00\n"
+   if chr_ else "  software-id: XYZ\n  level: 5\n"),
+ "/interface print terse without-paging": " 0  R name=ether1 default-name=ether1 type=ether mtu=1500\n"
+   " 1 X  name=ether2 default-name=ether2 type=ether mtu=1500\n",
+ "/ip address print terse without-paging": " 0   address=10.0.0.1/24 network=10.0.0.0 interface=bridge\n",
+ "/interface bridge print terse without-paging": " 0  R name=bridge vlan-filtering=yes comment=\"syntax error here\"\n",
+ "/interface bridge vlan print terse without-paging": " 0   bridge=bridge vlan-ids=20 tagged=bridge,sfp1\n",
+ "/interface vlan print terse without-paging": "",
+ "/ip service print terse without-paging": (
+   " 0   name=telnet port=23 address=\"\" vrf=main\n 1 X name=ftp port=21 address=\"\"\n"
+   " 2   name=www port=80 address=10.0.0.0/24\n 3   name=ssh port=22 address=\"\"\n"),
+ "/user print terse without-paging": " 0   name=admin group=full\n 1   name=auditor group=read\n",
+}
+if cmd not in out or (chr_ and "routerboard" in cmd):
+    print("bad command name routerboard (line 1 column 9)"); sys.exit(1)
+sys.stdout.write(out[cmd])
+'''
+
+
+class RouterosAuditTests(unittest.TestCase):  # issue 26
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import routeros_audit
+        self.ra = routeros_audit
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d)
+        run("init_repo.py", str(self.d), "--components", "ansible,appliances", cwd=self.d)
+        inv = self.d / "ansible/inventory/managed"
+        (inv / "hosts.yml").write_text("all:\n  children:\n    appliances:\n      children:\n        routeros:\n"
+                                       "          hosts:\n            sw-rack:\n              ansible_host: 10.0.0.1\n"
+                                       "            chr1:\n              ansible_host: 10.0.0.2\n")
+        (inv / "group_vars/routeros.yml").write_text("ansible_user: auditor\n")
+        (inv / "hosts.yml").write_text((inv / "hosts.yml").read_text() + "    linux:\n      hosts:\n"
+                                       "        web1:\n          ansible_host: 10.0.0.5\n")
+        bin_ = self.d / "bin"
+        bin_.mkdir()
+        (bin_ / "ssh").write_text(FAKE_ROS_SSH)
+        (bin_ / "ssh").chmod(0o755)
+        self.log = self.d / "ssh.log"
+        self.env = {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "FAKE_SSH_LOG": str(self.log)}
+
+    def audit(self, *args):
+        return subprocess.run([sys.executable, str(SCRIPTS / "routeros_audit.py"), *args], cwd=self.d,
+                              env=self.env, capture_output=True, text=True)
+
+    def test_parsers(self):
+        rows = self.ra.parse_terse(' 0 X name=ftp port=21 address=""\n 1   name=ssh comment="a b=c"\nFlags: X\n')
+        self.assertEqual(rows, [{"name": "ftp", "port": "21", "address": "", "_flags": "X"},
+                                {"name": "ssh", "comment": "a b=c", "_flags": ""}])
+        self.assertEqual(self.ra.parse_detail("   board-name: CRS326\n  version: 7.16 (stable)\n"),
+                         {"board-name": "CRS326", "version": "7.16 (stable)"})
+        self.assertEqual(self.ra.size_bytes("3.1MiB"), 3.1 * 2**20)
+        self.assertEqual(self.ra.size_bytes("1024KiB"), 2**20)
+        self.assertEqual(self.ra.parse_date("dec/01/2026 10:00:00"), self.ra.dt.date(2026, 12, 1))
+        self.assertEqual(self.ra.parse_date("2026-12-01 10:00:00"), self.ra.dt.date(2026, 12, 1))
+
+    def test_group_audit(self):
+        r = self.audit("--group", "routeros", "10.0.0.9")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        calls = [json.loads(l) for l in self.log.read_text().splitlines()]
+        for c in calls:
+            self.assertIn("-T", c)                                                   # no pty: raw-style hang
+            self.assertIn("BatchMode=yes", c)
+            if c[-2] != "10.0.0.9":
+                self.assertEqual(c[c.index("-l") + 1], "auditor")                     # from group_vars/routeros.yml
+            else:
+                self.assertNotIn("-l", c)                                             # given directly: ssh config
+            self.assertRegex(c[-1], r"^/[a-z /-]+ print( terse)? without-paging$")    # read-only
+        self.assertFalse(any(c[-2] == "10.0.0.2" and "routerboard" in c[-1] for c in calls))  # skipped on CHR
+        out = r.stdout
+        self.assertIn("| 10.0.0.1 | sw-rack | CRS326-24G-2S+ | 7.16.1 (stable) | 7.12 | 3.1MiB |", out)
+        self.assertIn("| 10.0.0.2 | core-chr | CHR QEMU", out)
+        self.assertIn("**Version drift:** 7.15.3: 10.0.0.2; 7.16.1: 10.0.0.1", out)
+        sw = out[out.index("## 10.0.0.1"):out.index("## 10.0.0.2")]
+        self.assertIn("**high** — plain-text service `telnet` enabled (port 23, from any address): disable it and use ssh", sw)
+        self.assertIn("**low** — plain-text service `www` enabled (port 80, limited to 10.0.0.0/24): disable it and use www-ssl\n", sw)
+        self.assertNotIn("`ftp`", sw)                                                 # disabled (X flag)
+        self.assertIn("RouterBOOT firmware 7.12 is behind 7.16.1", sw)
+        self.assertIn("low free flash: 3.1MiB of 128.0MiB", sw)
+        self.assertIn("default user `admin` is enabled", sw)
+        chr_ = out[out.index("## 10.0.0.2"):]
+        self.assertIn("RouterOS 7.16.1 available on channel stable (installed 7.15.3", chr_)
+        self.assertIn("CHR licence level `free`", chr_)
+        self.assertNotIn("routerboard", chr_)
+        self.assertIn("## 10.0.0.9\n- **high** — not inspected: auth failed", out)
+        db = json.loads((self.d / "discovery/routeros.json").read_text())["devices"]
+        self.assertEqual(sorted(db), ["10.0.0.1", "10.0.0.2", "10.0.0.9"])
+        self.assertEqual(db["10.0.0.1"]["bridges"][0]["vlan-filtering"], "yes")      # comment didn't look like an error
+        self.assertEqual(db["10.0.0.1"]["bridge_vlans"][0]["tagged"], "bridge,sfp1")
+
+    def test_licence_renewal_soon(self):
+        dev = {"reachable": True, "errors": {}, "resource": {"board-name": "CHR"},
+               "license": {"level": "p1", "next-renewal-at": "2026-12-01 10:00:00"}}
+        f = self.ra.findings(dev, self.ra.dt.date(2026, 11, 17))
+        self.assertIn("medium", [s for s, _ in f])
+        self.assertEqual(self.ra.findings(dev, self.ra.dt.date(2026, 6, 1)), [])
+
+    def test_templated_user_is_not_passed(self):
+        sys.path.insert(0, str(SCRIPTS))
+        self.assertEqual(self.ra.group_hosts(self.d, "linux"), [("10.0.0.5", None, None)])  # all.yml's {{ … }}
+
+    def test_all_unreachable(self):
+        r = self.audit("10.0.0.9", "--no-write")
+        self.assertEqual(r.returncode, 2)
+        self.assertFalse((self.d / "discovery/routeros.json").exists())

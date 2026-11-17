@@ -17,6 +17,14 @@
   `proxmox_nodes`, `appliances` …), merges the result into `network.json` and `--draft` prints an inventory
   draft. `device_type_guess` now also uses what the host reported. The guard checks its targets against
   `authorized_ranges` like `nmap_scan.py`'s.
+- MikroTik RouterOS audit ([#26](https://github.com/mhaluska/homelab-manager-skill/issues/26)): new read-only
+  `routeros_audit.py <hosts> [--group G] [--user U]` inspects routers, CRS switches and CHR over SSH: identity,
+  resource, RouterBOOT, package update status, licence, interfaces, addresses, bridges/VLANs, IP services and
+  users. It runs only `print` commands, one `ssh -T` each (no pty, which is what makes Ansible's `raw` hang on
+  RouterOS) with a hard timeout, skips `/system routerboard` on CHR and carries on when one command fails.
+  Findings: plain-text telnet/ftp/www/api enabled, RouterBOOT behind RouterOS, a known RouterOS update, low
+  free flash, the default `admin` user, CHR licence level and a renewal within 30 days, and version drift
+  across devices. Writes `discovery/routeros.json` and prints a Markdown report.
 
 ## 0.13.0 — 2026-11-17
 - Fix ([#24](https://github.com/mhaluska/homelab-manager-skill/issues/24)): `issues.py add` with the key of an
