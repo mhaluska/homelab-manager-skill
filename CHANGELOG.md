@@ -15,7 +15,8 @@
   root shells work. It shows the Python the installed ansible-core can use (and the `ansible_python_interpreter`
   to set when the default `python3` is too old, e.g. EL8), suggests an OS group (`el8`, `debian`,
   `proxmox_nodes`, `appliances` …), merges the result into `network.json` and `--draft` prints an inventory
-  draft. `device_type_guess` now also uses what the host reported.
+  draft. `device_type_guess` now also uses what the host reported. The guard checks its targets against
+  `authorized_ranges` like `nmap_scan.py`'s.
 
 ## 0.13.0 — 2026-11-17
 - Fix ([#24](https://github.com/mhaluska/homelab-manager-skill/issues/24)): `issues.py add` with the key of an

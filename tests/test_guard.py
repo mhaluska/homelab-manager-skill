@@ -125,6 +125,15 @@ class GuardNmapTests(unittest.TestCase):
             self.assertIsNone(decision(f"python3 {script} 10.0.10.0/24 --profile services --interface en0", r))
             self.assertIsNone(decision(f"python3 {script} 10.0.10.0/24 -e en0 --only-live", r))
 
+    def test_ssh_probe_targets_are_scope_checked(self):  # issue 25
+        with Repo() as r:
+            script = ROOT / "skills/homelab-manager/scripts/ssh_probe.py"
+            self.assertIsNone(decision(f"python3 {script}", r))                    # hosts from network.json
+            self.assertIsNone(decision(f"python3 {script} 10.0.10.0/24 --user admin --timeout 5 --draft", r))
+            self.assertEqual(decision(f"python3 {script} 192.168.0.5", r), "deny")
+            self.assertEqual(decision(f"python3 {script} --jobs 4 10.0.10.5 192.168.0.0/24", r), "deny")
+            self.assertEqual(decision(f"python3 {script} files.example.test", r), "deny")  # hostnames refused
+
     def test_nmap_option_values_not_targets(self):  # issue 19
         with Repo() as r:
             self.assertIsNone(decision("nmap -e en0 -Pn -sT --stats-every 30s --min-hostgroup 64 "

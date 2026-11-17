@@ -105,6 +105,8 @@ NMAP_VALUE_OPTS = {"-p", "-oX", "-oN", "-oG", "-oA", "-oS", "-oM", "-iL", "--exc
                    "--data-string", "--ip-options"}
 # nmap_scan.py options whose next argument is a value, not a target
 NMAP_SCAN_VALUE_OPTS = {"--profile", "--ports", "--top-ports", "--out", "--interface", "-e"}
+# ssh_probe.py options whose next argument is a value, not a target
+SSH_PROBE_VALUE_OPTS = {"--user", "--port", "--timeout", "--jobs"}
 
 SCRIPT_RUNNERS = {"bash", "sh", "zsh", "dash", "ksh", "python", "python3", "perl", "ruby", "node", "source", "."}
 INFRA_HINT = re.compile(r"\b(tofu|terraform|packer|ansible|ansible-playbook|nmap|qm|pct|pvesh|ssh|security)\b")
@@ -436,11 +438,13 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
         elif name == "ansible-playbook":
             findings += check_ansible_playbook(tok)
         script = script_path(tok, cwd)
-        if script and script.name == "nmap_scan.py":
-            args = tok[tok.index(next(t for t in tok if t.endswith("nmap_scan.py"))) + 1:]
+        if script and script.name in ("nmap_scan.py", "ssh_probe.py"):
+            value_opts = NMAP_SCAN_VALUE_OPTS if script.name == "nmap_scan.py" else SSH_PROBE_VALUE_OPTS
+            args = tok[tok.index(next(t for t in tok if t.endswith(script.name))) + 1:]
             targets = [a for i, a in enumerate(args) if not a.startswith("-")
-                       and (i == 0 or args[i - 1] not in NMAP_SCAN_VALUE_OPTS)]
-            findings += check_nmap(targets, cwd, label="nmap_scan.py")
+                       and (i == 0 or args[i - 1] not in value_opts)]
+            if targets or script.name == "nmap_scan.py":  # ssh_probe.py without targets: hosts from network.json
+                findings += check_nmap(targets, cwd, label=script.name)
         elif script and depth < 2:
             try:
                 plugin_owned = script.resolve().is_relative_to(PLUGIN_ROOT)
