@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.18.0 — 2026-11-17
+- Snapshot pre-flight ([#49](https://github.com/mhaluska/homelab-manager-skill/issues/49)): new read-only `pve_snapshot.py check <guests> [--json]` reports every guest
+  (ok, not a Proxmox guest, or not snapshottable with the reason, e.g. a bind or device mount point).
+  `patch-linux.yml -e snapshot=true` runs it for all targets before the first batch and refuses with the list;
+  `-e snapshot_missing=skip` patches those hosts without a snapshot. patching.md describes LXD/Incus snapshots by
+  hand ([#44](https://github.com/mhaluska/homelab-manager-skill/issues/44)).
+- Containers after patching ([#50](https://github.com/mhaluska/homelab-manager-skill/issues/50)): `patch-linux.yml` fails a host whose Docker/Podman containers ran before
+  the update and don't run after it; Docker containers that stay down first get one restart of containerd and
+  then Docker (needed after a containerd upgrade).
+- Failed units ([#51](https://github.com/mhaluska/homelab-manager-skill/issues/51)): `patch-linux.yml` compares failed units by name, and doesn't count units that fail on
+  every boot in LXC containers or are listed in the new `failed_units_ignore` (group_vars). The message names
+  oneshot units that may fail on every boot.
+- Fix ([#48](https://github.com/mhaluska/homelab-manager-skill/issues/48)): `check-updates.yml` writes `discovery/updates.json` also when run with `--limit` (`-l <host>`).
+- Upgrade notes for the playbooks and `failed_units_ignore`: `init_repo.py --sync-managed`.
+
 ## 0.17.0 — 2026-11-17
 - Patching batches ([#45](https://github.com/mhaluska/homelab-manager-skill/issues/45)): `patch-linux.yml` takes the batch size for independent hosts from new
   `ansible.patch_serial` in homelab.yaml (new repos: 5; unset: 1), or `-e patch_serial`. Cluster members,
