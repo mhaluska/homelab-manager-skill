@@ -17,5 +17,7 @@
 - Every guard rule change needs a test in `tests/test_guard.py`. Run `python3 -m unittest discover -s tests`.
 - Template changes: scaffold into a temp dir and run `tofu validate`, `packer validate`
   (dummy PROXMOX_* env), `ansible-playbook --syntax-check`, `tofu fmt -check`, `packer fmt -check`.
+- English only: code, identifiers, comments, docs, commit messages, issues and PRs. CI checks pull requests
+  (`.github/check_english.py`); deliberate non-English samples get a `lang: allow` marker on the line.
 - Never put real IPs, hostnames, tokens or site data in this repo — they belong in the user's
   `homelab-infrastructure/homelab.yaml`.

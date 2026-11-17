@@ -1,0 +1,4 @@
+# English-only check (.github/check_english.py): paths whose added lines are not checked.
+# Prefer a `lang: allow` marker on the line itself; list a path only when the whole file is meant to hold other languages.
+LICENSE
+skills/homelab-manager/assets/language-words.json

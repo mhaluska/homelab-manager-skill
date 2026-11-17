@@ -1,0 +1,52 @@
+name: Issue language
+
+# Issues must be in English. A new or edited issue that isn't gets the needs-english label and,
+# once, a comment asking for an English version; the label goes away when the issue is edited
+# into English. The issue itself stays open. Skill issues filed by issues.py are English already.
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  english:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      NUMBER: ${{ github.event.issue.number }}
+      LABEL: needs-english
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check and label
+        env:
+          TITLE: ${{ github.event.issue.title }}
+          BODY: ${{ github.event.issue.body }}
+        run: |
+          has_label=$(gh issue view "$NUMBER" -R "$REPO" --json labels -q '.labels[].name' | grep -cx "$LABEL" || true)
+          if printf '%s\n\n%s\n' "$TITLE" "$BODY" | python3 .github/check_english.py text > problems.txt; then
+            [ "$has_label" = 0 ] || gh issue edit "$NUMBER" -R "$REPO" --remove-label "$LABEL"
+            exit 0
+          fi
+          cat problems.txt
+          gh label create "$LABEL" -R "$REPO" --color d93f0b \
+            --description "The issue must be rewritten in English" 2>/dev/null || true
+          [ "$has_label" != 0 ] || gh issue edit "$NUMBER" -R "$REPO" --add-label "$LABEL"
+          if ! gh issue view "$NUMBER" -R "$REPO" --json comments -q '.comments[].body' | grep -q 'hm-language-check'; then
+            {
+              echo "Thanks for the report! This repository is English-only, and this issue doesn't look English:"
+              echo
+              cat problems.txt
+              echo
+              echo "Please edit the title and description into English (a machine translation is fine)."
+              echo "If you use the homelab-manager skill, say *\"report skill issues\"* in your homelab repo:"
+              echo "Claude writes the issue in English for you, whatever language you talk to it in."
+              echo
+              echo "<!-- hm-language-check -->"
+            } > comment.md
+            gh issue comment "$NUMBER" -R "$REPO" --body-file comment.md
+          fi

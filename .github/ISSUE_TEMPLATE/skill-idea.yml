@@ -9,6 +9,7 @@ body:
       value: |
         Claude notes these as it works and can file them for you: say *"report skill issues"* in your homelab repo (it redacts host details).
         **This repository is public: no secrets, IP addresses, host names or other details of your network.**
+        **Please write in English** (a machine translation is fine); issues in other languages get the `needs-english` label.
   - type: textarea
     id: summary
     attributes:

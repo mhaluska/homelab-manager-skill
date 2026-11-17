@@ -74,7 +74,8 @@ command Claude issues (in any project, while the plugin is enabled) and:
 
 - **denies**: nmap targets outside `network.authorized_ranges` (or any nmap with no config —
   asks outside a homelab repo), `-iR`/decoys, `tofu/terraform … -auto-approve`, printing keychain
-  secrets (`security … -w`), reading private SSH keys;
+  secrets (`security … -w`), reading private SSH keys, non-English issues or pull requests on this
+  plugin's repository;
 - **asks the user**: `tofu apply` without a saved plan or whose plan deletes/replaces, destroy,
   state edits, imports, `qm`/`pct`/`pvesh`/`ha-manager`/`pvesm` writes, ZFS destroy, Proxmox API
   writes, reboots/shutdowns, patch/upgrade playbooks outside `--check`, `packer build -force`,
@@ -85,6 +86,13 @@ command Claude issues (in any project, while the plugin is enabled) and:
 
 It is defence in depth, not a sandbox: it inspects command text, so the restricted Proxmox
 tokens and the user's review of plans remain the real boundaries.
+
+## Languages
+
+Talk to the skill in any language. Your homelab repo's language (`site.language` in `homelab.yaml`, asked
+during setup) is used for Claude's replies, the docs it writes, commit messages and new code comments;
+identifiers and scaffolded files stay English. Skill issues you report go to this public, English-only
+repository, so Claude writes them in English for you. Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Requirements (checked by `check_env.py`)
 
