@@ -8,7 +8,10 @@ ansible-playbook playbooks/check-updates.yml -e target=rocky       # subset
 ```
 Merges into `discovery/updates.json`: a subset run updates only its hosts, the others keep their last
 result; check each host's `collected_at` before calling it current. Report a table: host, OS, security updates, total, reboot
-pending. Sort by security count. Unreachable hosts are findings too. Commit the JSON.
+pending (with `reboot_reasons`), services to restart (`restart_pending`). Sort by security count.
+A reboot is due when a newer kernel than the running one is installed (plain Debian has no
+`/var/run/reboot-required`), `needs-restarting -r` says so (EL) or the flag file exists. `restart_pending` lists
+services whose processes still map deleted binaries or libraries: they run the old (maybe vulnerable) code. Unreachable hosts are findings too. Commit the JSON.
 
 ## "Patch all Linux servers"
 
@@ -30,7 +33,9 @@ pending. Sort by security count. Unreachable hosts are findings too. Commit the 
    - **Critical singletons** the user cares about (DNS, the Git server, the gateway): ask
      whether to include them, and patch them last.
 3. Plan for the user: hosts per batch, security-only or full, reboot policy.
-   Reboots default **off** (`allow_reboot=false`); the run reports `reboot_pending`.
+   Reboots default **off** (`allow_reboot=false`); the run reports `reboot_pending` with the reason and
+   `restart_pending`. Offer `-e restart_services=true` (restarts those services, except dbus and logind, when
+   the host isn't rebooted anyway): no reboot needed, but each service restarts briefly.
 4. Approval (the guard asks for any patch run outside `--check`).
 5. Run: `ansible-playbook playbooks/patch-linux.yml -e target=<group> [-e security_only=true]`.
    The playbook stops on the first failure (`max_fail_percentage: 0`) and checks failed

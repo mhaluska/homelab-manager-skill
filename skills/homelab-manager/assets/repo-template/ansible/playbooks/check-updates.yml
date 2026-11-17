@@ -1,4 +1,5 @@
-# Read-only: which systems have pending (security) updates or need a reboot.
+# Read-only: which systems have pending (security) updates, need a reboot (with the reason), or run services
+# that still use replaced binaries or libraries (restart_pending; patch-linux.yml -e restart_services=true).
 # Writes discovery/updates.json, merged: hosts not checked this run keep their last result
 # (each host has its own collected_at).  Safe to run any time.
 - name: Pending updates on Linux
@@ -23,13 +24,6 @@
       failed_when: rh_all.rc not in [0, 100]
       when: ansible_facts.os_family == "RedHat"
 
-    - name: RHEL family — reboot required
-      ansible.builtin.command: needs-restarting -r
-      register: rh_reboot
-      changed_when: false
-      failed_when: false
-      when: ansible_facts.os_family == "RedHat"
-
     - name: Debian family — refresh package lists
       ansible.builtin.apt:
         update_cache: true
@@ -43,11 +37,8 @@
       changed_when: false
       when: ansible_facts.os_family == "Debian"
 
-    - name: Debian family — reboot required
-      ansible.builtin.stat:
-        path: /var/run/reboot-required
-      register: deb_reboot
-      when: ansible_facts.os_family == "Debian"
+    - name: Reboot required, services still running replaced code
+      ansible.builtin.include_tasks: tasks/restart-check.yml
 
     - name: Summarise
       ansible.builtin.set_fact:
@@ -62,9 +53,9 @@
             {{ (rh_sec.stdout_lines | default([]) | select('match', '^\S+\.\S+\s') | list | length)
                if ansible_facts.os_family == 'RedHat'
                else (deb_sim.stdout_lines | default([]) | select('match', '^Inst .*[Ss]ecurity') | list | length) }}
-          reboot_required: >-
-            {{ (rh_reboot.rc | default(0)) == 1 if ansible_facts.os_family == 'RedHat'
-               else (deb_reboot.stat.exists | default(false)) }}
+          reboot_required: "{{ needs_reboot }}"
+          reboot_reasons: "{{ reboot_reasons }}"
+          restart_pending: "{{ restart_pending }}"
 
 - name: Pending updates on Windows (search only, installs nothing)
   hosts: "{{ windows_target | default('windows') }}"

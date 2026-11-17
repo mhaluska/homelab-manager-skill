@@ -1,0 +1,54 @@
+# Read-only: does this Linux host need a reboot, and which services still run replaced code?
+# Included by check-updates.yml and patch-linux.yml (after updating). Sets:
+#   needs_reboot     — bool
+#   reboot_reasons   — why (newer kernel installed, needs-restarting, /var/run/reboot-required)
+#   restart_pending  — systemd services whose processes still map deleted binaries or libraries
+#                      (replaced by an update, e.g. openssl or glibc): they run the old code until restarted
+# Works without needrestart or checkrestart: the kernel check compares the running kernel with the newest
+# /boot/vmlinuz-*, which plain Debian needs (/var/run/reboot-required only exists with update-notifier).
+- name: Running and newest installed kernel
+  ansible.builtin.shell: |
+    uname -r
+    ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's#^/boot/vmlinuz-##' | grep -v rescue | sort -V | tail -1
+  register: hm_kernels
+  changed_when: false
+  check_mode: false
+
+- name: RHEL family — reboot required (needs-restarting -r)
+  ansible.builtin.command: needs-restarting -r
+  register: hm_rh_reboot
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: ansible_facts.os_family == "RedHat"
+
+- name: Debian family — reboot-required flag
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: hm_deb_reboot
+  when: ansible_facts.os_family == "Debian"
+
+- name: Services still using replaced files
+  ansible.builtin.shell: |
+    for m in /proc/[0-9]*/maps; do
+      p=${m#/proc/}; p=${p%/maps}
+      grep -qE ' (/usr)?/(s?bin|lib|lib64|libexec)/[^ ]* \(deleted\)$' "$m" 2>/dev/null || continue
+      ps -o unit= -p "$p" 2>/dev/null
+    done | grep -E '\.service$' | grep -vE '^(user|getty|serial-getty)@' | sort -u
+  register: hm_restart
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Summarise the restart check
+  ansible.builtin.set_fact:
+    reboot_reasons: >-
+      {{ ([('kernel ' ~ hm_kernels.stdout_lines[1] ~ ' installed, ' ~ hm_kernels.stdout_lines[0] ~ ' running')]
+           if (hm_kernels.stdout_lines | length > 1 and hm_kernels.stdout_lines[1] != hm_kernels.stdout_lines[0])
+           else [])
+         + (['needs-restarting -r'] if (hm_rh_reboot.rc | default(0)) == 1 else [])
+         + (['/var/run/reboot-required'] if (hm_deb_reboot.stat.exists | default(false)) else []) }}
+    restart_pending: "{{ hm_restart.stdout_lines | default([]) }}"
+
+- ansible.builtin.set_fact:
+    needs_reboot: "{{ reboot_reasons | length > 0 }}"
