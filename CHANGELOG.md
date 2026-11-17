@@ -16,6 +16,8 @@
   `proxmox_to_inventory.py [--vlan N] [--range CIDR] [--type vm|lxc] [--node N]` drafts inventory entries
   (`ansible_host`, `proxmox_vmid/node/kind`) for running Linux guests in `discovery/proxmox.json` and lists
   the ones it skipped (non-Linux ostype, stopped, no IP, already managed). Nothing is written to `hosts.yml`.
+  `check_env.py` flags hosts in an EL8-named group (`el8`, `rocky8`, `centos_stream8` …) without
+  `ansible_python_interpreter` when the installed ansible-core (2.17+) can no longer use EL8's Python 3.6.
 
 ## 0.12.4 — 2026-11-17
 - Fix ([#18](https://github.com/mhaluska/homelab-manager-skill/issues/18)): `nmap_scan.py --profile os` no longer

@@ -221,7 +221,7 @@ Scripts (all in `$HM/scripts/`):
 | Script | Purpose | Writes |
 |---|---|---|
 | `init_repo.py --components … [--dry-run]` / `--add-components …` / `--sync-managed` | scaffold, extend, or update the repo after a plugin upgrade | repo files |
-| `check_env.py [--keychain] [--json]` | tools, SSH agent, keychain self-test, secrets readable, Proxmox TLS | — |
+| `check_env.py [--keychain] [--json]` | tools, SSH agent, keychain self-test, secrets readable, Proxmox TLS, EL8 Python | — |
 | `with_secrets.py <names…> -- <cmd>` | run a command with keychain secrets in env, output redacted | — |
 | `proxmox_inventory.py [--details]` / `--next-vmid vms\|lxc [--ip --vlan]` | read-only Proxmox snapshot + summary table (`--details`: configs, guest IPs) / VMID for a new guest | `discovery/proxmox.json` |
 | `nmap_scan.py <targets> [--profile ping\|services\|os] [--only-live]` | scope-checked scan | `discovery/network.json` |

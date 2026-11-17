@@ -1063,6 +1063,17 @@ class OnboardingTests(unittest.TestCase):  # issue 20
         self.assertEqual(r.returncode, 4)
         self.assertIn("--details", r.stderr)
 
+    def test_el8_hosts_without_interpreter(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import check_env
+        self.assertEqual(check_env.ansible_core_version("ansible [core 2.21.6]\n  config file"), (2, 21))
+        inv = {"_meta": {"hostvars": {"a": {}, "b": {"ansible_python_interpreter": "/usr/bin/python3.12"}, "c": {}}},
+               "all": {"children": ["linux"]}, "linux": {"children": ["rocky8", "debian"]},
+               "rocky8": {"hosts": ["a", "b"]}, "debian": {"hosts": ["c"]}}
+        self.assertEqual(check_env.el8_without_interpreter(inv), ["a"])
+        inv["linux"] = {"children": ["el9"]}
+        self.assertEqual(check_env.el8_without_interpreter(inv), [])
+
 
 class FixedIssuesTests(unittest.TestCase):
     """#12: reported entries fixed by the installed release are pointed out and can be resolved."""

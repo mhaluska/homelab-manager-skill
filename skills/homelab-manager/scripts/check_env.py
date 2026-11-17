@@ -2,6 +2,7 @@
 """Check that this Mac is ready to manage the homelab.
 
     check_env.py              tools + SSH agent + config + configured keychain items + Proxmox TLS
+                              + Ansible targets whose Python the installed ansible-core can't use
     check_env.py --keychain   also run a keychain self-test (write, read, delete a dummy item)
     check_env.py --json       machine-readable output
 
@@ -39,9 +40,9 @@ TOOLS = {
 SELFTEST_SERVICE = "homelab/_selftest"
 
 
-def run(cmd, timeout=15, input_text=None):
+def run(cmd, timeout=15, input_text=None, cwd=None):
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, input=input_text)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, input=input_text, cwd=cwd)
         return r.returncode, r.stdout, r.stderr
     except subprocess.TimeoutExpired:
         return 124, "", "timeout"
@@ -241,12 +242,62 @@ def check_proxmox_tls(cfg):
                        "(Proxmox's own CA: /etc/pve/pve-root-ca.pem on a node) rather than verify_tls: false"}]
 
 
+# Targets need a Python that the controller's ansible-core still supports. EL8 ships Python 3.6, which
+# ansible-core 2.17 dropped: such hosts need e.g. python3.12 from AppStream and ansible_python_interpreter.
+EL8_GROUP = re.compile(r"^(el|rhel|rocky|alma|almalinux|centos|centos_?stream|ol|oracle|oraclelinux)_?8$", re.I)
+
+
+def ansible_core_version(text: str) -> tuple[int, ...]:
+    m = re.search(r"core (\d+)\.(\d+)", text or "")
+    return (int(m.group(1)), int(m.group(2))) if m else ()
+
+
+def el8_without_interpreter(inventory: dict) -> list[str]:
+    """Hosts in an EL8-named group (el8, rocky8, centos_stream8 …) with no ansible_python_interpreter."""
+    hv = (inventory.get("_meta") or {}).get("hostvars") or {}
+    out = set()
+
+    def walk(group: str, el8: bool, seen: set):
+        if group in seen:
+            return
+        seen.add(group)
+        g = inventory.get(group) or {}
+        el8 = el8 or bool(EL8_GROUP.match(group))
+        if el8:
+            out.update(h for h in g.get("hosts", []) if not (hv.get(h) or {}).get("ansible_python_interpreter"))
+        for child in g.get("children", []):
+            walk(child, el8, seen)
+
+    walk("all", False, set())
+    return sorted(out)
+
+
+def check_ansible_targets(cfg):
+    root = Path(cfg["_root"]) if cfg else None
+    if not root or not shutil.which("ansible") or not (root / "ansible" / "inventory" / "managed").exists():
+        return []
+    _, so, _ = run(["ansible", "--version"])
+    if ansible_core_version(so) < (2, 17):
+        return []
+    rc, so, _ = run(["ansible-inventory", "-i", "inventory/managed", "--list"], timeout=60, cwd=root / "ansible")
+    if rc != 0:
+        return []
+    hosts = el8_without_interpreter(json.loads(so or "{}"))
+    if not hosts:
+        return []
+    return [{"check": "ansible:python", "ok": False,
+             "detail": f"{len(hosts)} EL8 host(s) without ansible_python_interpreter ({', '.join(hosts[:5])}"
+                       f"{', …' if len(hosts) > 5 else ''}): ansible-core 2.17+ can't use EL8's Python 3.6. "
+                       "Install python3.12 there and set ansible_python_interpreter: /usr/bin/python3.12 in the "
+                       "group's group_vars (references/ansible.md, Onboarding existing hosts)"}]
+
+
 def main(argv):
     results = check_tools() + check_ssh_agent() + check_gh() + check_keychain_unlocked()
     if "--keychain" in argv:
         results += check_keychain_selftest()
     cfg_results, cfg = check_config_and_secrets()
-    results += cfg_results + check_proxmox_tls(cfg)
+    results += cfg_results + check_proxmox_tls(cfg) + check_ansible_targets(cfg)
     if "--json" in argv:
         print(json.dumps(results, indent=2))
     else:
