@@ -47,6 +47,7 @@ COMPONENTS = {
                 ["ansible/ansible.cfg", "ansible/requirements.yml", "ansible/inventory/managed/hosts.yml",
                  "ansible/inventory/managed/group_vars/all.yml", "ansible/playbooks/ping.yml",
                  "ansible/playbooks/check-updates.yml", "ansible/playbooks/patch-linux.yml",
+                 "ansible/playbooks/docker-containers.yml",
                  "ansible/playbooks/patch-proxmox-node.yml", "ansible/playbooks/tasks/",
                  "ansible/playbooks/hooks/vrrp-health.yml",
                  "ansible/inventory/managed/group_vars/proxmox_nodes.yml", "ansible/roles/"]),

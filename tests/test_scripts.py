@@ -813,6 +813,14 @@ class DriftExtraIpsTests(unittest.TestCase):
         out = run("drift_report.py", "--no-tofu", cwd=self.d).stdout
         self.assertIn("10.0.10.9  — router [VLAN 20 DMZ]", out)
 
+    def test_container_ips_are_not_unmanaged(self):  # issue 40
+        nas = {"hosts": {"nas1": {"containers": [{"name": "pihole", "runtime": "lxd", "ips": ["10.0.10.9"]}]}}}
+        Path(self.d, "discovery/nas1-containers.json").write_text(json.dumps(nas))
+        out = run("drift_report.py", "--no-tofu", cwd=self.d).stdout
+        unmanaged = out.split("## Network devices not in managed inventory")[1]
+        self.assertIn("None.", unmanaged.split("Container addresses")[0])
+        self.assertIn("10.0.10.9 → `pihole` (lxd on `nas1`)", out)
+
     def test_secondary_ips_are_not_unmanaged(self):
         r = run("drift_report.py", "--no-tofu", cwd=self.d)
         self.assertEqual(r.returncode, 0, r.stderr)

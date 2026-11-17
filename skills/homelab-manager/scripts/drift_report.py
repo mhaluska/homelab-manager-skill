@@ -14,7 +14,9 @@ Reports: Proxmox guests not managed by OpenTofu, managed resources missing in Pr
 attribute drift (cores, memory, node, status), Ansible hosts that don't exist, which scanned
 addresses are Proxmox guests (by config/agent IP, MAC, DNS name), and network devices nobody manages.
 An inventory host's other addresses (router/switch secondary IPs, multi-homed NAS or firewall) go in the host
-var `hm_extra_ips: [10.0.20.1, …]`: they count as that host's, listed as secondary, not as unmanaged devices. Attribute drift inside OpenTofu itself is best seen
+var `hm_extra_ips: [10.0.20.1, …]`: they count as that host's, listed as secondary, not as unmanaged devices.
+Container addresses from discovery/*containers.json (docker-containers.yml, or a NAS recorded by hand) are
+listed as containers, not as unmanaged devices. Attribute drift inside OpenTofu itself is best seen
 with `tofu plan -refresh-only`; this report covers the gaps between the sources.
 """
 from __future__ import annotations
@@ -124,7 +126,25 @@ def load_tofu(args, root: Path, env: str):
     return json.loads(r.stdout or "{}"), f"tofu show -json ({d.relative_to(root)})"
 
 
-STALE_INPUTS = ["homelab.yaml", "ansible/inventory", "discovery/proxmox.json", "discovery/network.json"]
+STALE_INPUTS = ["homelab.yaml", "ansible/inventory", "discovery/proxmox.json", "discovery/network.json",
+                "discovery/containers.json"]
+
+
+def container_ips(root: Path) -> dict[str, str]:
+    """Addresses of containers (docker-containers.yml → discovery/containers.json, and hand-written
+    discovery/<name>-containers.json in the same layout, e.g. a NAS): ip → "name (runtime on host)"."""
+    out = {}
+    for f in sorted((root / "discovery").glob("*containers.json")):
+        try:
+            data = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        for host, entry in (data.get("hosts") or {}).items():
+            for c in (entry or {}).get("containers") or []:
+                for ip in c.get("ips") or []:
+                    out.setdefault(str(ip), f"`{hmlib.clean(c.get('name'), 80)}` ({c.get('runtime') or 'container'} "
+                                            f"on `{hmlib.clean(host, 80)}`)")
+    return out
 
 
 def newest_inputs(root: Path, than: float) -> list[str]:
@@ -352,6 +372,10 @@ def main():
             for n in node_nets:
                 if n.get("cidr"):
                     known_ips.add(str(ipaddress.ip_interface(n["cidr"]).ip))
+        containers = container_ips(root)
+        seen_containers = sorted((ip for ip in containers if ip in net["hosts"] and ip not in known_ips),
+                                 key=ipaddress.ip_address)
+        known_ips |= set(containers)
         ignore = set(hmlib.get(cfg, "discovery.ignore_unmanaged", []) or [])
         unknown = [(ip, h) for ip, h in net["hosts"].items() if ip not in known_ips and ip not in ignore]
         L += ["## Network devices not in managed inventory", ""]
@@ -369,6 +393,9 @@ def main():
         if seen_secondary:
             L += ["", f"Secondary addresses of inventory hosts (`hm_extra_ips`, {len(seen_secondary)}):", ""]
             L += [f"- {ip} → `{secondary[ip]}` (secondary)" for ip in seen_secondary]
+        if seen_containers:
+            L += ["", f"Container addresses (`discovery/*containers.json`, {len(seen_containers)}):", ""]
+            L += [f"- {ip} → {containers[ip]}" + vlan_suffix(cfg, ip) for ip in seen_containers]
         L.append("")
 
     L.append(f"**Total findings: {issues}** (unmanaged network devices listed separately)")

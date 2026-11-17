@@ -4,7 +4,7 @@ Discovery is read-only. Three pictures of the homelab are kept apart on purpose:
 
 | Picture | Where | Produced by |
 |---|---|---|
-| What is running | `discovery/proxmox.json`, `discovery/network.json`, `discovery/updates.json` | scripts below |
+| What is running | `discovery/proxmox.json`, `discovery/network.json`, `discovery/updates.json`, `discovery/containers.json` | scripts and playbooks below |
 | What OpenTofu manages | OpenTofu state (local file or S3) | `tofu apply` |
 | What Git declares | `tofu/**/homelab.auto.tfvars`, `ansible/inventory/managed/` | you + the user |
 
@@ -84,6 +84,23 @@ scan that also logs in read-only over SSH to see which hosts Ansible could manag
    Windows hosts need WinRM/OpenSSH — references/windows-appliances.md).
 Adding candidates to the managed inventory is a separate yes (`ssh_probe.py … --draft`, then
 references/ansible.md step 3–4); a full scan never edits the inventory.
+
+## Containers
+
+Proxmox only knows its guests; services in containers are invisible to it. When a scan finds a Linux host with
+no Proxmox guest behind it, or the user asks what runs in containers:
+- Linux hosts in the inventory: `ansible-playbook playbooks/docker-containers.yml [-e target=…]` (read-only)
+  → `discovery/containers.json`: per host the runtimes (Docker, Podman), Kubernetes (k3s, k0s, kubelet,
+  microk8s) and each container's image, state, restart policy, network mode, addresses, published ports,
+  compose project and auto-update label. Report restart-looping or exited containers, `restart: no` services,
+  and auto-updaters (Watchtower) — they change images outside any patch window.
+- A host with no Proxmox guest: `ssh_probe.py` it; `systemd-detect-virt` = `lxc`/`docker` means a container.
+  Then look for the host that runs it, often a NAS: QNAP Container Station (LXD and Docker; binaries under
+  `/share/*/.qpkg/container-station/bin`), Synology Container Manager (`docker`), TrueNAS apps
+  (`midclt call app.query`), plain LXD/Incus (`lxc list`). Read-only over SSH, with the user's yes for the
+  appliance login. Record the result in `discovery/<nas>-containers.json` in the same layout
+  (`{"collected_at": …, "hosts": {"<nas>": {"containers": [{"name", "runtime", "image", "state", "ips"}]}}}`)
+  so the drift report lists those addresses as containers instead of unmanaged devices.
 
 ## VLAN names
 

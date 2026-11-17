@@ -1,0 +1,140 @@
+# Read-only: containers (Docker, Podman) on Linux hosts and Kubernetes runtimes (k3s, k0s, kubelet,
+# microk8s), so services running in containers inside guests show up in discovery and drift.
+#   ansible-playbook playbooks/docker-containers.yml [-e target=<group|host>]
+# Writes discovery/containers.json, merged: hosts not checked this run keep their last result (each has
+# collected_at); a host that fails or can't be reached gets `error`. Per container: name, runtime, image,
+# state, restart policy, network mode, networks with addresses (macvlan/ipvlan ones are on the LAN and
+# match scanned IPs in the drift report), published ports, compose project and auto-update labels
+# (Watchtower, Podman auto-update). Root's containers only: rootless Podman per user is not listed.
+# Nothing here changes a container. Containers hosted elsewhere (a NAS) can be recorded by hand in
+# discovery/<name>-containers.json with the same layout (references/discovery.md, Containers).
+- name: Containers on Linux hosts
+  hosts: "{{ target | default('linux') }}"
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Mark as checked (runs locally, also for hosts that turn out unreachable)
+      ansible.builtin.set_fact:
+        hm_checked: true
+
+    - name: Container runtimes and Kubernetes
+      ansible.builtin.shell: |
+        for r in docker podman; do
+          command -v "$r" >/dev/null 2>&1 && "$r" info >/dev/null 2>&1 && echo "runtime $r"
+        done
+        for k in k3s k0s kubelet microk8s; do
+          if command -v "$k" >/dev/null 2>&1 || systemctl is-active -q "$k" 2>/dev/null; then echo "kubernetes $k"; fi
+        done
+        true
+      register: hm_rt
+      changed_when: false
+      check_mode: false
+      ignore_unreachable: true
+      ignore_errors: true
+
+    - name: Unreachable or failed
+      ansible.builtin.set_fact:
+        container_error: >-
+          {{ 'unreachable' if hm_rt.unreachable | default(false) else 'runtimes' }}: {{
+             (hm_rt.stderr | default('', true) or hm_rt.msg | default('failed')) | trim | truncate(200) }}
+      when: hm_rt.unreachable | default(false) or hm_rt is failed
+
+    - name: Inspect
+      when: container_error is not defined
+      block:
+        - name: Inspect all containers
+          ansible.builtin.shell: |
+            ids=$({{ item }} ps -aq)
+            if [ -z "$ids" ]; then echo '[]'; else {{ item }} inspect $ids; fi
+          loop: "{{ hm_rt.stdout_lines | select('match', '^runtime ') | map('split', ' ') | map('last') | list }}"
+          register: hm_inspect
+          changed_when: false
+          check_mode: false
+
+        - name: Summarise
+          ansible.builtin.set_fact:
+            container_summary:
+              runtimes: "{{ hm_rt.stdout_lines | select('match', '^runtime ') | map('split', ' ') | map('last') | list }}"
+              kubernetes: "{{ hm_rt.stdout_lines | select('match', '^kubernetes ') | map('split', ' ') | map('last') | list }}"
+              containers: >-
+                {%- set out = [] -%}
+                {%- for r in hm_inspect.results | default([]) -%}
+                  {%- for c in r.stdout | from_json -%}
+                    {%- set nets = c.NetworkSettings.Networks | default({}, true) -%}
+                    {%- set labels = c.Config.Labels | default({}, true) -%}
+                    {%- set ports = [] -%}
+                    {%- for p, binds in (c.NetworkSettings.Ports | default({}, true)).items() -%}
+                      {%- for b in binds or [] -%}
+                        {%- set _ = ports.append((b.HostIp ~ ':' if b.HostIp not in ['', '0.0.0.0', '::'] else '')
+                                                 ~ b.HostPort ~ '->' ~ p) -%}
+                      {%- endfor -%}
+                    {%- endfor -%}
+                    {%- set _ = out.append({
+                          'name': c.Name | default('') | regex_replace('^/', ''),
+                          'runtime': r.item,
+                          'image': c.Config.Image | default(c.ImageName | default('')),
+                          'state': c.State.Status | default(''),
+                          'restart': c.HostConfig.RestartPolicy.Name | default(''),
+                          'network_mode': c.HostConfig.NetworkMode | default(''),
+                          'networks': nets.keys() | list,
+                          'ips': nets.values() | map(attribute='IPAddress') | select | list | unique,
+                          'ports': ports | unique,
+                          'compose_project': labels['com.docker.compose.project']
+                                             | default(labels['io.podman.compose.project'] | default(none)),
+                          'auto_update': labels['com.centurylinklabs.watchtower.enable']
+                                         | default(labels['io.containers.autoupdate'] | default(none))}) -%}
+                  {%- endfor -%}
+                {%- endfor -%}
+                {{ out | sort(attribute='name') }}
+      rescue:
+        - name: Record the failure
+          ansible.builtin.set_fact:
+            container_error: >-
+              {{ ansible_failed_task.name }}: {{ (ansible_failed_result.stderr | default('', true)
+              or ansible_failed_result.msg | default('failed')) | trim | truncate(200) }}
+
+- name: Write discovery/containers.json
+  hosts: localhost
+  gather_facts: false
+  vars:
+    containers_file: "{{ playbook_dir }}/../../discovery/containers.json"
+    checked: "{{ groups['all'] | map('extract', hostvars) | selectattr('hm_checked', 'defined') | list }}"
+    reported: >-
+      {{ checked | selectattr('container_summary', 'defined') | rejectattr('container_error', 'defined')
+         | map(attribute='inventory_hostname') | list }}
+    failed: "{{ checked | map(attribute='inventory_hostname') | reject('in', reported) | list }}"
+  tasks:
+    - name: Read the previous results
+      ansible.builtin.stat:
+        path: "{{ containers_file }}"
+      register: prev_containers
+
+    - name: Merge with this run
+      ansible.builtin.set_fact:
+        containers_merged: >-
+          {%- set prev = (lookup('ansible.builtin.file', containers_file) | from_json) if prev_containers.stat.exists else {} -%}
+          {%- set hosts = {} -%}
+          {%- for name, entry in (prev.hosts | default({})).items() if name in groups['all'] -%}
+            {%- set _ = hosts.update({name: entry}) -%}
+          {%- endfor -%}
+          {%- for name in reported -%}
+            {%- set _ = hosts.update({name: hostvars[name].container_summary | combine({'collected_at': now_utc})}) -%}
+          {%- endfor -%}
+          {%- for name in failed -%}
+            {%- set _ = hosts.update({name: (hosts.get(name, {}) | combine({'error': hostvars[name].container_error
+                                             | default('failed (see the play output)'), 'collected_at': now_utc}))}) -%}
+          {%- endfor -%}
+          {{ {'collected_at': now_utc, 'hosts': hosts} }}
+      vars:
+        now_utc: "{{ now(utc=true).isoformat() }}"
+
+    - name: Write
+      ansible.builtin.copy:
+        dest: "{{ containers_file }}"
+        content: "{{ containers_merged | to_nice_json }}\n"
+        mode: "0644"
+
+    - name: Hosts without a result
+      ansible.builtin.debug:
+        msg: "{% for h in failed %}{{ h }}: {{ hostvars[h].container_error | default('failed') }}{{ '; ' if not loop.last }}{% endfor %}"
+      when: failed | length > 0

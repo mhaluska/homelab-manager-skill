@@ -189,6 +189,14 @@
       "when": {"component": "proxmox", "file_lacks": ["docs/proxmox-tokens.md", "Backup jobs"]},
       "text": "docs/proxmox-tokens.md has an optional, narrow grant for managing vzdump backup jobs (#42); references/proxmox.md 'Backup jobs' describes adding unbacked guests.",
       "action": "Copy the 'Backup jobs (optional)' section from {template} into docs/proxmox-tokens.md. Granting it is the user's choice, run on a Proxmox node."
+    },
+    {
+      "version": "0.17.0",
+      "id": "docker-containers",
+      "kind": "template",
+      "when": {"component": "ansible", "file_missing": "ansible/playbooks/docker-containers.yml"},
+      "text": "New read-only playbooks/docker-containers.yml lists Docker/Podman containers and Kubernetes runtimes on Linux hosts into discovery/containers.json; the drift report matches container addresses instead of calling them unmanaged (#40).",
+      "action": "Copy {template} into ansible/playbooks/, then follow references/discovery.md 'Containers'."
     }
   ]
 }
