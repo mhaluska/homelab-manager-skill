@@ -58,7 +58,10 @@ counts; the play's last task lists them. They are findings too: report them in t
 4. Approval (the guard asks for any patch run outside `--check`).
 5. Run: `ansible-playbook playbooks/patch-linux.yml -e target=<group> [-e security_only=true]`.
    The playbook stops on the first failure (`max_fail_percentage: 0`) and checks failed
-   systemd units and `health_services` after each host.
+   systemd units and `health_services` after each host. A unit counts only when it failed after the update
+   and not before; in LXC guests kernel-module and kernel-filesystem units that fail on every boot don't
+   count. A oneshot named as new may still be such a unit: check `journalctl -b -u <unit>`, and only if the
+   update did not cause it, add it to `failed_units_ignore` (group_vars) with the user's yes.
 6. Reboots: a separate, approved run with `-e reboot=if_required` (or the cluster's `reboot`), one cluster member at a
    time (`serial: 1` is the default; never raise it for cluster groups). Wait for health
    checks to pass before the next host — the playbook does this.

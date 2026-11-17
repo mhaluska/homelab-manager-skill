@@ -211,6 +211,34 @@
       },
       "text": "check-updates.yml writes discovery/updates.json also when run with --limit (-l <host>); before, the result was lost (#48).",
       "action": "Replace ansible/playbooks/check-updates.yml with {template}, carrying over any local edits (show the user the diff first)."
+    },
+    {
+      "version": "0.18.0",
+      "id": "patch-linux-0.18",
+      "kind": "template",
+      "when": {
+        "component": "ansible",
+        "file_lacks": [
+          "ansible/playbooks/patch-linux.yml",
+          "lxc_failed_units_ignore"
+        ]
+      },
+      "text": "patch-linux.yml compares failed units by name and doesn't count units that fail on every boot in LXC containers or are listed in failed_units_ignore (#51).",
+      "action": "Replace ansible/playbooks/patch-linux.yml with {template}, carrying over any local edits (show the user the diff first)."
+    },
+    {
+      "version": "0.18.0",
+      "id": "failed-units-ignore",
+      "kind": "template",
+      "when": {
+        "component": "ansible",
+        "file_lacks": [
+          "ansible/inventory/managed/group_vars/all.yml",
+          "failed_units_ignore"
+        ]
+      },
+      "text": "Optional failed_units_ignore in group_vars: failed units patch-linux.yml must not count as new (e.g. ones that fail on every boot).",
+      "action": "Add the failed_units_ignore line from {template} to ansible/inventory/managed/group_vars/all.yml (empty list unless the user names units)."
     }
   ]
 }

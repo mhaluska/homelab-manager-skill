@@ -29,6 +29,8 @@
 #                         failure stops the roll, e.g. playbooks/hooks/vrrp-health.yml (keepalived/VRRP)
 #   order: vip_holder_last + vip   the node holding the VIP is patched last, so it fails over only once
 # Task file paths are relative to ansible/ (as written in homelab.yaml).
+# After each host: no unit may fail that didn't before, except failed_units_ignore (group_vars) and, in LXC
+# guests, lxc_failed_units_ignore (kernel-module units that fail on every boot in a container).
 # Packages listed in `patch_exclude` (set it in the group's group_vars, e.g. kubelet/kubeadm/kubectl
 # for Kubernetes nodes) are never upgraded: dnf exclude on RHEL, apt hold on Debian.
 # Not a play var on purpose — play vars would override group_vars.
@@ -117,6 +119,11 @@
     snapshot_name: "prepatch-{{ now().strftime('%Y%m%d') }}"
     # never restarted automatically (a reboot or the user's own step instead): restarting these drops sessions
     restart_exclude: [dbus.service, dbus-broker.service, systemd-logind.service]
+    # units that can't work in an LXC container (kernel modules, kernel filesystems, audit) and fail on every
+    # boot there: not counted as new failures in LXC guests; add your own in group_vars failed_units_ignore
+    lxc_failed_units_ignore: [auth-rpcgss-module.service, systemd-modules-load.service, systemd-binfmt.service,
+                              proc-sys-fs-binfmt_misc.mount, sys-kernel-config.mount, sys-kernel-debug.mount,
+                              sys-kernel-tracing.mount, systemd-journald-audit.socket]
 
   pre_tasks:
     - name: reboot is never, if_required or always
@@ -261,10 +268,35 @@
       register: failed_after
       changed_when: false
 
+    # Compared by unit name (the description may change); failed_units_ignore (group_vars) and, in LXC
+    # guests, lxc_failed_units_ignore don't count (GitHub issue #51)
+    - name: New failed units
+      ansible.builtin.set_fact:
+        hm_new_failed: >-
+          {{ failed_after.stdout_lines | select | map('split') | map('first') | list
+             | difference(failed_before.stdout_lines | select | map('split') | map('first') | list)
+             | difference(failed_units_ignore | default([], true)
+                          + (lxc_failed_units_ignore if ansible_facts.virtualization_type | default('') == 'lxc' else [])) }}
+
+    - name: How the new failed units start
+      ansible.builtin.command:
+        argv: [systemctl, show, -p, Type, --value, "{{ item }}"]
+      loop: "{{ hm_new_failed }}"
+      register: hm_new_failed_type
+      changed_when: false
+
     - name: No new failed units
       ansible.builtin.assert:
-        that: (failed_after.stdout_lines | difference(failed_before.stdout_lines)) | length == 0
-        fail_msg: "New failed units: {{ failed_after.stdout_lines | difference(failed_before.stdout_lines) }}"
+        that: hm_new_failed | length == 0
+        fail_msg: >-
+          New failed units: {{ hm_new_failed | join(', ') }}{{
+          ('. Oneshot (may fail on every boot, e.g. after a long uptime reset its state): ' ~ oneshots | join(', ')
+           ~ '. Check `journalctl -b -u <unit>`; if the update did not cause it, list it in failed_units_ignore'
+           ~ ' (group_vars) and rerun the rest') if oneshots | length > 0 else '' }}
+      vars:
+        oneshots: >-
+          {{ hm_new_failed_type.results | default([]) | selectattr('stdout', 'defined')
+             | selectattr('stdout', 'eq', 'oneshot') | map(attribute='item') | list }}
 
     - name: Cluster post-hook (uncordon, leave maintenance, …)
       ansible.builtin.include_tasks:
