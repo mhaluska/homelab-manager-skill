@@ -249,6 +249,19 @@ class DeviceGuessTests(unittest.TestCase):
         ports = [{"service": "ssh", "product": "OpenSSH"}, {"service": "vnc", "product": "Apple remote desktop vnc"}]
         self.assertEqual(self.g({"vendor": None, "os": [], "ports": ports}), "linux/macos")
 
+    def test_bmc_and_unifi_from_banners_and_names(self):  # GitHub issue #17
+        ilo = [{"service": "ssh", "product": "HP Integrated Lights-Out mpSSH"},
+               {"service": "http", "product": "HP Integrated Lights-Out web interface"}]
+        self.assertEqual(self.g({"vendor": None, "os": [], "ports": ilo}), "bmc")
+        for product in ("AMI MegaRAC SP-X", "Dell iDRAC9 web interface", "Supermicro IPMI"):
+            self.assertEqual(self.g({"vendor": None, "os": [], "ports": [{"service": "http", "product": product}]}),
+                             "bmc", product)
+        uap = {"vendor": None, "os": [], "hostnames": ["uap-office.lan"],
+               "ports": [{"service": "ssh", "product": "Dropbear sshd"}]}
+        self.assertEqual(self.g(uap), "network")
+        self.assertEqual(self.g({**uap, "hostnames": ["uapster.lan"]}), "unknown")  # prefix needs a separator
+        self.assertEqual(self.g({"vendor": None, "os": [], "hostnames": ["ilo-srv1.lan"], "ports": []}), "bmc")
+
 
 class RedactTests(unittest.TestCase):
     def test_redact(self):

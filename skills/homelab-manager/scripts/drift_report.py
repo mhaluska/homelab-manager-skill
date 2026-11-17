@@ -302,6 +302,8 @@ def main():
             L += [f"{len(unknown)} device(s) — add to inventory, or list in `discovery.ignore_unmanaged`"
                   + (" (Proxmox guests are listed above, not here)" if matched else "") + ":", ""]
             L += [f"- {ip} {(h.get('hostnames') or [''])[0]} — {h.get('device_type_guess')} {h.get('vendor') or ''}".rstrip()
+                  + (" — **management controller (BMC)**: keep it off user networks" if
+                     "bmc" in str(h.get("device_type_guess") or "").split("/") else "")
                   for ip, h in sorted(unknown)]
         else:
             L.append("None.")

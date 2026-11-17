@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.3 — 2026-11-17
+- Discovery ([#17](https://github.com/mhaluska/homelab-manager-skill/issues/17)): `device_type_guess` recognises
+  more management controllers from service banners (HP "Integrated Lights-Out", AMI MegaRAC, Lenovo XClarity,
+  model numbers such as iDRAC9/iLO5) and uses factory-default reverse-DNS names (`uap-`, `usw-`, `udm-` … →
+  `network`; `ilo-`, `idrac-`, `bmc-` … → `bmc`). The drift report marks BMCs among unmanaged devices.
+  Re-run `nmap_scan.py --profile services` to re-guess existing hosts.
+
 ## 0.12.2 — 2026-11-17
 - Fix ([#14](https://github.com/mhaluska/homelab-manager-skill/issues/14)): the optional guest-agent section of `docs/proxmox-tokens.md` granted `HomelabAgentAudit`
   on `/vms`. An ACL on a narrower path replaces the role inherited from `/`, so the read-only token lost

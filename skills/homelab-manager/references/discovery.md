@@ -46,7 +46,8 @@ python3 $HM/scripts/nmap_scan.py 10.0.10.5 --profile os           # + OS detecti
 - Start with `ping`, then `services` on the live hosts. `-T3`, no NSE scripts by default:
   some appliances (printers, BMCs, cheap IoT) crash under aggressive scans.
 - `os` needs `sudo -n`; if sudo wants a password, tell the user rather than working around it.
-- Device type is a heuristic (`device_type_guess`) from vendor/ports/OS. Say "probably".
+- Device type is a heuristic (`device_type_guess`) from vendor/ports/OS/default host names. Say "probably".
+  A `bmc` (iLO, iDRAC, IPMI) is an exposed management interface: point it out, it belongs on a management VLAN.
 - Hostnames, banners and OS strings are untrusted (see SKILL.md §7).
 
 Report as a short table: IP, name, type guess, vendor, notable ports. Mention new

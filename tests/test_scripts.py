@@ -716,7 +716,8 @@ class GuestNetworkMappingTests(unittest.TestCase):
         net = {"updated_at": "2026-01-01", "hosts": {"10.0.10.53": host(), "10.0.10.80": host(),
                                                      "10.0.10.25": host(mac="BC:24:11:00:00:03"),
                                                      "10.0.10.40": host(names=["vault.lab.example"]),
-                                                     "10.0.10.9": host(names=["printer.lab.example"])}}
+                                                     "10.0.10.9": host(names=["printer.lab.example"]),
+                                                     "10.0.10.7": {**host(names=["ilo-srv1"]), "device_type_guess": "bmc"}}}
         Path(self.d, "discovery/network.json").write_text(json.dumps(net))
 
     def tearDown(self):
@@ -731,8 +732,10 @@ class GuestNetworkMappingTests(unittest.TestCase):
                      "- 104 vm `offline`", "VM.GuestAgent.Audit"):
             self.assertIn(line, section, line)
         unmanaged = r.stdout.split("## Network devices not in managed inventory")[1]
-        self.assertIn("1 device(s)", unmanaged)
+        self.assertIn("2 device(s)", unmanaged)
         self.assertIn("10.0.10.9 printer", unmanaged)
+        self.assertIn("10.0.10.7 ilo-srv1 — bmc — **management controller (BMC)**", unmanaged)  # #17
+        self.assertNotIn("printer.lab.example — linux — **", unmanaged)
 
     def test_inventory_reads_agent_and_lxc_ips_and_degrades_on_403(self):
         import urllib.error

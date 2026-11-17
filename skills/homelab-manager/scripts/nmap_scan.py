@@ -46,14 +46,20 @@ DEVICE_HINTS = [  # (word/phrase in vendor/OS/service/product, device type) — 
     ("synology", "nas"), ("qnap", "nas"), ("truenas", "nas"),
     ("ipp", "printer"), ("jetdirect", "printer"), ("printer", "printer"), ("brother", "printer"),
     ("hikvision", "camera"), ("rtsp", "camera"), ("idrac", "bmc"), ("ilo", "bmc"), ("ipmi", "bmc"),
-    ("supermicro", "bmc"), ("home assistant", "iot"), ("espressif", "iot"), ("shelly", "iot"),
+    ("lights-out", "bmc"), ("megarac", "bmc"), ("supermicro", "bmc"), ("asmb", "bmc"), ("xclarity", "bmc"), ("home assistant", "iot"), ("espressif", "iot"), ("shelly", "iot"),
     ("raspberry", "sbc"), ("linux", "linux"), ("openssh", "linux"),
 ]
-_HINT_RX = [(re.compile(r"(?<![a-z0-9])" + re.escape(n) + r"(?![a-z0-9])"), kind) for n, kind in DEVICE_HINTS]
+# a hint may carry a model number (iDRAC9, iLO5): digits after it still match, letters don't
+_HINT_RX = [(re.compile(r"(?<![a-z0-9])" + re.escape(n) + r"\d*(?![a-z0-9])"), kind) for n, kind in DEVICE_HINTS]
+HOSTNAME_HINTS = [  # (reverse-DNS name prefix, device type): factory default names of common gear
+    (re.compile(r"^(uap|usw|udm|ugw|usg|uxg|ucg|u6|u7|unifi)[-.]"), "network"),
+    (re.compile(r"^(ilo|idrac|ipmi|bmc|imm|xcc)[-.]"), "bmc"),
+]
 
 
 def guess_type(h: dict) -> str:
-    """Score evidence: vendor (MAC OUI) and OS matches weigh 3, each open port's service/product 1.
+    """Score evidence: vendor (MAC OUI) and OS matches weigh 3, a default host name prefix (uap-, ilo-…) 2,
+    each open port's service/product 1.
 
     One odd port (nmap mislabels plenty) shouldn't outvote the hardware vendor or OS.
     """
@@ -61,6 +67,11 @@ def guess_type(h: dict) -> str:
     sources += [(o["name"].lower(), 3) for o in h.get("os", []) if o.get("name")]
     sources += [(f"{p.get('service') or ''} {p.get('product') or ''}".lower(), 1) for p in h.get("ports", [])]
     scores: dict[str, int] = {}
+    for name in h.get("hostnames") or []:  # weight 2: a default name beats one generic banner (Dropbear, …)
+        kind = next((k for rx, k in HOSTNAME_HINTS if rx.match((name or "").lower())), None)
+        if kind:
+            scores[kind] = scores.get(kind, 0) + 2
+            break
     for text, weight in sources:
         for rx, kind in _HINT_RX:
             if text and rx.search(text):
