@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.19.0 — 2026-11-17
+- LXD/Incus snapshots ([#44](https://github.com/mhaluska/homelab-manager-skill/issues/44)): new `lxd_snapshot.py list|check|create|delete|restore <host…>` for containers
+  on a plain LXD/Incus host or a QNAP NAS (Container Station). Host vars: `lxd_host` (and optional `lxd_instance`,
+  `lxd_project`) on the instance; `lxd_snapshots: true` on its host opts that appliance in (optional `lxd_cli`,
+  `lxd_sudo`). It uses `<cli> query` over SSH, so LXD and Incus behave alike. check reports the storage driver,
+  `dir` pools too full for the copy, disks the snapshot doesn't contain and scheduled snapshots; restore refuses
+  on ZFS while newer snapshots exist.
+- `patch-linux.yml -e snapshot=true` snapshots hosts with `lxd_host` with it, after the same pre-flight check
+  as Proxmox guests.
+- Guard: asks before `lxd_snapshot.py delete|restore` and before `lxc`/`incus` delete, restore or API writes
+  (`query -X PUT|PATCH|DELETE`), also over SSH.
+- TrueNAS and Synology are out of scope (references/patching.md "LXD/Incus instances").
+- Upgrade note for `patch-linux.yml`: `init_repo.py --sync-managed`.
+
 ## 0.18.0 — 2026-11-17
 - Snapshot pre-flight ([#49](https://github.com/mhaluska/homelab-manager-skill/issues/49)): new read-only `pve_snapshot.py check <guests> [--json]` reports every guest
   (ok, not a Proxmox guest, or not snapshottable with the reason, e.g. a bind or device mount point).
