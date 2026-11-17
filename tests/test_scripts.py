@@ -1602,6 +1602,8 @@ class SitesTests(unittest.TestCase):  # issue 52
         self.assertNotIn("PROXMOX_VE_INSECURE", home)
         self.assertEqual(off["PROXMOX_URL"], "https://pve-off.example:8006/api2/json")
         self.assertEqual(off["PROXMOX_VE_INSECURE"], "true")
+        self.assertEqual((home["TF_VAR_proxmox_site"], off["TF_VAR_proxmox_site"], off["PKR_VAR_proxmox_site"]),
+                         ("home", "offsite", "offsite"))
 
     def test_site_group_problems(self):
         import check_env
@@ -1657,6 +1659,83 @@ class SitesTests(unittest.TestCase):  # issue 52
         self.assertIn("pve-off.example", hosts)
         self.assertIn("Rented server", hosts)
         self.assertIn("offbackup", hosts)
+
+
+class SiteTofuTests(unittest.TestCase):  # issue 52, part 2
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d)
+        run("init_repo.py", self.d, "--components", "proxmox,ansible", cwd=self.d)
+        r = run("config_set.py", "proxmox.endpoint=https://pve1.example:8006", "sites+={name: home}",
+                "sites+={name: offsite, proxmox: {endpoint: 'https://pve-off.example:8006'}}", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sys.path.insert(0, str(SCRIPTS))
+        import hmlib
+        self.h = hmlib
+
+    def test_add_site_and_check(self):
+        import check_env
+        cfg = self.h.load_config(self.d)
+        self.assertEqual([r["ok"] for r in check_env.check_tofu_sites(cfg)], [False, None])  # homelab: no site.tf
+        r = run("init_repo.py", self.d, "--add-site", "offsite", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('var.proxmox_site == "offsite"', Path(self.d, "tofu/environments/offsite/site.tf").read_text())
+        self.assertIn('var.proxmox_site == "home"', Path(self.d, "tofu/environments/homelab/site.tf").read_text())
+        self.assertTrue(Path(self.d, "tofu/environments/offsite/main.tf").is_file())
+        self.assertIn("ansible_group_priority: 10",
+                      Path(self.d, "ansible/inventory/managed/group_vars/site_offsite.yml").read_text())
+        self.assertEqual([r["ok"] for r in check_env.check_tofu_sites(cfg)], [True, True])
+        subprocess.run(["yq", "-i", '.opentofu.local.path = "~/st/state.tfstate"', str(Path(self.d, "homelab.yaml"))],
+                       check=True)
+        res = check_env.check_tofu_sites(self.h.load_config(self.d))
+        self.assertEqual(res[-1]["check"], "tofu:state")
+        self.assertFalse(res[-1]["ok"])
+        self.assertNotEqual(run("init_repo.py", self.d, "--add-site", "home", cwd=self.d).returncode, 0)
+        self.assertNotEqual(run("init_repo.py", self.d, "--add-site", "moon", cwd=self.d).returncode, 0)
+
+    def test_state_per_environment(self):
+        run("init_repo.py", self.d, "--add-site", "offsite", cwd=self.d)
+        init = lambda *a: run("tofu_init.py", "--print", *a, cwd=self.d)
+        r = init("--site", "offsite")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("tofu/environments/offsite", r.stdout)
+        self.assertIn("/offsite.tfstate", r.stdout)
+        cfg = Path(self.d, "homelab.yaml")
+        subprocess.run(["yq", "-i", f'.opentofu.local.path = "{self.d}/st/state.tfstate"', str(cfg)], check=True)
+        self.assertEqual(init().returncode, 0)                                   # default env: as before
+        r = init("--site", "offsite")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("has no {env}", r.stderr)
+        subprocess.run(["yq", "-i", f'.opentofu.local.path = "{self.d}/st/{{env}}.tfstate"', str(cfg)], check=True)
+        self.assertIn(f"{self.d}/st/offsite.tfstate", init("--site", "offsite").stdout)
+
+    def test_tofu_hosts_per_site(self):
+        import tofu_to_inventory
+        text = tofu_to_inventory.to_yaml({"linux": {"web09": {"ansible_host": "192.0.2.9"}}}, "offsite", "site_offsite")
+        self.assertIn("(offsite)", text.splitlines()[0])
+        self.assertIn("    site_offsite:\n      hosts:\n        web09:", text)
+        self.assertIn("children: {}", tofu_to_inventory.to_yaml({}, "offsite", "site_offsite"))
+
+    def test_drift_compares_each_site_with_its_state(self):
+        import drift_report
+        state = {"values": {"root_module": {"child_modules": [{"resources": [
+            {"type": "proxmox_virtual_environment_vm", "mode": "managed", "address": "module.vm[\"web09\"].x",
+             "values": {"vm_id": 100, "name": "web09", "node_name": "n1", "started": True}}]}]}}}
+        px = {"guests": [{"vmid": 100, "name": "web09", "type": "vm", "node": "n2", "status": "running",
+                          "template": False, "cpus": None, "mem_gib": None},
+                         {"vmid": 101, "name": "hand", "type": "vm", "node": "n1", "status": "running",
+                          "template": False, "cpus": None, "mem_gib": None}]}
+        lines, n = drift_report.compare_state(px, state, "offsite/")
+        text = "\n".join(lines)
+        self.assertIn("- offsite/101 vm `hand`", text)
+        self.assertIn("offsite/100 `module.vm[\"web09\"].x`: node n1 → live n2", text)
+        self.assertEqual(n, 2)
+        Path(self.d, "discovery/proxmox-offsite.json").write_text(json.dumps({"collected_at": "x", **px}))
+        Path(self.d, "state.json").write_text(json.dumps(state))
+        r = run("drift_report.py", "--tofu-json", "state.json", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("| OpenTofu state — site offsite | unavailable: no OpenTofu environment "
+                      "(init_repo.py --add-site offsite) |", r.stdout)
 
 
 class PveNodePlanTests(unittest.TestCase):  # issue 23

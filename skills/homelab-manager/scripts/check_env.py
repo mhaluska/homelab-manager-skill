@@ -255,6 +255,47 @@ def _check_tls(cfg, px):
                        "(Proxmox's own CA: /etc/pve/pve-root-ca.pem on a node) rather than verify_tls: false"}]
 
 
+def check_tofu_sites(cfg):
+    """Several sites: each site's OpenTofu environment refuses another site's token (site.tf), and the state
+    settings keep the environments apart."""
+    if not cfg or not hmlib.get(cfg, "components.proxmox", True):
+        return []
+    try:
+        all_sites = hmlib.sites(cfg)
+    except hmlib.ConfigError:
+        return []    # check_proxmox_tls reports it
+    if len(all_sites) < 2:
+        return []
+    root, out = Path(cfg["_root"]), []
+    envs = root / "tofu" / "environments"
+    for st in all_sites:
+        env = hmlib.tofu_env(cfg, st["name"])
+        check = f"tofu:{env}"
+        d = envs / env
+        if not d.is_dir():
+            if not st["default"] and st["proxmox"]:
+                out.append({"check": check, "ok": None, "detail": f"site {st['name']} has no OpenTofu environment yet "
+                            f"(init_repo.py --add-site {st['name']} before provisioning there)"})
+            continue
+        f = d / "site.tf"
+        want = f'var.proxmox_site == "{st["name"]}"'
+        if not f.is_file() or want not in f.read_text(errors="replace"):
+            out.append({"check": check, "ok": False,
+                        "detail": f"tofu/environments/{env} doesn't check the token's site ({want} in site.tf): a "
+                                  f"plan with another site's token would change that Proxmox — init_repo.py "
+                                  f"--add-site {st['name'] if not st['default'] else all_sites[1]['name']} writes it"})
+        else:
+            out.append({"check": check, "ok": True, "detail": f"site {hmlib.site_title(st)}, token site checked"})
+    kind = hmlib.get(cfg, "opentofu.state_backend", "local") or "local"
+    key = {"local": "opentofu.local.path", "s3": "opentofu.s3.key"}.get(kind)
+    fixed = str(hmlib.get(cfg, key) or "") if key else ""
+    if fixed and "{env}" not in fixed and sum((envs / hmlib.tofu_env(cfg, s["name"])).is_dir() for s in all_sites) > 1:
+        out.append({"check": "tofu:state", "ok": False,
+                    "detail": f"{key} has no {{env}}: every site's environment would use one state. Put {{env}} in "
+                              "it (moving the default environment's state is a -migrate-state, with a yes)"})
+    return out
+
+
 # Targets need a Python that the controller's ansible-core still supports. EL8 ships Python 3.6, which
 # ansible-core 2.17 dropped: such hosts need e.g. python3.12 from AppStream and ansible_python_interpreter.
 EL8_GROUP = re.compile(r"^(el|rhel|rocky|alma|almalinux|centos|centos_?stream|ol|oracle|oraclelinux)_?8$", re.I)
@@ -377,7 +418,8 @@ def main(argv):
     if "--keychain" in argv:
         results += check_keychain_selftest()
     cfg_results, cfg = check_config_and_secrets()
-    results += cfg_results + check_proxmox_tls(cfg) + check_ansible_targets(cfg) + check_git_upstream(cfg)
+    results += (cfg_results + check_proxmox_tls(cfg) + check_tofu_sites(cfg) + check_ansible_targets(cfg)
+                + check_git_upstream(cfg))
     if "--json" in argv:
         print(json.dumps(results, indent=2))
     else:

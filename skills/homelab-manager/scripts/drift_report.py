@@ -8,7 +8,7 @@ Sources (all read-only):
   live      discovery/proxmox.json   (proxmox_inventory.py)  and discovery/network.json (nmap_scan.py);
             other sites (sites: in homelab.yaml): discovery/proxmox-<site>.json, reported per site
   state     `tofu show -json` in tofu/environments/<env>  (run under with_secrets.py for the state backend)
-            or a file passed with --tofu-json
+            or a file passed with --tofu-json; another site: its own environment tofu/environments/<site>
   declared  ansible/inventory/managed via `ansible-inventory --list`
 
 Reports: Proxmox guests not managed by OpenTofu, managed resources missing in Proxmox,
@@ -125,6 +125,46 @@ def load_tofu(args, root: Path, env: str):
         return None, ("`tofu show -json` failed — run via with_secrets.py so the state backend is reachable"
                       + (f" ({hmlib.clean(lines[0], 160)})" if lines else ""))
     return json.loads(r.stdout or "{}"), f"tofu show -json ({d.relative_to(root)})"
+
+
+def compare_state(px: dict, state: dict, prefix: str = "") -> tuple[list[str], int]:
+    """One site's live guests against its OpenTofu state: (report lines, findings)."""
+    live = {g["vmid"]: g for g in px.get("guests", [])}
+    managed = tofu_guests(state)
+    L, issues = [], 0
+    unmanaged = [g for vid, g in live.items() if vid not in managed]
+    missing = [m for vid, m in managed.items() if vid not in live]
+    if unmanaged:
+        issues += len(unmanaged)
+        L += [f"**Not managed by OpenTofu ({len(unmanaged)})** — candidates for `tofu import` (needs approval):", ""]
+        L += [f"- {prefix}{g['vmid']} {g['type']} `{g['name']}` on {g['node']} ({g['status']}"
+              f"{', template' if g['template'] else ''})" for g in unmanaged]
+        L.append("")
+    if missing:
+        issues += len(missing)
+        L += [f"**In state but missing from Proxmox ({len(missing)})** — deleted outside OpenTofu? A plan would recreate them:", ""]
+        L += [f"- {prefix}{vid} `{m['address']}` ({m['type']} {m['name'] or ''})" for vid, m in managed.items() if vid not in live]
+        L.append("")
+    diffs = []
+    for vid, m in managed.items():
+        g = live.get(vid)
+        if not g:
+            continue
+        ref = f"{prefix}{vid} `{m['address']}`"
+        if m["node"] and g["node"] != m["node"]:
+            diffs.append(f"- {ref}: node {m['node']} → live {g['node']} (migrated?)")
+        if m["cores"] and g["cpus"] and int(g["cpus"]) != int(m["cores"]):
+            diffs.append(f"- {ref}: cores {m['cores']} → live {g['cpus']}")
+        if m["mem_mib"] and g["mem_gib"] and abs(g["mem_gib"] * 1024 - int(m["mem_mib"])) > 64:
+            diffs.append(f"- {ref}: memory {m['mem_mib']} MiB → live {round(g['mem_gib']*1024)} MiB")
+        if m["started"] is True and g["status"] != "running":
+            diffs.append(f"- {ref}: declared started, live {g['status']}")
+    if diffs:
+        issues += len(diffs)
+        L += [f"**Attribute drift ({len(diffs)})** — confirm with `tofu plan -refresh-only`:", "", *diffs, ""]
+    if not (unmanaged or missing or diffs):
+        L += ["No differences.", ""]
+    return L, issues
 
 
 STALE_INPUTS = ["homelab.yaml", "ansible/inventory", "discovery/proxmox.json", "discovery/proxmox-*.json",
@@ -245,7 +285,15 @@ def main():
     gref = (lambda g: f"{g['_site']}/{g['vmid']}") if multi else (lambda g: str(g["vmid"]))
     in_site = (lambda st: f" — site {hmlib.site_title(st)}") if multi else (lambda st: "")
     net = json.loads(net_file.read_text()) if net_file.exists() else None
-    state, state_src = load_tofu(a, root, env)
+    states = {}   # site name → (state or None, why / source); each site is compared with its own environment
+    for st in all_sites:
+        if st["default"]:
+            states[st["name"]] = load_tofu(a, root, env)
+        else:
+            states[st["name"]] = load_tofu(argparse.Namespace(no_tofu=a.no_tofu, tofu_json=None), root,
+                                           hmlib.tofu_env(cfg, st["name"]))
+            if not (root / "tofu" / "environments" / hmlib.tofu_env(cfg, st["name"])).is_dir() and not a.no_tofu:
+                states[st["name"]] = (None, f"no OpenTofu environment (init_repo.py --add-site {st['name']})")
     ans, ans_src = load_ansible(root)
 
     L = [f"# Drift report — {dt.datetime.now().strftime('%Y-%m-%d %H:%M')}", "",
@@ -255,54 +303,24 @@ def main():
            or f"missing — run proxmox_inventory.py --site {st['name']}") + " |"
            for st in all_sites[1:] if st["proxmox"] and st["proxmox"].get("endpoint")],
          f"| Network scan | {net.get('updated_at') if net else 'missing — run nmap_scan.py'} |",
-         f"| OpenTofu state | {state_src if state else 'unavailable: ' + state_src} |",
+         *[f"| OpenTofu state{in_site(st)} | {msg if state is not None else 'unavailable: ' + msg} |"
+           for st in all_sites for state, msg in [states[st["name"]]]
+           if st["default"] or (st["proxmox"] and st["proxmox"].get("endpoint"))],
          f"| Ansible inventory | {ans_src} ({len(ans)} hosts) |", ""]
     issues = 0
 
-    live = {g["vmid"]: g for g in (px or {}).get("guests", [])}
-    managed = tofu_guests(state) if state else {}
-    if px and state is not None:
-        unmanaged = [g for vid, g in live.items() if vid not in managed]
-        missing = [m for vid, m in managed.items() if vid not in live]
-        L += [f"## Proxmox ↔ OpenTofu{in_site(all_sites[0])}", ""]
-        if unmanaged:
-            issues += len(unmanaged)
-            L += [f"**Not managed by OpenTofu ({len(unmanaged)})** — candidates for `tofu import` (needs approval):", ""]
-            L += [f"- {g['vmid']} {g['type']} `{g['name']}` on {g['node']} ({g['status']}{', template' if g['template'] else ''})"
-                  for g in unmanaged]
-            L.append("")
-        if missing:
-            issues += len(missing)
-            L += [f"**In state but missing from Proxmox ({len(missing)})** — deleted outside OpenTofu? A plan would recreate them:", ""]
-            L += [f"- {vid} `{m['address']}` ({m['type']} {m['name'] or ''})" for vid, m in managed.items() if vid not in live]
-            L.append("")
-        diffs = []
-        for vid, m in managed.items():
-            g = live.get(vid)
-            if not g:
-                continue
-            if m["node"] and g["node"] != m["node"]:
-                diffs.append(f"- {vid} `{m['address']}`: node {m['node']} → live {g['node']} (migrated?)")
-            if m["cores"] and g["cpus"] and int(g["cpus"]) != int(m["cores"]):
-                diffs.append(f"- {vid} `{m['address']}`: cores {m['cores']} → live {g['cpus']}")
-            if m["mem_mib"] and g["mem_gib"] and abs(g["mem_gib"] * 1024 - int(m["mem_mib"])) > 64:
-                diffs.append(f"- {vid} `{m['address']}`: memory {m['mem_mib']} MiB → live {round(g['mem_gib']*1024)} MiB")
-            if m["started"] is True and g["status"] != "running":
-                diffs.append(f"- {vid} `{m['address']}`: declared started, live {g['status']}")
-        if diffs:
-            issues += len(diffs)
-            L += [f"**Attribute drift ({len(diffs)})** — confirm with `tofu plan -refresh-only`:", "", *diffs, ""]
-        if not (unmanaged or missing or diffs):
-            L += ["No differences.", ""]
-
-    # No state (or another site, whose OpenTofu isn't compared yet): fall back to the `tofu` tag every module
-    # sets. Weaker than state (a tag can be hand-edited), but still shows guests nobody manages.
-    by_tag = ([(all_sites[0], px, "state unavailable")] if px and state is None else []) \
-        + [(st, p, "no OpenTofu state compared for this site") for st, p in others]
-    for st, p, why in by_tag:
+    for st, p in snaps:
+        state, _ = states[st["name"]]
+        if state is not None:
+            lines, n = compare_state(p, state, f"{st['name']}/" if multi else "")
+            L += [f"## Proxmox ↔ OpenTofu{in_site(st)}", "", *lines]
+            issues += n
+            continue
+        # No state: fall back to the `tofu` tag every module sets. Weaker than state (a tag can be hand-edited),
+        # but still shows guests nobody manages.
         untagged = [g for g in p.get("guests") or [] if "tofu" not in str(g.get("tags") or "").replace(",", ";").split(";")
                     and not g.get("template")]  # Packer-built templates are untagged by design
-        L += [f"## Proxmox ↔ OpenTofu{in_site(st)} (by `tofu` tag — {why})", ""]
+        L += [f"## Proxmox ↔ OpenTofu{in_site(st)} (by `tofu` tag — state unavailable)", ""]
         if untagged:
             issues += len(untagged)
             L += [f"**No `tofu` tag ({len(untagged)})** — probably not managed by OpenTofu; confirm with state when reachable:", ""]

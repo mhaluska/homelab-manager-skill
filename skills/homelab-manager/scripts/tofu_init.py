@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """`tofu init` with the state backend configured from homelab.yaml (opentofu.state_backend).
 
-    tofu_init.py [--env homelab] [--print] [-- extra tofu init args, e.g. -upgrade | -migrate-state]
+    tofu_init.py [--env homelab | --site NAME] [--print] [-- extra tofu init args, e.g. -upgrade | -migrate-state]
 
 Backends:
   local  state file on this Mac OUTSIDE the repository (default
@@ -13,6 +13,8 @@ Backends:
 Keeps tofu/environments/<env>/backend.tf's backend type in line with the config (rewrites it
 when the backend changes; then pass `-- -migrate-state` to move existing state, with approval).
 Backend settings (paths, bucket, endpoint) are passed as -backend-config, so backend.tf stays generic.
+Several sites: each site's environment (--site NAME = tofu/environments/NAME) has its own state; a fixed
+opentofu.local.path or opentofu.s3.key must then contain {env}, or the sites would share one state.
 """
 from __future__ import annotations
 
@@ -35,10 +37,22 @@ terraform {{
 """
 
 
+def per_env(cfg, key: str, value: str, env: str) -> str:
+    """A configured state path/key for this environment: {env} filled in. Without {env} it is only valid for the
+    default environment — another one would share (and then destroy) that state."""
+    if "{env}" in value:
+        return value.replace("{env}", env)
+    if env != hmlib.default_env(cfg):
+        raise hmlib.ConfigError(f"{key} has no {{env}}, so environment {env!r} would use the state of "
+                                f"{hmlib.default_env(cfg)!r}. Put {{env}} in it (e.g. …/{{env}}.tfstate); for the "
+                                "existing state of the default environment that is a -migrate-state, with a yes.")
+    return value
+
+
 def local_path(cfg, env: str) -> Path:
     p = hmlib.get(cfg, "opentofu.local.path") or ""
     if p:
-        return Path(os.path.expanduser(p))
+        return Path(os.path.expanduser(per_env(cfg, "opentofu.local.path", p, env)))
     site = hmlib.get(cfg, "site.name", "homelab") or "homelab"
     return Path.home() / ".local" / "share" / "homelab" / "tofu-state" / site / f"{env}.tfstate"
 
@@ -59,8 +73,9 @@ def backend_args(cfg, env: str) -> tuple[str, list[str]]:
             secret = hmlib.get(cfg, "opentofu.state_secret", "s3-state")
             raise hmlib.ConfigError(f"S3 credentials missing — run via: with_secrets.py {secret} -- python3 tofu_init.py")
         site = hmlib.get(cfg, "site.name", "homelab") or "homelab"
+        key = per_env(cfg, "opentofu.s3.key", str(s3["key"]), env) if s3.get("key") else f"{site}/{env}.tfstate"
         args = [f"-backend-config=bucket={s3['bucket']}",
-                f"-backend-config=key={s3.get('key') or f'{site}/{env}.tfstate'}",
+                f"-backend-config=key={key}",
                 f"-backend-config=region={s3.get('region') or 'us-east-1'}",
                 f'-backend-config=endpoints={{s3="{s3["endpoint"]}"}}',
                 f"-backend-config=use_path_style={str(s3.get('use_path_style', True)).lower()}",
@@ -89,12 +104,14 @@ def main():
     argv = sys.argv[1:]
     extra = argv[argv.index("--") + 1:] if "--" in argv else []
     ap = argparse.ArgumentParser()
-    ap.add_argument("--env")
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--env")
+    g.add_argument("--site", help="the site's environment (sites: in homelab.yaml)")
     ap.add_argument("--print", action="store_true", help="show the init command, don't run it")
     a = ap.parse_args(argv[:argv.index("--")] if "--" in argv else argv)
     try:
         cfg = hmlib.load_config()
-        env = a.env or hmlib.get(cfg, "opentofu.environment", "homelab")
+        env = a.env or hmlib.tofu_env(cfg, a.site)
         env_dir = Path(cfg["_root"]) / "tofu" / "environments" / env
         if not env_dir.is_dir():
             raise hmlib.ConfigError(f"{env_dir} does not exist")

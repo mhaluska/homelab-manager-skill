@@ -5,6 +5,7 @@
     init_repo.py [TARGET_DIR] --components proxmox,templates,ansible,discovery[,windows,appliances,kubernetes] [--dry-run]
     init_repo.py [TARGET_DIR] --add-components templates        # later: enable a part you skipped
     init_repo.py [TARGET_DIR] --sync-managed [--dry-run]        # bring a repo set up by an older plugin version up to date
+    init_repo.py [TARGET_DIR] --add-site NAME [--dry-run]       # scaffold a site listed in homelab.yaml sites:
 
 - Copies only the files the chosen components need. Existing files are NEVER overwritten
   (an existing .claude/settings.json — e.g. from installing the plugin with project scope — gets the
@@ -18,6 +19,8 @@
 - Records the choice under `components:` in homelab.yaml — the skill ignores disabled parts.
 - `git init -b main` if needed; core.hooksPath → scripts/git-hooks (blocks committing secrets).
 - Registers this plugin's marketplace in .claude/settings.json when its Git remote is known.
+- --add-site: the site's OpenTofu environment tofu/environments/<name> (proxmox component) and a site.tf in it
+  and in the default environment that refuses another site's token; group_vars/site_<name>.yml (ansible).
 Does not commit: the skill reviews the result with the user and commits.
 """
 from __future__ import annotations
@@ -284,6 +287,70 @@ def sync_managed(target: Path, dry_run: bool) -> int:
     return 0
 
 
+SITE_TF = """# This environment belongs to site "{name}" (homelab.yaml sites:). with_secrets.py sets TF_VAR_proxmox_site to the
+# site of the Proxmox token it injects, so a plan run with another site's token stops here instead of changing the
+# wrong Proxmox. Written by init_repo.py --add-site.
+variable "proxmox_site" {{
+  type        = string
+  default     = null
+  description = "Site of the injected Proxmox token (set by with_secrets.py)."
+  validation {{
+    condition     = var.proxmox_site == "{name}"
+    error_message = "This is the OpenTofu environment of site {name}: run it under with_secrets.py with that site's Proxmox token."
+  }}
+}}
+"""
+SITE_GROUP_VARS = """# Settings for the hosts of site {name} (inventory group site_{name}): DNS, NTP, mirrors, proxies.
+# The priority makes them win over OS groups (linux, rocky, …) on purpose instead of by alphabetical order.
+ansible_group_priority: 10
+"""
+
+
+def add_site(target: Path, name: str, dry_run: bool) -> int:
+    """Scaffold a site that is already listed in homelab.yaml (sites:). Never overwrites a file."""
+    import hmlib
+    try:
+        cfg = hmlib.load_config(target)
+        st = hmlib.site(cfg, name)
+    except hmlib.ConfigError as e:
+        print(f"init_repo: {e}", file=sys.stderr)
+        print(f"Add it first: config_set.py 'sites+={{name: {name}, label: …, proxmox: {{endpoint: …, tokens: …}}}}'",
+              file=sys.stderr)
+        return 3
+    if st["default"]:
+        print(f"init_repo: {name} is the default site — it already uses the top-level settings and environment.",
+              file=sys.stderr)
+        return 3
+    comps = current_components(target)
+    files: dict[str, str] = {}
+    if "proxmox" in comps:
+        env = f"tofu/environments/{hmlib.tofu_env(cfg, name)}"
+        src = TEMPLATE / "tofu" / "environments" / "homelab"
+        for f in sorted(src.iterdir()):
+            if f.is_file() and f.name != ".DS_Store":
+                files[f"{env}/{f.name}"] = f.read_text()
+        files[f"{env}/site.tf"] = SITE_TF.format(name=name)
+        default_env = target / "tofu" / "environments" / hmlib.default_env(cfg)
+        if default_env.is_dir():
+            files[f"{default_env.relative_to(target).as_posix()}/site.tf"] = SITE_TF.format(name=hmlib.site(cfg)["name"])
+    if "ansible" in comps:
+        files[f"ansible/inventory/managed/group_vars/site_{name}.yml"] = SITE_GROUP_VARS.format(name=name)
+    created = [rel for rel in files if not (target / rel).exists()]
+    for rel in created:
+        if not dry_run:
+            (target / rel).parent.mkdir(parents=True, exist_ok=True)
+            (target / rel).write_text(files[rel])
+    print(f"Site {hmlib.site_title(st)}: {'would create' if dry_run else 'created'} {len(created)} file(s)")
+    for rel in created:
+        print(f"  + {rel}")
+    if "proxmox" in comps and st["proxmox"]:
+        env = hmlib.tofu_env(cfg, name)
+        print(f"Next: fill `defaults` in tofu/environments/{env}/homelab.auto.tfvars from sites[{name}].proxmox, then "
+              f"`tofu_init.py --site {name}`; run plans with the site's token "
+              f"({hmlib.proxmox_token_name(st['proxmox'], 'provisioning')}).")
+    return 0
+
+
 def git(*args, cwd=None):
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
 
@@ -335,6 +402,7 @@ def main():
     ap.add_argument("--add-components", help="comma-separated components to enable in an existing repo")
     ap.add_argument("--list-components", action="store_true")
     ap.add_argument("--sync-managed", action="store_true")
+    ap.add_argument("--add-site", metavar="NAME", help="scaffold a site already listed in homelab.yaml sites:")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     if a.list_components:
@@ -344,6 +412,8 @@ def main():
     target = Path(a.target).resolve()
     if a.sync_managed:
         return sync_managed(target, a.dry_run)
+    if a.add_site:
+        return add_site(target, a.add_site, a.dry_run)
     existing = current_components(target)
     if a.add_components:
         comps = resolve(existing + a.add_components.split(","))
