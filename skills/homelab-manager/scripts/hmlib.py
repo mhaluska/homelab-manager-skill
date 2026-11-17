@@ -293,3 +293,64 @@ def vmid_fit(cfg: dict, guests: list[dict]) -> str | None:
         return (msg + f" {ok} of {n} guests with a known IP and VLAN match vmid_scheme {s!r}: "
                 f"set it with config_set.py 'vmid_scheme={s}'.")
     return msg + " Set vmid_scheme (e.g. \"{vlan}{octet:03d}\") or adjust vmid_ranges in homelab.yaml."
+
+
+# --------------------------------------------------------------------------- language
+
+# Text that goes to the plugin's GitHub repository (skill issues, pull requests, code) must be English.
+# The user's homelab repo may use another language (site.language); this check is only for the plugin side.
+LANGUAGE_WORDS = PLUGIN_ROOT / "skills" / "homelab-manager" / "assets" / "language-words.json"
+_CODE_RE = re.compile(r"```.*?(```|\Z)|~~~.*?(~~~|\Z)|`[^`\n]*`|<!--.*?-->|<[^<>\s]{1,60}>|https?://\S+", re.S)
+_WORD_RE = re.compile(r"[a-z]+(?:'[a-z]+)?")
+_words_cache: dict[str, frozenset] = {}
+
+
+def _language_words() -> dict[str, frozenset]:
+    if not _words_cache:
+        data = json.loads(LANGUAGE_WORDS.read_text())
+        _words_cache.update(english=frozenset(data["english"]), foreign=frozenset(data["foreign"]))
+    return _words_cache
+
+
+def prose_words(text: str) -> list[str]:
+    """Lower-cased plain words of `text` outside code, URLs and <placeholders>. Tokens that look like code
+    (snake_case, dotted names, paths, flags, numbers, CamelCase) are skipped."""
+    out = []
+    for tok in _CODE_RE.sub(" ", text).split():
+        tok = tok.strip(".,;:!?()[]{}\"'*_#>|")
+        if tok and tok.isascii() and not re.search(r"[^A-Za-z']", tok) and not re.search(r"[a-z][A-Z]", tok):
+            if _WORD_RE.fullmatch(tok.lower()):
+                out.append(tok.lower())
+    return out
+
+
+def non_english_letters(text: str) -> list[str]:
+    """Words outside code that contain letters beyond ASCII (diacritics, Cyrillic, CJK, …).
+    Typographic characters such as — → … are not letters and don't count."""
+    found = []
+    for tok in _CODE_RE.sub(" ", text).split():
+        if any(ord(c) > 127 and c.isalpha() for c in tok):
+            w = tok.strip(".,;:!?()[]{}\"'*_#>|—–…“”‘’«»„")
+            if w not in found:
+                found.append(w)
+    return found
+
+
+def english_problems(text: str, min_words: int = 12) -> list[str]:
+    """Why `text` doesn't look English; [] when it does (or is too short to judge).
+    Heuristic: no letters outside ASCII, and among plain words, more common English function words than
+    function words of other languages; a longer text must have some English function words at all."""
+    problems = []
+    letters = non_english_letters(text)
+    if letters:
+        problems.append("letters outside English: " + ", ".join(letters[:8]) + (" …" if len(letters) > 8 else ""))
+    words = prose_words(text)
+    lw = _language_words()
+    en = sum(w in lw["english"] for w in words)
+    foreign = [w for w in words if w in lw["foreign"]]
+    if len(foreign) >= 2 and len(foreign) >= en:
+        problems.append(f"{len(foreign)} non-English function words ({', '.join(dict.fromkeys(foreign[:8]))}) "
+                        f"against {en} English ones")
+    elif len(words) >= min_words and en * 20 < len(words):
+        problems.append(f"only {en} common English words among {len(words)}")
+    return problems

@@ -1,0 +1,36 @@
+{
+  "_doc": [
+    "Word lists for hmlib.english_problems(): text meant for the plugin's GitHub repository (skill issues, pull",
+    "requests, code) must be English. 'english' holds common English function words: English prose always has",
+    "many. 'foreign' holds common function words of other languages, written without diacritics, that are not",
+    "also English words or common technical terms (so no 'die', 'per', 'van', 'mit', 'pro', 'su', 'len', 'ci',",
+    "'pod', 'take').",
+    "Letters outside ASCII are caught separately."
+  ],
+  "english": [
+    "a", "about", "after", "again", "all", "also", "an", "and", "any", "are", "as", "at", "be", "because", "been",
+    "before", "being", "both", "but", "by", "can", "cannot", "could", "did", "do", "does", "doesn't", "don't",
+    "each", "either", "else", "even", "every", "for", "from", "had", "has", "have", "how", "however", "if", "in",
+    "into", "is", "isn't", "it", "it's", "its", "just", "less", "like", "may", "more", "most", "must", "never",
+    "no", "not", "now", "of", "off", "on", "once", "only", "or", "other", "our", "out", "over", "same", "should",
+    "since", "so", "some", "such", "than", "that", "the", "their", "them", "then", "there", "these", "they",
+    "this", "those", "though", "through", "to", "too", "under", "until", "up", "us", "use", "used", "uses",
+    "using", "very", "was", "wasn't", "we", "were", "what", "when", "where", "whether", "which", "while", "who",
+    "why", "will", "with", "without", "won't", "would", "yet", "you", "your"
+  ],
+  "foreign": [
+    "aby", "ak", "ako", "ale", "alebo", "ani", "ano", "bez", "bol", "bola", "bolo", "bude", "budem", "cez", "co",
+    "este", "iba", "je", "ked", "ktora", "ktore", "ktory", "lebo", "mam", "mame", "medzi", "moze", "mozno",
+    "musi", "na", "nefunguje", "nie", "nieco", "od", "potom", "pre", "pred", "preto", "pri", "sa", "si",
+    "sme", "som", "tak", "teda", "tento", "tiez", "toto", "treba", "uz", "vsak", "za", "ze", "zo", "aj", "k", "v",
+    "s", "z", "o", "u",
+    "jak", "jako", "jsem", "jsou", "kde", "kdyz", "ktery", "nebo", "neni", "protoze", "taky",
+    "der", "das", "und", "ist", "nicht", "ein", "eine", "einen", "auf", "wird", "sind", "auch", "oder", "wenn",
+    "dass", "zu", "bei", "nach", "ich", "wir", "kann",
+    "les", "des", "une", "pour", "que", "dans", "avec", "sont", "pas", "qui", "sur", "mais", "cette", "nous",
+    "los", "las", "una", "por", "para", "como", "pero", "esta", "este", "estos", "puede",
+    "della", "che", "sono", "questo", "anche",
+    "oraz", "sie", "czy", "dla", "przez",
+    "het", "een", "niet", "ook", "zijn", "voor", "maar", "wordt"
+  ]
+}
