@@ -6,6 +6,10 @@
 #   node            = "pve1"
 #   datastore       = "local-zfs"
 #   image_datastore = "local"
+#   lxc_datastore   = "local-zfs"            # optional, LXC root filesystems
+#   node_datastores = {                      # optional, a node with other storage (proxmox.nodes)
+#     pve3 = { datastore = "local-lvm" }
+#   }
 #   bridge          = "vmbr0"
 #   admin_user      = "admin"
 #   ssh_public_keys = ["ssh-ed25519 AAAA... marek@macmini"]

@@ -39,8 +39,12 @@ proxmox:
   ca_cert: ""                # path to the Proxmox CA (pve-root-ca.pem)
   default_node: ""
   default_storage: ""        # VM disks, e.g. local-zfs
+  lxc_storage: ""            # optional, LXC root filesystems (needs `rootdir` content); empty: default_storage
   image_storage: ""          # where cloud images are downloaded, e.g. local
   snippets_storage: ""       # optional, for cloud-init snippets
+  nodes: {}                  # optional, a node whose storage differs (no shared storage, other disks), e.g.
+                             # {pve3: {default_storage: local-lvm}}: replaces default_storage and lxc_storage on
+                             # that node (lxc_storage falls back to its default_storage); also image_storage if set
   default_bridge: ""         # e.g. vmbr0
   tokens:
     read_only: proxmox-ro    # secret name below; role PVEAuditor on /

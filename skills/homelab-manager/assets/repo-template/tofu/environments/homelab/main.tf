@@ -1,18 +1,34 @@
+# Storage per node (homelab.yaml proxmox.nodes; a cluster without shared storage, a node with other disks):
+# a node listed in defaults.node_datastores takes its storage from that entry (LXC falls back to the node's
+# datastore, images to the site's image_datastore); other nodes use the site defaults. An entry's own
+# datastore always wins.
+locals {
+  vm_node = { for k, v in var.vms : k => coalesce(v.node, var.defaults.node) }
+  ct_node = { for k, v in var.containers : k => coalesce(v.node, var.defaults.node) }
+  bi_node = { for k, v in var.base_images : k => coalesce(v.node, var.defaults.node) }
+  nds     = var.defaults.node_datastores
+  storage = { for n in toset(concat(values(local.vm_node), values(local.ct_node), values(local.bi_node))) : n => {
+    vm    = try(local.nds[n].datastore, var.defaults.datastore)
+    lxc   = try(coalesce(local.nds[n].lxc_datastore, local.nds[n].datastore), coalesce(var.defaults.lxc_datastore, var.defaults.datastore))
+    image = coalesce(try(local.nds[n].image_datastore, null), var.defaults.image_datastore, try(local.nds[n].datastore, null), var.defaults.datastore)
+  } }
+}
+
 module "base_image" {
   source   = "../../modules/cloud-image-base"
   for_each = var.base_images
 
   name               = each.key
   distro             = each.value.distro
-  node               = coalesce(each.value.node, var.defaults.node)
+  node               = local.bi_node[each.key]
   vm_id              = each.value.vm_id
   image_url          = each.value.image_url
   image_file_name    = each.value.image_file_name
   checksum           = each.value.checksum
   checksum_algorithm = each.value.checksum_algorithm
   image_content_type = each.value.content_type
-  image_datastore    = coalesce(var.defaults.image_datastore, var.defaults.datastore)
-  datastore          = var.defaults.datastore
+  image_datastore    = local.storage[local.bi_node[each.key]].image
+  datastore          = local.storage[local.bi_node[each.key]].vm
   bridge             = var.defaults.bridge
 }
 
@@ -21,14 +37,15 @@ module "vm" {
   for_each = var.vms
 
   name            = each.key
-  node            = coalesce(each.value.node, var.defaults.node)
+  node            = local.vm_node[each.key]
   vm_id           = each.value.vm_id
   template_vm_id  = each.value.template_vm_id
+  template_node   = each.value.template_node
   cores           = each.value.cores
   memory_mib      = each.value.memory_mib
   disk_gib        = each.value.disk_gib
   extra_disks     = each.value.extra_disks
-  datastore       = coalesce(each.value.datastore, var.defaults.datastore)
+  datastore       = coalesce(each.value.datastore, local.storage[local.vm_node[each.key]].vm)
   bridge          = coalesce(each.value.bridge, var.defaults.bridge)
   vlan_id         = each.value.vlan_id
   ipv4_address    = each.value.ipv4_address
@@ -46,7 +63,7 @@ module "lxc" {
   for_each = var.containers
 
   hostname         = each.key
-  node             = coalesce(each.value.node, var.defaults.node)
+  node             = local.ct_node[each.key]
   vm_id            = each.value.vm_id
   template_file_id = each.value.template_file_id
   os_type          = each.value.os_type
@@ -54,7 +71,7 @@ module "lxc" {
   memory_mib       = each.value.memory_mib
   swap_mib         = each.value.swap_mib
   disk_gib         = each.value.disk_gib
-  datastore        = coalesce(each.value.datastore, var.defaults.datastore)
+  datastore        = coalesce(each.value.datastore, local.storage[local.ct_node[each.key]].lxc)
   bridge           = coalesce(each.value.bridge, var.defaults.bridge)
   vlan_id          = each.value.vlan_id
   ipv4_address     = each.value.ipv4_address

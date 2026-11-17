@@ -9,6 +9,12 @@ variable "defaults" {
     node            = string
     datastore       = string
     image_datastore = optional(string)
+    lxc_datastore   = optional(string)      # LXC root filesystems (needs rootdir content); empty: datastore
+    node_datastores = optional(map(object({ # per node: homelab.yaml proxmox.nodes
+      datastore       = string
+      lxc_datastore   = optional(string)
+      image_datastore = optional(string)
+    })), {})
     bridge          = string
     admin_user      = string
     ssh_public_keys = list(string)
@@ -38,6 +44,7 @@ variable "vms" {
   type = map(object({
     vm_id          = number
     template_vm_id = number
+    template_node  = optional(string) # node holding the template, when it is not the VM's node
     node           = optional(string)
     cores          = optional(number, 2)
     memory_mib     = optional(number, 2048)
