@@ -56,6 +56,11 @@ RULES: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"\bpvesh\s+(create|set|delete)\b"), ASK, "Writes to the Proxmox API."),
     (re.compile(r"pve_snapshot\.py\b[^\n;&|]*\s(delete|rollback)\b"), ASK,
      "Deletes a guest snapshot or rolls a guest back to one (its changes since are lost)."),
+    # --- LXD / Incus (containers on a NAS or an LXD/Incus host) -------------------------
+    (re.compile(r"lxd_snapshot\.py\b[^\n;&|]*\s(delete|restore)\b"), ASK,
+     "Deletes an LXD/Incus snapshot or restores an instance to one (its changes since are lost)."),
+    (re.compile(r"\b(lxc|incus)\s+((snapshot\s+)?(delete|rm|restore)\b|query\b[^\n;&|]*(-X\s*|--request[ =])(PUT|PATCH|DELETE)\b)"), ASK,
+     "Deletes or restores an LXD/Incus instance or snapshot, or changes it through the API."),
     (re.compile(r"\bpvecm\s+(add|addnode|delnode|expected|create|updatecerts)\b"), ASK, "Changes Proxmox cluster membership/quorum."),
     (re.compile(r"\bha-manager\s+(add|remove|set|migrate|relocate|crm-command)\b"), ASK, "Changes Proxmox HA configuration."),
     (re.compile(r"\bpvesm\s+(add|remove|set|free|alloc)\b"), ASK, "Changes Proxmox storage."),

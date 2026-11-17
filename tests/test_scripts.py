@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1372,6 +1373,123 @@ class PveSnapshotTests(unittest.TestCase):  # issue 37
         self.assertFalse([c for c in self.calls if c[0] != "GET"])  # read-only
         with self.assertRaises(SystemExit):                       # the other actions still stop at the first
             self.s.find_guests(self.pve, ["web01", "nas-lxd1"])
+
+
+class LxdSnapshotTests(unittest.TestCase):  # issue 44
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import lxd_snapshot
+        self.l = lxd_snapshot
+        self.hosts = {
+            "nas1": {"groups": ["appliances"], "ansible_host": "192.0.2.10", "ansible_user": "admin",
+                     "lxd_snapshots": True},
+            "nas2": {"groups": ["appliances"], "ansible_host": "192.0.2.11", "lxd_cli": "/opt/incus", "lxd_sudo": True},
+            "app1.lab.example": {"groups": ["debian"], "lxd_host": "nas1"},
+            "app2": {"groups": ["debian"], "lxd_host": "nas1", "lxd_instance": "legacy-app", "lxd_project": "lab"},
+            "app3": {"groups": ["debian"], "lxd_host": "nas2"},
+            "web01": {"groups": ["rocky"]},
+        }
+        self.driver = "zfs"
+        self.snaps = {"app1": [{"name": "app1/old", "created_at": "2026-01-01T00:00:00Z"}]}
+        self.calls = []
+        test = self
+
+        def run(t, command, timeout):
+            test.calls.append((t["nas"], command))
+            if command == self.l.FIND_CLI:
+                return 0, "/share/CACHEDEV1_DATA/.qpkg/container-station/bin/lxc\n", ""
+            args = shlex.split(command)
+            q = args.index("query")
+            method = args[args.index("-X") + 1] if "-X" in args else "GET"
+            body = json.loads(args[args.index("-d") + 1]) if "-d" in args else None
+            path = args[-1].split("?")[0]
+            parts = path.split("/")
+            if method != "GET":
+                test.writes.append((args[:q], method, args[-1], body))
+                return 0, "{}", ""
+            if path == "/1.0/storage-pools/default":
+                return 0, json.dumps({"driver": test.driver}), ""
+            if path == "/1.0/storage-pools/default/resources":
+                return 0, json.dumps({"space": {"used": 90 * 2**30, "total": 100 * 2**30}}), ""
+            if len(parts) == 4 and parts[3] in ("app1", "legacy-app", "app3"):
+                return 0, json.dumps({"type": "container", "status": "Running",
+                                      "expanded_config": {"snapshots.schedule": "@daily"},
+                                      "expanded_devices": {"root": {"type": "disk", "path": "/", "pool": "default"},
+                                                           "data": {"type": "disk", "source": "/share/Data", "path": "/data"},
+                                                           "vol": {"type": "disk", "pool": "default", "source": "db",
+                                                                   "path": "/db"},
+                                                           "eth0": {"type": "nic"}}}), ""
+            if path.endswith("/state"):
+                return 0, json.dumps({"disk": {"root": {"usage": test.usage}}}), ""
+            if path.endswith("/snapshots"):
+                return 0, json.dumps(test.snaps.get(parts[3], [])), ""
+            return 1, "", "Error: Instance not found"
+        self.run, self.writes, self.usage = run, [], 0
+
+    def test_targets(self):
+        found, problems = self.l.targets(self.hosts, ["app1", "app2", "web01", "nope"])
+        self.assertEqual(found["app1"]["instance"], "app1")
+        self.assertEqual(found["app1"]["address"], "192.0.2.10")
+        self.assertEqual((found["app2"]["instance"], found["app2"]["project"]), ("legacy-app", "lab"))
+        self.assertIn("lxd_host", problems["web01"])
+        self.assertIn("not in the managed inventory", problems["nope"])
+
+    def test_check(self):
+        found, problems = self.l.targets(self.hosts, ["app1", "app2", "app3", "web01"])
+        res = self.l.check(found, problems, self.run)
+        self.assertEqual(res["ok"], ["app1", "app2"])
+        self.assertIn("lxd_snapshots: true", res["no_snapshot"]["app3"])   # nas2 not opted in: never contacted
+        self.assertFalse([c for c in self.calls if c[0] == "nas2"])
+        self.assertIn("web01", res["not_a_guest"])
+        w = " ".join(res["warnings"]["app1"])
+        self.assertIn("data: /share/Data", w)
+        self.assertIn("volume db", w)
+        self.assertIn("scheduled snapshots", w)
+        self.assertIn("project=lab", " ".join(c for _, c in self.calls))
+        self.assertEqual(self.writes, [])                                  # read-only
+
+    def test_check_dir_space(self):
+        self.driver, self.usage = "dir", 20 * 2**30                          # 20 GiB rootfs, 10 GiB free
+        found, problems = self.l.targets(self.hosts, ["app1"])
+        res = self.l.check(found, problems, self.run)
+        self.assertIn("doesn't fit", res["no_snapshot"]["app1"])
+        self.usage = 0
+        res = self.l.check(found, problems, self.run)
+        self.assertIn("size unknown", " ".join(res["warnings"]["app1"]))
+
+    def test_create_delete_restore(self):
+        found, _ = self.l.targets(self.hosts, ["app1"])
+        api = self.l.Api(found["app1"], self.run)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.l.apply(api, "create", "prepatch-20261117")
+            self.l.apply(api, "create", "old")                             # exists: kept
+            self.l.apply(api, "delete", "old")
+        self.assertEqual(self.writes[0][1:], ("POST", "/1.0/instances/app1/snapshots",
+                                              {"name": "prepatch-20261117", "stateful": False}))
+        self.assertEqual(self.writes[1][1:3], ("DELETE", "/1.0/instances/app1/snapshots/old"))
+        self.assertEqual(len(self.writes), 2)
+        self.assertIn("already exists", out.getvalue())
+        self.assertEqual(self.writes[0][0][-1], "/share/CACHEDEV1_DATA/.qpkg/container-station/bin/lxc")
+        with self.assertRaises(self.l.LxdError):
+            self.l.apply(api, "restore", "missing")
+
+    def test_restore_zfs_refuses_with_newer(self):
+        self.snaps["app1"].append({"name": "auto-1", "created_at": "2026-02-01T00:00:00Z"})
+        found, _ = self.l.targets(self.hosts, ["app1"])
+        api = self.l.Api(found["app1"], self.run)
+        with self.assertRaises(self.l.LxdError) as e:
+            self.l.apply(api, "restore", "old")
+        self.assertIn("auto-1", str(e.exception))
+        self.driver = "btrfs"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.l.apply(api, "restore", "old")
+        self.assertEqual(self.writes[-1][1:], ("PUT", "/1.0/instances/app1", {"restore": "old"}))
+
+    def test_sudo_and_cli(self):
+        t = {**self.l.targets(self.hosts, ["app3"])[0]["app3"], "opted_in": True}
+        api = self.l.Api(t, self.run)
+        api.query("/1.0/instances/app3")
+        self.assertTrue(self.calls[-1][1].startswith("sudo -n /opt/incus query "))
 
 
 class PveNodePlanTests(unittest.TestCase):  # issue 23

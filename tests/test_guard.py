@@ -356,6 +356,23 @@ class GuardConfigTests(unittest.TestCase):
         self.assertIsNone(self.d("python3 /p/pve_snapshot.py list web01"))
         self.assertIsNone(self.d("python3 /p/pve_snapshot.py check web01 db01 --json"))  # read-only (#49)
 
+    def test_lxd_snapshot_delete_and_restore_ask(self):  # issue 44
+        for cmd in ("python3 /p/lxd_snapshot.py delete app1 --name prepatch-20261117",
+                    "python3 /p/lxd_snapshot.py restore app1 --name prepatch-20261117",
+                    "ssh nas1 lxc restore app1 prepatch-20261117",
+                    "ssh nas1 /share/CACHEDEV1_DATA/.qpkg/container-station/bin/lxc delete app1/prepatch-20261117",
+                    "ssh nas1 lxc delete app1",
+                    "incus snapshot delete app1 prepatch-20261117",
+                    "incus snapshot restore app1 prepatch-20261117",
+                    "ssh nas1 'lxc query -X PUT --wait -d {} /1.0/instances/app1'",
+                    "incus query --request=DELETE /1.0/instances/app1/snapshots/old"):
+            self.assertEqual(self.d(cmd), "ask", cmd)
+        for cmd in ("python3 /p/lxd_snapshot.py create app1 app2", "python3 /p/lxd_snapshot.py list app1",
+                    "python3 /p/lxd_snapshot.py check app1 --json", "ssh nas1 lxc list",
+                    "ssh nas1 lxc query /1.0/instances/app1", "incus snapshot list app1",
+                    "ssh nas1 lxc snapshot app1 prepatch-20261117"):
+            self.assertIsNone(self.d(cmd), cmd)
+
     def test_widening_scan_scope_asks(self):
         self.assertEqual(self.d("python3 /p/config_set.py 'network.authorized_ranges+=10.0.30.0/24'"), "ask")
         self.assertEqual(self.d("python3 /p/config_set.py 'network.authorized_ranges=[\"10.0.30.0/24\"]'"), "ask")
