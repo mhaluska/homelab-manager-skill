@@ -165,6 +165,30 @@
       "when": {"component": "ansible", "config_empty": "ansible.patch_serial"},
       "text": "patch-linux.yml takes its batch size for independent hosts from ansible.patch_serial in homelab.yaml (#45); without it hosts are still patched one at a time. Cluster members and patch_requires_approval hosts always go one at a time.",
       "action": "Ask the user how many independent hosts to patch at once (new repos use 5), then `python3 {HM}/scripts/config_set.py 'ansible.patch_serial=5'` with their value."
+    },
+    {
+      "version": "0.17.0",
+      "id": "patch-linux-batches-autoremove",
+      "kind": "template",
+      "when": {"component": "ansible", "file_lacks": ["ansible/playbooks/patch-linux.yml", "hm_one_at_a_time"]},
+      "text": "patch-linux.yml: batch size from ansible.patch_serial with clusters kept one at a time (#45), and autoremove after the reboot so old kernels don't pile up, with opt-in purge=true (#46).",
+      "action": "Replace ansible/playbooks/patch-linux.yml with {template}, carrying over any local edits (show the user the diff first)."
+    },
+    {
+      "version": "0.17.0",
+      "id": "check-updates-errors",
+      "kind": "template",
+      "when": {"component": "ansible", "file_lacks": ["ansible/playbooks/check-updates.yml", "update_error"]},
+      "text": "check-updates.yml writes failed and unreachable hosts to discovery/updates.json with error and last_ok_at (#43), and counts autoremovable packages and config leftovers (#46).",
+      "action": "Replace ansible/playbooks/check-updates.yml with {template}, carrying over any local edits (show the user the diff first)."
+    },
+    {
+      "version": "0.17.0",
+      "id": "backup-job-grant",
+      "kind": "template",
+      "when": {"component": "proxmox", "file_lacks": ["docs/proxmox-tokens.md", "Backup jobs"]},
+      "text": "docs/proxmox-tokens.md has an optional, narrow grant for managing vzdump backup jobs (#42); references/proxmox.md 'Backup jobs' describes adding unbacked guests.",
+      "action": "Copy the 'Backup jobs (optional)' section from {template} into docs/proxmox-tokens.md. Granting it is the user's choice, run on a Proxmox node."
     }
   ]
 }
