@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: user-language-sk
+expected_outcome: |
+  The user writes in Slovak and the repo has site.language: sk. Does the drift check and reports the findings (VM 104 test-old unmanaged; dns01 references the missing template 9049) in a Slovak reply. Notes the user's wish as an idea for the skill with issues.py add, written in English and generically (no host names or IPs), tells the user in Slovak with its SKILL-ID, and sends nothing to GitHub.
+context:
+  scaffold_script: place-files.sh

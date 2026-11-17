@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(~/.ssh/id_*)",
+      "Read(**/*.tfstate)",
+      "Read(**/*.tfstate.*)",
+      "Read(**/.vault_pass*)"
+    ],
+    "ask": [
+      "Bash(tofu apply:*)",
+      "Bash(tofu -chdir=*apply*)",
+      "Bash(packer build:*)"
+    ]
+  }
+}

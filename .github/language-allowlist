@@ -2,3 +2,4 @@
 # Prefer a `lang: allow` marker on the line itself; list a path only when the whole file is meant to hold other languages.
 LICENSE
 skills/homelab-manager/assets/language-words.json
+skills/homelab-manager/evals/user-language-*/prompt.md
