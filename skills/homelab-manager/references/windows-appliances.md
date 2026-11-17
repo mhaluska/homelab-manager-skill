@@ -23,3 +23,27 @@ Default stance: **inventory and read-only checks**.
   (e.g. `community.routeros`, `fortinet.fortios`, `community.general.opnsense*`), `--check`
   first, approval always — a bad firewall or switch push can cut off the Mac itself.
 - BMC/IPMI: power actions are reboots → approval. Never change BMC users/network.
+
+## MikroTik RouterOS (routers, CRS switches, CHR)
+
+Identify and audit, read-only:
+```bash
+python3 $HM/scripts/routeros_audit.py 10.0.10.1 10.0.10.2 [--user audit]
+python3 $HM/scripts/routeros_audit.py --group routeros     # hosts, users and ports from the inventory
+```
+It prints a Markdown report (save it as `docs/security-audit-<date>.md` when the user wants one) and keeps
+the data in `discovery/routeros.json`. Fixing a finding is a change: `/system routerboard upgrade` and a
+RouterOS upgrade need a reboot (approval), disabling a service can cut off whoever uses it — ask first.
+Use a dedicated user in group `read` for audits.
+
+Ansible on RouterOS:
+- Use `community.routeros` over `ansible_connection: ansible.netcommon.network_cli` with
+  `ansible_network_os: community.routeros.routeros` (needs `ansible-pylibssh` or paramiko; agent keys work)
+  on RouterOS 6 and 7, hardware and CHR. `community.routeros.facts` and `.command` cover read-only checks.
+- Never `raw` or the `ssh` connection: RouterOS waits for a terminal that never answers and the task hangs
+  forever. For plain SSH use `ssh -T` with a timeout (as the audit script does).
+- `community.routeros.command` always reports `changed`, even for `print`: add `changed_when: false`.
+- Put `ansible_user` for the devices in `group_vars/<group>.yml`, not as a group var inside `hosts.yml`:
+  `group_vars/all.yml` sets `ansible_user` and a group_vars file wins over inventory-file group vars.
+- `/system routerboard` doesn't exist on CHR: guard such commands with the board name from
+  `/system resource print`.

@@ -214,7 +214,7 @@ Read the reference that matches the task (only that one):
 | OpenTofu state, backend, modules, imports, plan review details | `references/opentofu.md` |
 | Ansible inventory, onboarding existing hosts, roles, playbooks, installing software (e.g. Zabbix Agent 2) | `references/ansible.md` |
 | Patching, missing updates, reboots, rolling cluster procedures | `references/patching.md` |
-| Windows hosts and appliances (NAS, firewalls, switches, BMCs) | `references/windows-appliances.md` |
+| Windows hosts and appliances (NAS, firewalls, switches, BMCs, MikroTik RouterOS) | `references/windows-appliances.md` |
 | Security audit, keychain, tokens, hardening checks | `references/security.md` |
 
 Scripts (all in `$HM/scripts/`):
