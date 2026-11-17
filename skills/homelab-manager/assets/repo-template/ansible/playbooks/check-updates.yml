@@ -11,56 +11,56 @@
       register: rh_sec
       changed_when: false
       failed_when: false
-      when: ansible_os_family == "RedHat"
+      when: ansible_facts.os_family == "RedHat"
 
     - name: RHEL family — all updates
       ansible.builtin.command: dnf -q check-update
       register: rh_all
       changed_when: false
       failed_when: rh_all.rc not in [0, 100]
-      when: ansible_os_family == "RedHat"
+      when: ansible_facts.os_family == "RedHat"
 
     - name: RHEL family — reboot required
       ansible.builtin.command: needs-restarting -r
       register: rh_reboot
       changed_when: false
       failed_when: false
-      when: ansible_os_family == "RedHat"
+      when: ansible_facts.os_family == "RedHat"
 
     - name: Debian family — refresh package lists
       ansible.builtin.apt:
         update_cache: true
         cache_valid_time: 3600
       changed_when: false
-      when: ansible_os_family == "Debian"
+      when: ansible_facts.os_family == "Debian"
 
     - name: Debian family — simulate upgrade
       ansible.builtin.command: apt-get -s -o Debug::NoLocking=1 dist-upgrade
       register: deb_sim
       changed_when: false
-      when: ansible_os_family == "Debian"
+      when: ansible_facts.os_family == "Debian"
 
     - name: Debian family — reboot required
       ansible.builtin.stat:
         path: /var/run/reboot-required
       register: deb_reboot
-      when: ansible_os_family == "Debian"
+      when: ansible_facts.os_family == "Debian"
 
     - name: Summarise
       ansible.builtin.set_fact:
         update_summary:
-          os: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
-          kernel: "{{ ansible_kernel }}"
+          os: "{{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}"
+          kernel: "{{ ansible_facts.kernel }}"
           pending: >-
             {{ (rh_all.stdout_lines | default([]) | select('match', '^\S+\.\S+\s') | list | length)
-               if ansible_os_family == 'RedHat'
+               if ansible_facts.os_family == 'RedHat'
                else (deb_sim.stdout_lines | default([]) | select('match', '^Inst ') | list | length) }}
           security: >-
             {{ (rh_sec.stdout_lines | default([]) | length)
-               if ansible_os_family == 'RedHat'
+               if ansible_facts.os_family == 'RedHat'
                else (deb_sim.stdout_lines | default([]) | select('match', '^Inst .*[Ss]ecurity') | list | length) }}
           reboot_required: >-
-            {{ (rh_reboot.rc | default(0)) == 1 if ansible_os_family == 'RedHat'
+            {{ (rh_reboot.rc | default(0)) == 1 if ansible_facts.os_family == 'RedHat'
                else (deb_reboot.stat.exists | default(false)) }}
 
 - name: Pending updates on Windows (search only, installs nothing)

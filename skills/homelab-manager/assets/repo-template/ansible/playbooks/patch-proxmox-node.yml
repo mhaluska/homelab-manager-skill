@@ -104,7 +104,7 @@
       register: pve_reboot_flag
 
     - ansible.builtin.set_fact:
-        needs_reboot: "{{ pve_reboot_flag.stat.exists or (pve_kernel.stdout | trim) != ansible_kernel }}"
+        needs_reboot: "{{ pve_reboot_flag.stat.exists or (pve_kernel.stdout | trim) != ansible_facts.kernel }}"
 
     - name: Move guests off, reboot, bring them back
       when: needs_reboot | bool and allow_reboot | bool and not ansible_check_mode

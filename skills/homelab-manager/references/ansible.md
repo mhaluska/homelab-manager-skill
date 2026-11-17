@@ -61,7 +61,7 @@ ansible-playbook playbooks/<play>.yml -e target=<group>                    # rea
 ## Writing roles
 
 `roles/<name>/{tasks,handlers,defaults,templates,meta}/`. Idempotent (second run =
-0 changed), check-mode safe, OS-family branches via `ansible_os_family`, handlers for
+0 changed), check-mode safe, OS-family branches via `ansible_facts.os_family` (never the injected `ansible_*` fact vars: removed in ansible-core 2.24), handlers for
 restarts, `defaults/main.yml` documents every variable. Prefer modules over
 `command`/`shell`; when shell is unavoidable, set `changed_when`.
 Use well-known Galaxy collections when they're maintained; avoid random Galaxy roles.

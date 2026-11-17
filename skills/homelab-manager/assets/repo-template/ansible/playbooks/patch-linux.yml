@@ -57,14 +57,14 @@
   tasks:
     - name: Installed packages (hold only what exists)
       ansible.builtin.package_facts:
-      when: patch_exclude | default([]) | length > 0 and ansible_os_family == "Debian"
+      when: patch_exclude | default([]) | length > 0 and ansible_facts.os_family == "Debian"
 
     - name: Hold excluded packages (Debian family)
       ansible.builtin.dpkg_selections:
         name: "{{ item }}"
         selection: hold
       loop: "{{ patch_exclude | default([]) | select('in', ansible_facts.packages | default({})) | list }}"
-      when: ansible_os_family == "Debian"
+      when: ansible_facts.os_family == "Debian"
 
     - name: Update (RHEL family)
       ansible.builtin.dnf:
@@ -73,7 +73,7 @@
         security: "{{ security_only | bool }}"
         update_only: true
         exclude: "{{ patch_exclude | default([]) }}"
-      when: ansible_os_family == "RedHat"
+      when: ansible_facts.os_family == "RedHat"
       register: upd_rh
 
     - name: Update (Debian family)
@@ -83,7 +83,7 @@
         autoremove: true
       environment:
         NEEDRESTART_MODE: a
-      when: ansible_os_family == "Debian"
+      when: ansible_facts.os_family == "Debian"
       register: upd_deb
 
     - name: Reboot required?
@@ -91,12 +91,12 @@
       register: rh_reboot
       changed_when: false
       failed_when: false
-      when: ansible_os_family == "RedHat"
+      when: ansible_facts.os_family == "RedHat"
 
     - ansible.builtin.stat:
         path: /var/run/reboot-required
       register: deb_reboot
-      when: ansible_os_family == "Debian"
+      when: ansible_facts.os_family == "Debian"
 
     - ansible.builtin.set_fact:
         needs_reboot: "{{ (rh_reboot.rc | default(0)) == 1 or (deb_reboot.stat.exists | default(false)) }}"
