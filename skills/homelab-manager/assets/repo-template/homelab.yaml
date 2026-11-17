@@ -19,6 +19,8 @@ site:
   name: homelab
   domain: ""                 # e.g. home.arpa
   timezone: ""               # e.g. Europe/Bratislava
+  language: ""               # e.g. sk — Claude's replies, docs, commit messages and new code comments in this
+                             # repo; empty = the language you write in. Skill issues stay English.
 
 network:
   # CIDRs Claude may scan with nmap. Nothing outside these is ever scanned (enforced by a hook).

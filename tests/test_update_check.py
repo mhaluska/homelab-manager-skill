@@ -63,7 +63,9 @@ class UpdateCheckTests(unittest.TestCase):
         subprocess.run([sys.executable, str(scripts / "init_repo.py"), str(repo), "--components", "proxmox"],
                        check=True, capture_output=True)
         r = subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True, env=self.env, cwd=repo)
-        self.assertEqual(r.stdout, "")                                    # new repo: nothing to say
+        new = json.loads(r.stdout)                                        # new repo: only the language, for Claude
+        self.assertNotIn("systemMessage", new)
+        self.assertIn("no site.language", new["hookSpecificOutput"]["additionalContext"])
         subprocess.run(["yq", "-i", "del(.upgrades)", str(repo / "homelab.yaml")], check=True)
         doc = repo / "docs" / "proxmox-tokens.md"
         doc.write_text(doc.read_text().replace("HomelabAgentAudit", "Custom"))
@@ -77,6 +79,22 @@ class UpdateCheckTests(unittest.TestCase):
         self.assertIn("guest-agent privilege", ctx)
         self.assertIn("--sync-managed --dry-run", ctx)
         self.assertIn("needs the user's yes", ctx)
+
+    def test_repo_language_in_session_context(self):
+        self.tag(self.have)
+        repo = self.d / "repo"
+        scripts = ROOT / "skills" / "homelab-manager" / "scripts"
+        subprocess.run([sys.executable, str(scripts / "init_repo.py"), str(repo), "--components", "ansible"],
+                       check=True, capture_output=True)
+        subprocess.run([sys.executable, str(scripts / "config_set.py"), "site.language=sk"], cwd=repo,
+                       check=True, capture_output=True)
+        out = json.loads(subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True,
+                                        env=self.env, cwd=repo).stdout)
+        ctx = out["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("language is 'sk'", ctx)
+        self.assertIn("skill issues", ctx)
+        r = subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True, env=self.env, cwd=self.d)
+        self.assertEqual(r.stdout, "")                                    # outside a homelab repo: silent
 
     def test_hook_registered(self):
         hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text())["hooks"]

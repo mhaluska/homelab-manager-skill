@@ -5,6 +5,8 @@ Use it for any infrastructure request: discovery, Proxmox, templates, OpenTofu, 
 
 House rules (the plugin's hook enforces the critical ones):
 - Configuration comes from `homelab.yaml`. Missing values: discover them or ask — never guess.
+- Language: `site.language` in `homelab.yaml` for replies, docs, commit messages and new code comments;
+  identifiers and plugin-managed files stay English, and so do skill issues (the plugin repository is English-only).
 - Read-only first: inspect, then plan, then change. Show `tofu plan` before any apply.
 - Deletions, replacements, storage changes, reboots and cluster operations need explicit approval.
 - Secrets only via `with_secrets.py` from the keychain. Never print, commit or write them to files.

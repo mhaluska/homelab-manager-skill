@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tell the user when a newer homelab-manager release exists. Checks the network at most once a day.
 
-    update_check.py            # SessionStart hook: prints hook JSON only when an update is available
+    update_check.py            # SessionStart hook: prints hook JSON when an update is available or in a homelab repo
     update_check.py --force    # check now, plain-text answer (for "is there a new version?")
 
 Latest version = highest `vX.Y.Z` tag on the plugin's Git remote (`git ls-remote`, read-only,
@@ -11,7 +11,8 @@ The result is cached in ~/.cache/homelab-manager/update-check.json; a failed che
 Also (local, no network, every session): when the working directory is a homelab repo set up by an
 older plugin version, tells Claude which one-time upgrades `init_repo.py --sync-managed` would apply,
 which opt-in changes newer releases suggest (assets/upgrade-notes.json, until upgrades.reviewed is
-recorded), and which of the user's reported skill issues the installed release fixed.
+recorded), which of the user's reported skill issues the installed release fixed, and the repo's language
+(site.language) so replies use it from the first message.
 Never fails the session: any error → silent.
 """
 from __future__ import annotations
@@ -126,6 +127,25 @@ def repo_upgrades() -> tuple[list[str], list[str], list[str]]:
             [f"{i['id']} (#{i['github_number']}, fixed in {v})" for i, v in fixed])
 
 
+def repo_language() -> tuple[bool, str]:
+    """(inside a homelab repo, its site.language or "")."""
+    sys.path.insert(0, str(SCRIPTS))
+    import hmlib
+    root = hmlib.find_repo_root()
+    if not root:
+        return False, ""
+    return True, str(hmlib.get(hmlib.load_config(root), "site.language", "")).strip()
+
+
+def language_text(lang: str) -> str:
+    if lang:
+        return (f"This homelab repo's language is {lang!r} (homelab.yaml site.language): use it for replies, "
+                "questions, docs and reports you write, commit messages and new comments in code. Identifiers, "
+                "plugin-managed files, script output and skill issues (skill_issues.md, GitHub) stay English.")
+    return ("homelab.yaml has no site.language: reply in the language the user writes in, and offer once to "
+            "save it (`config_set.py 'site.language=<code>'`). Skill issues stay English.")
+
+
 def upgrade_text(steps: list[str], notes: list[str], fixed: list[str]) -> str:
     parts = []
     if steps:
@@ -164,6 +184,10 @@ def main() -> int:
         steps, suggested, fixed = repo_upgrades()
     except Exception:  # never break a session
         steps, suggested, fixed = [], [], []
+    try:
+        in_repo, lang = repo_language()
+    except Exception:
+        in_repo, lang = False, ""
     notes, context = [], []
     if newer:
         notes.append(update_text(have, latest))
@@ -173,10 +197,13 @@ def main() -> int:
                                 (f"{len(fixed)} reported skill issue(s) fixed by this release", fixed)) if on]
         notes.append("homelab-manager: this repository has " + ", ".join(what) + " for the installed plugin version.")
         context.append(upgrade_text(steps, suggested, fixed))
-    if notes:
-        print(json.dumps({"systemMessage": " ".join(notes),
-                          "hookSpecificOutput": {"hookEventName": "SessionStart",
-                                                 "additionalContext": " ".join(context)}}))
+    if in_repo:
+        context.append(language_text(lang))
+    if context:
+        out = {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": " ".join(context)}}
+        if notes:
+            out["systemMessage"] = " ".join(notes)
+        print(json.dumps(out))
     return 0
 
 

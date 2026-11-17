@@ -597,7 +597,9 @@ class UpgradeTests(unittest.TestCase):
         run("init_repo.py", str(self.d), "--sync-managed", cwd=self.d)
         r = subprocess.run([sys.executable, str(ROOT / "hooks" / "update_check.py")], cwd=self.d,
                            capture_output=True, text=True, env=env)
-        self.assertEqual(r.stdout.strip(), "")
+        out = json.loads(r.stdout)                         # upgraded: only the repo language is left to say
+        self.assertNotIn("systemMessage", out)
+        self.assertNotIn("one-time update", out["hookSpecificOutput"]["additionalContext"])
 
 
 class RenameIssuesFileTests(unittest.TestCase):
