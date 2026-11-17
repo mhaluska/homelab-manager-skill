@@ -33,6 +33,9 @@
 #                         failure stops the roll, e.g. playbooks/hooks/vrrp-health.yml (keepalived/VRRP)
 #   order: vip_holder_last + vip   the node holding the VIP is patched last, so it fails over only once
 # Task file paths are relative to ansible/ (as written in homelab.yaml).
+# After a reboot the playbook waits until the boot has finished (systemctl is-system-running), and services in
+# health_services get time to leave activating/reloading: both up to health_timeout seconds (default 300;
+# -e or group_vars). A slow service such as FreeIPA's ipa.service needs 1-2 minutes.
 # After each host: no unit may fail that didn't before, except failed_units_ignore (group_vars) and, in LXC
 # guests, lxc_failed_units_ignore (kernel-module units that fail on every boot in a container).
 # Containers (Docker, Podman) that ran before must run again; Docker containers that are down get one
@@ -318,6 +321,19 @@
       when: reboot == 'always' or (reboot == 'if_required' and needs_reboot | bool)
       register: rebooted
 
+    # Units still starting are neither active nor failed yet: wait for the boot to finish (GitHub issue #53).
+    # Polled, not --wait: systemd 239 (RHEL 8) doesn't have it. Running out of time is not a failure here;
+    # the checks below report what is not up.
+    - name: Wait until the boot has finished (after a reboot)
+      ansible.builtin.command: systemctl is-system-running
+      register: hm_boot_state
+      changed_when: false
+      failed_when: false
+      until: hm_boot_state.stdout | trim not in ['initializing', 'starting']
+      retries: "{{ ((health_timeout | default(300) | int) / 10) | round(0, 'ceil') | int }}"
+      delay: 10
+      when: rebooted.rebooted | default(false)
+
     - name: Restart services still running replaced code (only with restart_services=true)
       ansible.builtin.systemd_service:
         name: "{{ item }}"
@@ -362,7 +378,11 @@
       ansible.builtin.systemd_service:
         name: "{{ item }}"
       register: svc
-      failed_when: svc.status.ActiveState != "active"
+      # still starting (or restarting): wait up to health_timeout, then it must be active (GitHub issue #53)
+      until: svc.status.ActiveState | default('') not in ['activating', 'reloading', 'deactivating']
+      retries: "{{ ((health_timeout | default(300) | int) / 10) | round(0, 'ceil') | int }}"
+      delay: 10
+      failed_when: svc.status.ActiveState | default('') != "active"
       loop: "{{ health_services | default([]) }}"
 
     # An update can stop containers without failing a unit, e.g. containerd upgraded after dockerd restarted

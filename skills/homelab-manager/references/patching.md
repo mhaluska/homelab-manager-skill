@@ -70,6 +70,9 @@ counts; the play's last task lists them. They are findings too: report them in t
    and not before; in LXC guests kernel-module and kernel-filesystem units that fail on every boot don't
    count. A oneshot named as new may still be such a unit: check `journalctl -b -u <unit>`, and only if the
    update did not cause it, add it to `failed_units_ignore` (group_vars) with the user's yes.
+   After a reboot it first waits for the boot to finish, and a `health_services` unit still `activating`
+   gets time to come up: both up to `health_timeout` seconds (default 300, group_vars or `-e`). Raise it
+   for services that start slower (FreeIPA takes 1–2 minutes); a unit that ends `failed` fails at once.
    Docker/Podman containers that ran before must run again; Docker containers that stay down get one restart
    of containerd and then Docker (needed after a containerd upgrade), else the host fails with each
    container's state and error.
