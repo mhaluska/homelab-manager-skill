@@ -773,6 +773,11 @@ class DriftExtraIpsTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.d)
 
+    def test_vlan_names_in_report(self):  # issue 34
+        run("config_set.py", "network.vlans+={id: 20, name: DMZ, cidr: 10.0.10.0/24}", cwd=self.d)
+        out = run("drift_report.py", "--no-tofu", cwd=self.d).stdout
+        self.assertIn("10.0.10.9  — router [VLAN 20 DMZ]", out)
+
     def test_secondary_ips_are_not_unmanaged(self):
         r = run("drift_report.py", "--no-tofu", cwd=self.d)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -946,6 +951,19 @@ class VmidSchemeTests(unittest.TestCase):
         with self.assertRaises(self.h.ConfigError):
             self.h.vmid_from_scheme("{vlan}{octet:03d}", "10.0.0.5", 0)  # 5 < 100
         self.assertIn("Only 0 of 3", self.h.vmid_fit({"vmid_scheme": "{o3}{octet:03d}"}, self.guests))
+
+    def test_vlan_by_name(self):  # issue 34
+        run("config_set.py", "vmid_scheme={vlan}{octet:03d}",
+            "network.vlans+={id: 1020, name: DMZ, cidr: 10.20.0.0/24, gw: 10.20.0.1}", cwd=self.d)
+        r = run("proxmox_inventory.py", "--next-vmid", "lxc", "--ip", "10.20.0.17", "--vlan", "dmz", cwd=self.d)
+        self.assertEqual(r.stdout.strip(), "1020017", r.stderr)
+        r = run("proxmox_inventory.py", "--next-vmid", "lxc", "--ip", "10.20.0.17", "--vlan", "IoT", cwd=self.d)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("known: DMZ (1020)", r.stderr)
+        cfg = self.cfg()
+        self.assertEqual(self.h.vlan_label(cfg, ip="10.20.0.9"), "VLAN 1020 DMZ")
+        self.assertEqual(self.h.vlan_label(cfg, 30), "VLAN 30")
+        self.assertEqual(self.h.vlan_label(cfg, ip="10.30.0.9"), "")
 
 
 class TokenAclTests(unittest.TestCase):
@@ -1174,6 +1192,19 @@ class OnboardingTests(unittest.TestCase):  # issue 20
         self.assertEqual(check_env.el8_without_interpreter(inv), ["a"])
         inv["linux"] = {"children": ["el9"]}
         self.assertEqual(check_env.el8_without_interpreter(inv), [])
+
+
+class VlanNameRedactionTests(unittest.TestCase):  # issue 34: VLAN names are site data
+    def test_vlan_names_are_site_terms(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import issues
+        d = tempfile.mkdtemp()
+        try:
+            cfg = {"_root": d, "network": {"vlans": [{"id": 20, "name": "Kitchen-IoT"}, {"id": 30}]}}
+            self.assertIn("Kitchen-IoT", issues.site_terms(cfg)[1])
+            self.assertNotIn("Kitchen-IoT", issues.sanitize("The VM in Kitchen-IoT got no IP.", cfg))
+        finally:
+            shutil.rmtree(d)
 
 
 class PveSnapshotTests(unittest.TestCase):  # issue 37
@@ -1550,6 +1581,15 @@ class ConfigSetTests(unittest.TestCase):
     def changed(self):
         new = self.f.read_text().splitlines()
         return [l for l in new if l not in self.orig.splitlines()]
+
+    def test_yaml_flow_maps(self):  # issue 34: network.vlans entries
+        r = run("config_set.py", "network.vlans+={id: 20, name: DMZ, cidr: 10.0.20.0/24}",
+                'network.vlans+={"id": 30, "name": "MGMT"}', cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(yq(".network.vlans", self.f)),
+                         [{"id": 20, "name": "DMZ", "cidr": "10.0.20.0/24"}, {"id": 30, "name": "MGMT"}])
+        run("config_set.py", "vmid_scheme={vlan}{octet:03d}", cwd=self.d)          # not a flow map: a string
+        self.assertEqual(json.loads(yq(".vmid_scheme", self.f)), "{vlan}{octet:03d}")
 
     def test_list_append_keeps_comment_on_its_key(self):
         r = run("config_set.py", "network.authorized_ranges+=10.0.10.0/24", "network.authorized_ranges+=10.0.10.0/24",

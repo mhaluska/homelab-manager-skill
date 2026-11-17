@@ -138,6 +138,12 @@ def newest_inputs(root: Path, than: float) -> list[str]:
     return out
 
 
+def vlan_suffix(cfg: dict, ip: str) -> str:
+    """' [VLAN 20 DMZ]' when network.vlans has a cidr holding ip."""
+    label = hmlib.vlan_label(cfg, ip=ip)
+    return f" [{label}]" if label else ""
+
+
 def extra_ips(v: dict) -> list[str]:
     """hm_extra_ips host var: addresses besides ansible_host (CIDR suffixes allowed)."""
     raw = v.get("hm_extra_ips") or []
@@ -310,7 +316,7 @@ def main():
         L += ["## Proxmox guests ↔ network", ""]
         if matched:
             L += [f"{len(matched)} scanned address(es) belong to Proxmox guests:", ""]
-            L += [f"- {ip} → {g['vmid']} {g['type']} `{g['name']}` ({how})"
+            L += [f"- {ip} → {g['vmid']} {g['type']} `{g['name']}` ({how})" + vlan_suffix(cfg, ip)
                   for ip, (g, how) in sorted(matched.items(), key=lambda x: ipaddress.ip_address(x[0]))]
         else:
             L.append("No scanned address matched a guest.")
@@ -342,6 +348,7 @@ def main():
             L += [f"{len(unknown)} device(s) — add to inventory, or list in `discovery.ignore_unmanaged`"
                   + (" (Proxmox guests are listed above, not here)" if matched else "") + ":", ""]
             L += [f"- {ip} {(h.get('hostnames') or [''])[0]} — {h.get('device_type_guess')} {h.get('vendor') or ''}".rstrip()
+                  + vlan_suffix(cfg, ip)
                   + (" — **management controller (BMC)**: keep it off user networks" if
                      "bmc" in str(h.get("device_type_guess") or "").split("/") else "")
                   for ip, h in sorted(unknown)]

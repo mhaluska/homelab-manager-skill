@@ -348,6 +348,7 @@ def site_terms(cfg) -> tuple[list[str], list[str]]:
     name = hmlib.get(cfg, "site.name")
     if name:
         hosts.add(name)
+    hosts.update(str(v["name"]) for v in hmlib.vlans(cfg) if v.get("name"))  # VLAN names are site data too
     for f in ("discovery/proxmox.json", "discovery/network.json"):
         try:
             _names_in(json.loads((root / f).read_text()), hosts)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Draft Ansible inventory entries for existing Linux guests from discovery/proxmox.json (read-only).
 
-    proxmox_to_inventory.py [--vlan 20 ...] [--range 10.0.20.0/24 ...] [--type vm|lxc] [--node pve1]
+    proxmox_to_inventory.py [--vlan 20|DMZ ...] [--range 10.0.20.0/24 ...] [--type vm|lxc] [--node pve1]
                             [--group onboarding] [--all-status] [--out FILE]
 
 Needs a snapshot made with `proxmox_inventory.py --details` (guest config and reported IPs).
@@ -113,7 +113,8 @@ def to_yaml(hosts: dict[str, dict], skipped: list[str], group: str, source: str)
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--vlan", type=int, action="append", default=[], help="only guests with a NIC on this VLAN tag")
+    ap.add_argument("--vlan", action="append", default=[],
+                    help="only guests with a NIC on this VLAN (tag, or name from network.vlans)")
     ap.add_argument("--range", action="append", default=[], help="only guests with an address in this CIDR")
     ap.add_argument("--type", choices=("vm", "lxc"))
     ap.add_argument("--node", action="append", default=[])
@@ -124,6 +125,7 @@ def main():
     try:
         cfg = hmlib.load_config()
         ranges = [ipaddress.ip_network(r, strict=False) for r in a.range]
+        a.vlan = [hmlib.resolve_vlan(cfg, v) for v in a.vlan]
     except (hmlib.ConfigError, ValueError) as e:
         print(f"proxmox_to_inventory: {e}", file=sys.stderr)
         return 3

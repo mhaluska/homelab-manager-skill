@@ -85,6 +85,19 @@ scan that also logs in read-only over SSH to see which hosts Ansible could manag
 Adding candidates to the managed inventory is a separate yes (`ssh_probe.py … --draft`, then
 references/ansible.md step 3–4); a full scan never edits the inventory.
 
+## VLAN names
+
+Users name networks ("DMZ", "MGMT"); `network.vlans` in homelab.yaml maps them:
+`config_set.py 'network.vlans+={id: 20, name: DMZ, cidr: 10.0.20.0/24, gw: 10.0.20.1}'`. Then `--vlan` takes a
+name (`proxmox_inventory.py --next-vmid … --vlan DMZ`, `proxmox_to_inventory.py --vlan DMZ`) and drift lists
+show the VLAN of each address. Collect the table read-only and propose it for the user's yes — never guess names:
+- MikroTik: `routeros_audit.py` output (VLAN interfaces with their `vlan-id`, names and comments; addresses per
+  interface give `cidr` and `gw`), or `/interface vlan print detail` and `/ip address print` over SSH.
+- Proxmox SDN: `pvesh get /cluster/sdn/vnets` (vnet name/alias, `tag`) and `/cluster/sdn/subnets`.
+- A virtual router: its NIC comments matched by MAC to the guest's Proxmox NICs (`tag=` in the config,
+  `proxmox_inventory.py --details`).
+- Switches: their VLAN names (vendor CLI or web UI, from the user).
+
 ## Drift: "compare my Proxmox infrastructure against Git"
 
 1. Refresh: `proxmox_inventory.py` (and `nmap_scan.py` if network devices matter).

@@ -2,7 +2,7 @@
 """Read-only Proxmox VE inventory: nodes, VMs, LXC containers, storage, networks.
 
     proxmox_inventory.py [--secret proxmox-ro] [--out discovery/proxmox.json] [--details] [--summary]
-    proxmox_inventory.py --next-vmid vms|lxc|templates|base_images [--ip IP] [--vlan TAG]
+    proxmox_inventory.py --next-vmid vms|lxc|templates|base_images [--ip IP] [--vlan TAG|NAME]
                          # offline: the VMID for a new guest (vmid_scheme or the next free ID in
                          # vmid_ranges), checked against the snapshot and the tfvars
 
@@ -316,13 +316,13 @@ def main():
     ap.add_argument("--next-vmid", choices=["vms", "lxc", "templates", "base_images"],
                     help="print the VMID for a new guest of this kind (no API call)")
     ap.add_argument("--ip", help="with --next-vmid: the new guest's static IP (for vmid_scheme)")
-    ap.add_argument("--vlan", help="with --next-vmid: the new guest's VLAN tag (for vmid_scheme)")
+    ap.add_argument("--vlan", help="with --next-vmid: the new guest's VLAN tag or name from network.vlans (vmid_scheme)")
     a = ap.parse_args()
     try:
         cfg = hmlib.load_config()
         if a.next_vmid:
             used = used_vmids(Path(cfg["_root"]))
-            print(hmlib.next_vmid(cfg, a.next_vmid, used, ip=a.ip, vlan=a.vlan))
+            print(hmlib.next_vmid(cfg, a.next_vmid, used, ip=a.ip, vlan=hmlib.resolve_vlan(cfg, a.vlan)))
             return 0
         endpoint = hmlib.get(cfg, "proxmox.endpoint")
         if not endpoint:

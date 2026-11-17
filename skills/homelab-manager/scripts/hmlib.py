@@ -354,3 +354,49 @@ def english_problems(text: str, min_words: int = 12) -> list[str]:
     elif len(words) >= min_words and en * 20 < len(words):
         problems.append(f"only {en} common English words among {len(words)}")
     return problems
+
+
+# --------------------------------------------------------------------------- VLAN names
+
+def vlans(cfg: dict) -> list[dict]:
+    """network.vlans entries with an integer id: [{id, name, cidr, gw}, …]."""
+    out = []
+    for v in get(cfg, "network.vlans", []) or []:
+        if isinstance(v, dict) and str(v.get("id", "")).strip().isdigit():
+            out.append({**v, "id": int(v["id"])})
+    return out
+
+
+def resolve_vlan(cfg: dict, value) -> int | None:
+    """A VLAN ID from an ID or a name in network.vlans (case-insensitive); None for an empty value."""
+    if value in (None, ""):
+        return None
+    s = str(value).strip()
+    if s.isdigit():
+        return int(s)
+    table = vlans(cfg)
+    hits = [v["id"] for v in table if str(v.get("name") or "").lower() == s.lower()]
+    if len(hits) == 1:
+        return hits[0]
+    known = ", ".join(f"{v.get('name')} ({v['id']})" for v in table if v.get("name")) or "none"
+    raise ConfigError(f"VLAN {s!r} is {'ambiguous' if hits else 'not'} in network.vlans of homelab.yaml "
+                      f"(known: {known}). Add it there or pass the VLAN ID.")
+
+
+def vlan_label(cfg: dict, vlan_id=None, ip: str | None = None) -> str:
+    """'VLAN 20 DMZ' for an ID, or the VLAN whose cidr holds `ip`; '' when unknown."""
+    table = vlans(cfg)
+    hit = None
+    if vlan_id not in (None, ""):
+        hit = next((v for v in table if v["id"] == int(vlan_id)), None) or {"id": int(vlan_id)}
+    elif ip:
+        for v in table:
+            try:
+                if ipaddress.ip_address(ip) in ipaddress.ip_network(str(v.get("cidr")), strict=False):
+                    hit = v
+                    break
+            except ValueError:
+                continue
+    if not hit:
+        return ""
+    return f"VLAN {hit['id']}" + (f" {hit['name']}" if hit.get("name") else "")

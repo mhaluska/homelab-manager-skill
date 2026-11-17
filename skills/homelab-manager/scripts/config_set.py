@@ -14,7 +14,8 @@ lines of the keys it changes (an inline comment stays on its key) and checks the
 (the whole document must equal the old one plus exactly these changes) before writing; on any
 mismatch it writes nothing and exits 1 — then note a skill issue (SKILL.md §6).
 
-Values: JSON if they parse as JSON (`true`, `3`, `["a", "b"]`, `"3"`), otherwise a plain string.
+Values: JSON if they parse as JSON (`true`, `3`, `["a", "b"]`, `"3"`), YAML flow syntax for a mapping or list
+(`network.vlans+={id: 20, name: DMZ, cidr: 10.0.20.0/24}`), otherwise a plain string.
 Missing keys (and parent mappings) are added at the end of their parent block.
 """
 from __future__ import annotations
@@ -75,7 +76,14 @@ def parse_value(text: str):
     try:
         return json.loads(text)
     except ValueError:
-        return text
+        pass
+    if text.strip()[:1] in ("{", "["):  # YAML flow syntax: {id: 20, name: DMZ}; else a string ({vlan}{octet:03d})
+        r = subprocess.run(["yq", "-o=json", "-p=yaml", "."], input=text, capture_output=True, text=True, timeout=20)
+        if r.returncode == 0:
+            v = json.loads(r.stdout or "null")
+            if isinstance(v, (dict, list)):
+                return v
+    return text
 
 
 # --------------------------------------------------------------------------- locating keys
