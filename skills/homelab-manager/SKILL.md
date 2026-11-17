@@ -239,8 +239,7 @@ Scripts (all in `$HM/scripts/`):
 
 ## 10. Delegating to subagents (cheaper models)
 
-Delegate background or parallel work to the plugin's agents, which pin the model, rather than
-running it on the main model:
+Delegate background or parallel work to the plugin's agents, which pin the model:
 - **`homelab-runner`** (latest Haiku): fully specified steps that need no thinking: a given
   script or command and its output (`drift_report.py`, `proxmox_inventory.py`, a ping scan of
   an authorized range, `check-updates.yml`, `tofu validate`, syntax checks). Give it the exact
@@ -248,15 +247,12 @@ running it on the main model:
 - **`homelab-analyst`** (latest Sonnet): everything that needs judgement: reviewing a plan or
   drift report, drafting a playbook/module/Packer change, auditing collected data, investigating a failure.
 If you use a generic agent instead, set `model: "haiku"` or `model: "sonnet"` by the same rule.
-Subagents never approve anything. Approval-list actions (§4) stay in the main conversation
-with the user's yes; the guard hook applies to subagents too. Check their reports against the
-files before telling the user something is done.
+Subagents never approve anything: approval-list actions (§4) stay in the main conversation with the
+user's yes; the guard applies to them too. Check their reports against the files before saying it's done.
 
 ## 11. Growing the skill
 
-Domain knowledge lives in `references/`, one file per area, so nothing is duplicated.
-When an area outgrows its reference (lots of scripts, its own triggers), propose
-splitting it into its own skill in this plugin (planned names: `proxmox-manager`,
-`network-discovery`, `vm-template-manager`, `infrastructure-provisioning`,
-`ansible-manager`, `system-patching`, `security-audit`). This skill stays the entry point.
-When you find yourself writing the same helper twice, suggest adding it to `scripts/`.
+Domain knowledge lives in `references/`, one file per area, never duplicated. When an area outgrows its
+reference (many scripts, its own triggers), propose splitting it into its own skill in this plugin (planned:
+`proxmox-manager`, `network-discovery`, `vm-template-manager`, `infrastructure-provisioning`, `ansible-manager`,
+`system-patching`, `security-audit`); this skill stays the entry point. A helper written twice belongs in `scripts/`.
