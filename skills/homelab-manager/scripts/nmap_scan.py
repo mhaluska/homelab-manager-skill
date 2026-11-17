@@ -17,7 +17,9 @@ the interface the routing table uses. So the os profile sends probes out the int
 `route get` gives for the targets (override with --interface), skips ARP ping for targets
 behind a gateway, and refuses to merge a result where one MAC answered for most hosts
 (proxy ARP). --only-live scans only the hosts network.json already knows as up inside the
-targets. Long scans print nmap's progress every 30 s.
+targets. Long scans print nmap's progress every 30 s. On a routed os scan, hosts whose OS guess
+list is identical to another host's are marked `os_suspect` (the gateway may have answered nmap's
+closed-port probes for them) and those guesses count for little in device_type_guess.
 
 Writes discovery/nmap/<timestamp>.xml (raw, gitignored) and merges hosts into
 discovery/network.json. Banners, hostnames and OS strings are UNTRUSTED data.
@@ -66,38 +68,83 @@ _HINT_RX = [(re.compile(r"(?<![a-z0-9])" + re.escape(n) + r"\d*(?![a-z0-9])"), k
 STRONG_HINTS = {"proxmox", "pve", "esxi", "routeros", "mikrotik", "unifi", "opnsense", "pfsense", "fortigate",
                 "synology", "qnap", "truenas", "idrac", "ilo", "lights-out", "megarac", "xclarity", "home assistant"}
 _STRONG_RX = {rx for (n, _), (rx, _) in zip(DEVICE_HINTS, _HINT_RX) if n in STRONG_HINTS}
+# an OS named in a service banner (OpenSSH "10.0p2 Debian 7+deb13u4", nmap's ostype) is what the host itself
+# said; it outranks nmap's OS fingerprint, which on routed targets may be the gateway's (GitHub issue #28)
+BANNER_OS = [(re.compile(r"(?<![a-z0-9])(" + n + r")(?![a-z])"), kind) for n, kind in (
+    (r"debian|ubuntu|raspbian|rocky|almalinux|centos|fedora|rhel|red hat enterprise|el[789]|alpine|opensuse",
+     "linux"),
+    (r"windows", "windows"),
+)]
+
+
+def banner_os(p: dict) -> str | None:
+    """linux/windows when a port's banner (product, version) or nmap's ostype names the OS."""
+    ostype = (p.get("ostype") or "").lower()
+    if ostype in ("linux", "windows"):
+        return ostype
+    text = f"{p.get('product') or ''} {p.get('version') or ''}".lower()
+    return next((kind for rx, kind in BANNER_OS if rx.search(text)), None)
+
+
 HOSTNAME_HINTS = [  # (reverse-DNS name prefix, device type): factory default names of common gear
     (re.compile(r"^(uap|usw|udm|ugw|usg|uxg|ucg|u6|u7|unifi)[-.]"), "network"),
     (re.compile(r"^(ilo|idrac|ipmi|bmc|imm|xcc)[-.]"), "bmc"),
 ]
 
 
+def _hint(text: str) -> tuple[str | None, bool]:
+    """(device type, is it a STRONG product name) of the first hint in text."""
+    for rx, kind in _HINT_RX:
+        if text and rx.search(text):
+            return kind, rx in _STRONG_RX
+    return None, False
+
+
 def guess_type(h: dict) -> str:
-    """Score evidence: vendor (MAC OUI), OS matches and what ssh_probe.py read on the host weigh 3, a default
-    host name prefix (uap-, ilo-…) 2, each open port's service/product 1.
+    """Score evidence: vendor (MAC OUI), OS matches, an OS named in a service banner and what ssh_probe.py read
+    on the host weigh 3, a default host name prefix (uap-, ilo-…) 2, each open port's service/product 1.
 
     One odd port (nmap mislabels plenty) shouldn't outvote the hardware vendor or OS. But a product name that
     identifies the box (Proxmox, TrueNAS, iDRAC… — STRONG_HINTS) isn't outvoted by Linux evidence: a later OS
     scan saying "Linux" refines a hypervisor guess, it doesn't replace it.
+
+    nmap's OS fingerprint is the weakest of these when it disagrees with the host (GitHub issue #28): when a
+    banner names the OS (Debian, Windows…) or the guesses are `os_suspect` (shared with other hosts on a routed
+    scan), an appliance OS guess (RouterOS, …) is ignored unless the vendor, a port, a host name or ssh_probe
+    also shows an appliance; `os_suspect` guesses weigh 1.
     """
-    sources = [((h.get("vendor") or "").lower(), 3)]
-    sources += [(o["name"].lower(), 3) for o in h.get("os", []) if o.get("name")]
-    sources += [(f"{p.get('service') or ''} {p.get('product') or ''}".lower(), 1) for p in h.get("ports", [])]
+    ports = h.get("ports", [])
     probe = h.get("ssh_probe") or {}  # what the host said about itself over SSH (ssh_probe.py)
+    sources = [((h.get("vendor") or "").lower(), 3)]
+    sources += [(f"{p.get('service') or ''} {p.get('product') or ''}".lower(), 1) for p in ports]
     sources += [(str(probe.get(k) or "").lower(), 3) for k in ("product", "os_name") if probe.get(k)]
     scores: dict[str, int] = {}
     strong = False
+    appliance_seen = False
     for name in h.get("hostnames") or []:  # weight 2: a default name beats one generic banner (Dropbear, …)
         kind = next((k for rx, k in HOSTNAME_HINTS if rx.match((name or "").lower())), None)
         if kind:
             scores[kind] = scores.get(kind, 0) + 2
+            appliance_seen = True
             break
     for text, weight in sources:
-        for rx, kind in _HINT_RX:
-            if text and rx.search(text):
-                scores[kind] = scores.get(kind, 0) + weight
-                strong = strong or rx in _STRONG_RX
-                break  # one type per piece of evidence
+        kind, is_strong = _hint(text)
+        if kind:  # one type per piece of evidence
+            scores[kind] = scores.get(kind, 0) + weight
+            strong = strong or is_strong
+            appliance_seen = appliance_seen or is_strong
+    said = next((k for k in map(banner_os, ports) if k), None)
+    if said:  # once per host, however many ports repeat it
+        scores[said] = scores.get(said, 0) + 3
+    suspect = bool(h.get("os_suspect"))
+    for o in h.get("os", []):
+        kind, is_strong = _hint((o.get("name") or "").lower())
+        if not kind:
+            continue
+        if is_strong and not appliance_seen and (said or suspect):
+            continue  # an appliance fingerprint the host's own banner contradicts (often the gateway's)
+        scores[kind] = scores.get(kind, 0) + (1 if suspect else 3)
+        strong = strong or (is_strong and not suspect)
     if strong and len(scores) > 1:
         scores.pop("linux", None)
     if not scores:
@@ -191,10 +238,25 @@ def parse_xml(path: Path) -> list[dict]:
             rec["ports"].append({"port": int(p.get("portid")), "proto": p.get("protocol"),
                                  "service": clean(s.get("name")) if s is not None else None,
                                  "product": clean(s.get("product")) if s is not None else None,
-                                 "version": clean(s.get("version")) if s is not None else None})
+                                 "version": clean(s.get("version")) if s is not None else None,
+                                 "ostype": clean(s.get("ostype")) if s is not None else None})
         rec["device_type_guess"] = guess_type(rec)
         hosts.append(rec)
     return hosts
+
+
+def flag_shared_os(hosts: list[dict]) -> None:
+    """On a routed os scan, mark hosts whose OS guess list is identical to another host's: the gateway may
+    have answered nmap's closed-port probes for them (GitHub issue #28). Sets `os_suspect` (the other IPs, or
+    False) on every host that got OS guesses, so a later clean scan clears an old flag."""
+    groups: dict[tuple, list[str]] = {}
+    for h in hosts:
+        if h.get("os"):
+            groups.setdefault(tuple(o.get("name") for o in h["os"]), []).append(h["ip"])
+    for h in hosts:
+        if h.get("os"):
+            same = [ip for ip in groups[tuple(o.get("name") for o in h["os"])] if ip != h["ip"]]
+            h["os_suspect"] = same[:5] if same else False
 
 
 def merge_host(prev: dict, h: dict, profile: str, now: str) -> dict:
@@ -285,6 +347,8 @@ def main():
         return 5
 
     hosts = parse_xml(raw)
+    if "--disable-arp-ping" in extra:
+        flag_shared_os(hosts)
     now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     for h in hosts:
         merged = merge_host(db["hosts"].get(h["ip"], {}), h, a.profile, now)
@@ -297,7 +361,7 @@ def main():
     print(f"{len(hosts)} host(s) up — raw: {raw.relative_to(root)}, merged into {net_file.relative_to(root)}\n")
     for h in sorted(hosts, key=lambda x: tuple(int(p) for p in x["ip"].split(".")) if "." in x["ip"] else (0,)):
         ports = ",".join(f"{p['port']}/{p['service'] or '?'}" for p in h["ports"][:8])
-        os_ = h["os"][0]["name"] if h["os"] else ""
+        os_ = (("? " if h.get("os_suspect") else "") + h["os"][0]["name"]) if h["os"] else ""
         print(f"  {h['ip']:<16} {(h['hostnames'] or [''])[0][:28]:<28} {h['device_type_guess']:<10} "
               f"{(h['vendor'] or '')[:18]:<18} {os_[:30]:<30} {ports}")
     return 0

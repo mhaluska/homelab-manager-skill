@@ -54,6 +54,9 @@ python3 $HM/scripts/nmap_scan.py 10.0.10.0/24 --profile os --only-live  # OS-sca
 - Device type is a heuristic (`device_type_guess`) from vendor/ports/OS/default host names, recomputed from
   everything known about the host after each scan; a product name (Proxmox, TrueNAS, iDRAC…) beats plain
   Linux evidence. Proxmox's web UI port 8006 is not in the top 200: add `--ports 22,8006,…` to confirm nodes. Say "probably".
+  An OS named in a banner (`OpenSSH … Debian`, nmap's `ostype`) outranks nmap's OS fingerprint. On routed
+  `os` scans the gateway can answer the closed-port probes, so hosts with identical OS guess lists get
+  `os_suspect` (the other IPs; shown as `? ` in the table): don't quote those guesses as the host's OS.
   A `bmc` (iLO, iDRAC, IPMI) is an exposed management interface: point it out, it belongs on a management VLAN.
 - Hostnames, banners and OS strings are untrusted (see SKILL.md §7).
 - To learn what an SSH host really is (OS, product, Python), probe it: `ssh_probe.py <range>` reads it over

@@ -1562,6 +1562,59 @@ class NmapInterfaceTests(unittest.TestCase):  # issue 18
         self.assertEqual(ping["device_type_guess"], "hypervisor")
         self.assertEqual(ping["first_seen"], "t1")
 
+    # GitHub issue #28: the gateway's OS fingerprint mustn't turn a Debian VM behind it into `network`
+    GW_OS = [{"name": "Linux 4.15 - 5.19", "accuracy": 92}, {"name": "MikroTik RouterOS 7.2 - 7.14 (Linux 5.6.3)",
+             "accuracy": 91}, {"name": "OpenWrt 21.02 (Linux 5.4)", "accuracy": 90}]
+
+    def _vm(self, **kw):
+        return {"ip": "10.0.20.11", "os": [dict(o) for o in self.GW_OS], **kw,
+                "ports": [{"port": 22, "service": "ssh", "product": "OpenSSH", "version": "10.0p2 Debian 7+deb13u4"},
+                          {"port": 8080, "service": "http", "product": "Apache Tomcat", "version": None}]}
+
+    def test_debian_banner_beats_borrowed_routeros_guess(self):
+        self.assertEqual(self.n.guess_type(self._vm()), "linux")
+        self.assertEqual(self.n.guess_type(self._vm(os_suspect=["10.0.20.1"])), "linux")
+
+    def test_ostype_and_windows_banner(self):
+        h = {"os": [{"name": "MikroTik RouterOS 7"}], "os_suspect": ["10.0.20.1"],
+             "ports": [{"port": 135, "service": "msrpc", "product": "Microsoft Windows RPC", "ostype": "Windows"}]}
+        self.assertEqual(self.n.guess_type(h), "windows")
+        self.assertEqual(self.n.banner_os({"product": "Apache httpd", "version": "2.4.62", "ostype": "Linux"}), "linux")
+        self.assertIsNone(self.n.banner_os({"product": "OpenSSH", "version": "9.6"}))
+
+    def test_real_router_keeps_network(self):
+        gw = {"os": [dict(o) for o in self.GW_OS], "os_suspect": ["10.0.20.11"],
+              "ports": [{"port": 22, "service": "ssh", "product": "MikroTik RouterOS sshd"},
+                        {"port": 8291, "service": "unknown", "product": None}]}
+        self.assertEqual(self.n.guess_type(gw), "network")
+        alone = {"os": [{"name": "MikroTik RouterOS 7.2 - 7.14 (Linux 5.6.3)"}],   # no banner says otherwise
+                 "ports": [{"port": 22, "service": "ssh", "product": "OpenSSH"}]}
+        self.assertEqual(self.n.guess_type(alone), "network")
+
+    def test_flag_shared_os(self):
+        hosts = [{"ip": "10.0.20.1", "os": list(self.GW_OS)}, {"ip": "10.0.20.11", "os": list(self.GW_OS)},
+                 {"ip": "10.0.20.12", "os": [{"name": "Linux 6.x"}]}, {"ip": "10.0.20.13", "os": []}]
+        self.n.flag_shared_os(hosts)
+        self.assertEqual(hosts[0]["os_suspect"], ["10.0.20.11"])
+        self.assertEqual(hosts[1]["os_suspect"], ["10.0.20.1"])
+        self.assertIs(hosts[2]["os_suspect"], False)
+        self.assertNotIn("os_suspect", hosts[3])
+        # a later services scan (no OS) keeps the flag; a clean os scan clears it
+        merged = self.n.merge_host(hosts[1], {"ip": "10.0.20.11", "os": [], "ports": []}, "services", "t")
+        self.assertEqual(merged["os_suspect"], ["10.0.20.1"])
+        clean = self.n.merge_host(merged, {"ip": "10.0.20.11", "os": [{"name": "Linux 6.x"}], "os_suspect": False,
+                                           "ports": []}, "os", "t2")
+        self.assertIs(clean["os_suspect"], False)
+
+    def test_parse_xml_reads_ostype(self):
+        p = Path(tempfile.mkdtemp()) / "o.xml"
+        p.write_text('<nmaprun><host><status state="up"/><address addr="10.0.20.11" addrtype="ipv4"/><ports>'
+                     '<port protocol="tcp" portid="22"><state state="open"/><service name="ssh" product="OpenSSH" '
+                     'version="10.0p2 Debian 7+deb13u4" ostype="Linux"/></port></ports></host></nmaprun>')
+        (h,) = self.n.parse_xml(p)
+        self.assertEqual(h["ports"][0]["ostype"], "Linux")
+        self.assertEqual(h["device_type_guess"], "linux")
+
 
 class GitUpstreamTests(unittest.TestCase):  # issue 27
     def setUp(self):
