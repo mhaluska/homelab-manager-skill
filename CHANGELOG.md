@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.15.0 — 2026-11-17
+- Full scan ([#29](https://github.com/mhaluska/homelab-manager-skill/issues/29)): `references/discovery.md` describes a full scan of a range — ping, services,
+  `os --only-live` (its own yes), Proxmox guest mapping and a read-only `ssh_probe.py` — summarised per host as
+  managed, candidate (with OS group), auth failed, no POSIX shell or no SSH. When the user only says "scan",
+  Claude asks once: network only or full. Onboarding stays a separate yes.
+- Fix ([#28](https://github.com/mhaluska/homelab-manager-skill/issues/28)): `nmap_scan.py` no longer lets a borrowed OS fingerprint override what the host says.
+  An OS named in a service banner (`OpenSSH … Debian`) or nmap's `ostype` (now stored per port) counts like an
+  OS match; an appliance OS guess (RouterOS…) is ignored when a banner names the OS and nothing else on the
+  host shows an appliance. On routed `os` scans, hosts whose OS guess list is identical to another host's
+  (the gateway answering for them) get `os_suspect` in `network.json`, and those guesses weigh little.
+- Fix ([#30](https://github.com/mhaluska/homelab-manager-skill/issues/30)): `issues.py report` no longer redacts nmap OS guesses, port banners and ssh_probe's OS
+  and product as host names; reverse-DNS names from `network.json` (`hostnames`) are now redacted.
+
 ## 0.14.0 — 2026-11-17
 - Opt-in `git.auto_push` ([#27](https://github.com/mhaluska/homelab-manager-skill/issues/27)): when true, every
   verified commit of the operating loop is pushed to the remote (never forced) and the branch checked not to be
