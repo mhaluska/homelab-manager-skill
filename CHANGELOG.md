@@ -12,6 +12,10 @@
   no longer rewrites `discovery/updates.json` with only that group. Results are merged: hosts checked now
   replace their entry, the others keep theirs, each with its own `collected_at`; hosts gone from the inventory
   are dropped. Existing repos: the upgrade advisor offers the new final play of the (user-owned) playbook.
+- Onboarding existing hosts ([#20](https://github.com/mhaluska/homelab-manager-skill/issues/20)): new read-only
+  `proxmox_to_inventory.py [--vlan N] [--range CIDR] [--type vm|lxc] [--node N]` drafts inventory entries
+  (`ansible_host`, `proxmox_vmid/node/kind`) for running Linux guests in `discovery/proxmox.json` and lists
+  the ones it skipped (non-Linux ostype, stopped, no IP, already managed). Nothing is written to `hosts.yml`.
 
 ## 0.12.4 — 2026-11-17
 - Fix ([#18](https://github.com/mhaluska/homelab-manager-skill/issues/18)): `nmap_scan.py --profile os` no longer

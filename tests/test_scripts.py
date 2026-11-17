@@ -1005,6 +1005,65 @@ class CheckUpdatesMergeTests(unittest.TestCase):  # issue 22
         self.assertIn("check-updates-merge", ids())
 
 
+class OnboardingTests(unittest.TestCase):  # issue 20
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d)
+        run("init_repo.py", str(self.d), "--components", "proxmox,ansible", cwd=self.d)
+        g = lambda vmid, name, kind, conf, status="running", ips=None: {
+            "vmid": vmid, "name": name, "type": kind, "node": "pve1", "status": status, "template": False,
+            "config": conf, **({"ips": ips} if ips else {})}
+        guests = [
+            g(101, "web01", "lxc", {"ostype": "debian", "net0": "name=eth0,bridge=vmbr0,ip=10.0.20.11/24,tag=20"}),
+            g(102, "db01", "vm", {"ostype": "l26", "net0": "virtio=AA:BB:CC:00:00:02,bridge=vmbr0,tag=20"},
+              ips=[{"ip": "fe80::1", "source": "agent"}, {"ip": "10.0.20.12", "source": "agent"}]),
+            g(103, "win01", "vm", {"ostype": "win11", "net0": "virtio,bridge=vmbr0,tag=20"},
+              ips=[{"ip": "10.0.20.13", "source": "agent"}]),
+            g(104, "old01", "vm", {"ostype": "l26", "net0": "virtio,bridge=vmbr0,tag=20"}, status="stopped"),
+            g(105, "noip", "vm", {"ostype": "l26", "net0": "virtio,bridge=vmbr0,tag=20"}),
+            g(106, "Mgmt Box", "lxc", {"ostype": "rockylinux", "net0": "name=eth0,bridge=vmbr0,ip=10.0.30.5/24,tag=30"}),
+            g(107, "known", "lxc", {"ostype": "debian", "net0": "name=eth0,bridge=vmbr0,ip=10.0.20.17/24,tag=20"}),
+            {**g(9000, "tpl", "vm", {"ostype": "l26"}), "template": True},
+        ]
+        (self.d / "discovery/proxmox.json").write_text(json.dumps({"collected_at": "t", "guests": guests}))
+        (self.d / "ansible/inventory/managed/hosts.yml").write_text(
+            "all:\n  children:\n    linux:\n      hosts:\n        known:\n          ansible_host: 10.0.20.17\n")
+
+    def draft(self, *args):
+        r = run("proxmox_to_inventory.py", *args, cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def test_draft_lists_linux_guests_and_skips_the_rest(self):
+        out = self.draft()
+        self.assertIn('        web01:  # debian\n          ansible_host: "10.0.20.11"\n          proxmox_vmid: 101', out)
+        self.assertIn('db01:  # l26\n          ansible_host: "10.0.20.12"', out)       # agent IPv4, not link-local
+        self.assertIn('mgmt-box:', out)
+        self.assertIn("103 win01: not Linux (ostype win11)", out)
+        self.assertIn("104 old01: stopped", out)
+        self.assertIn("105 noip: no IP known", out)
+        self.assertIn("107 known: already in the managed inventory", out)
+        self.assertNotIn("tpl", out)
+        data = json.loads(subprocess.run(["yq", "-o=json", "."], input=out, capture_output=True, text=True).stdout)
+        self.assertEqual(sorted(data["all"]["children"]["onboarding"]["hosts"]), ["db01", "mgmt-box", "web01"])
+
+    def test_filters(self):
+        out = self.draft("--vlan", "30")
+        self.assertIn("mgmt-box:", out)
+        self.assertNotIn("web01", out)
+        out = self.draft("--range", "10.0.20.0/28", "--type", "vm", "--group", "new")
+        self.assertIn("    new:", out)
+        self.assertIn("db01:", out)
+        self.assertNotIn("web01", out)
+        self.assertNotIn("noip", out)                                               # outside the range: silent
+
+    def test_needs_details_snapshot(self):
+        (self.d / "discovery/proxmox.json").write_text(json.dumps({"guests": [{"vmid": 1, "type": "vm"}]}))
+        r = run("proxmox_to_inventory.py", cwd=self.d)
+        self.assertEqual(r.returncode, 4)
+        self.assertIn("--details", r.stderr)
+
+
 class FixedIssuesTests(unittest.TestCase):
     """#12: reported entries fixed by the installed release are pointed out and can be resolved."""
 
