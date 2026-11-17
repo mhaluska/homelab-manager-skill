@@ -23,6 +23,8 @@ Default stance: **inventory and read-only checks**.
   (e.g. `community.routeros`, `fortinet.fortios`, `community.general.opnsense*`), `--check`
   first, approval always — a bad firewall or switch push can cut off the Mac itself.
 - BMC/IPMI: power actions are reboots → approval. Never change BMC users/network.
+- NAS hosting LXD/Incus containers: `lxd_snapshots: true` in its host vars (the user's yes) is the one
+  exception — it allows instance snapshots with `lxd_snapshot.py` (references/patching.md), nothing else.
 
 ## BMCs (HPE iLO, Dell iDRAC, Supermicro, Lenovo XCC) over Redfish
 

@@ -101,6 +101,8 @@ no Proxmox guest behind it, or the user asks what runs in containers:
   appliance login. Record the result in `discovery/<nas>-containers.json` in the same layout
   (`{"collected_at": …, "hosts": {"<nas>": {"containers": [{"name", "runtime", "image", "state", "ips"}]}}}`)
   so the drift report lists those addresses as containers instead of unmanaged devices.
+  An LXD/Incus container that gets added to the managed inventory (to patch it) gets the host var `lxd_host`
+  pointing at that NAS, so patching can snapshot it (references/patching.md "LXD/Incus instances").
 
 ## VLAN names
 

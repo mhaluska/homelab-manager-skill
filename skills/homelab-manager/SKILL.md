@@ -223,6 +223,7 @@ Scripts (all in `$HM/scripts/`):
 | `with_secrets.py <names…> -- <cmd>` | run a command with keychain secrets in env, output redacted | — |
 | `proxmox_inventory.py [--details]` / `--next-vmid vms\|lxc [--ip --vlan]` | read-only Proxmox snapshot + summary table (`--details`: configs, guest IPs) / VMID for a new guest | `discovery/proxmox.json` |
 | `pve_snapshot.py list\|check\|create\|delete\|rollback <guest…> [--name N]` | guest snapshots around patching (check: can they be; delete/rollback: approval) | — |
+| `lxd_snapshot.py list\|check\|create\|delete\|restore <host…> [--name N]` | LXD/Incus instance snapshots (NAS; host vars lxd_host, lxd_snapshots) (delete/restore: approval) | — |
 | `pve_node_plan.py <node> [--max-mem-pct 85] [--no-migrate]` | read-only plan for patching one Proxmox node: migrate, HA, stop/restore per guest | `discovery/pve-patch-<node>.json` |
 | `nmap_scan.py <targets> [--profile ping\|services\|os] [--only-live]` | scope-checked scan | `discovery/network.json` |
 | `drift_report.py [--tofu-json F]` / `--stale` | Proxmox ↔ OpenTofu ↔ Ansible ↔ network / is drift.md out of date | `discovery/drift.md` |

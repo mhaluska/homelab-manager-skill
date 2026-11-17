@@ -48,13 +48,16 @@ counts; the play's last task lists them. They are findings too: report them in t
    name `allow_reboot=true` = `if_required`); the run reports `reboot_pending` with the reason and
    `restart_pending`. Offer `-e restart_services=true` (restarts those services, except dbus and logind, when
    the host isn't rebooted anyway): no reboot needed, but each service restarts briefly.
-   Proxmox guests: offer a pre-patch snapshot (`-e snapshot=true -e hm_scripts=$HM/scripts`): a disk-only
-   snapshot `prepatch-<date>` of each guest right before its update (guest = inventory short name or host var
-   `proxmox_vmid`; needs snapshot-capable storage and the provisioning token). Before anything else the run
-   checks every target (`pve_snapshot.py check <guests>`, read-only, also by hand) and refuses with the list
-   of hosts that can't be snapshotted: not Proxmox guests (e.g. LXD containers on a NAS), or a container with
-   a bind or device mount point, or a disk on storage without snapshots. Leave them out of the target, or with
-   the user's yes for exactly those hosts add `-e snapshot_missing=skip` (patched without a snapshot).
+   Offer a pre-patch snapshot (`-e snapshot=true -e hm_scripts=$HM/scripts`): a disk-only snapshot
+   `prepatch-<date>` of each host right before its update. Proxmox guests: `pve_snapshot.py` (guest = inventory
+   short name or host var `proxmox_vmid`; needs snapshot-capable storage and the provisioning token). Hosts with
+   the host var `lxd_host`: `lxd_snapshot.py` (see "LXD/Incus instances" below). Before anything else the run
+   checks every target (`pve_snapshot.py check` / `lxd_snapshot.py check`, read-only, also by hand) and refuses
+   with the list of hosts that can't be snapshotted: not a Proxmox guest and no `lxd_host`, a container with a
+   bind or device mount point, a disk on storage without snapshots, an LXD host without the opt-in, or a `dir`
+   pool too full for the copy. Leave them out of the target, or with the user's yes for exactly those hosts
+   add `-e snapshot_missing=skip` (patched without a snapshot). Tell the user what the LXD snapshots won't
+   contain (the run prints it: bind-mounted data, custom volumes).
    Clean-up: after the reboot (or when there is none) the run autoremoves packages nothing needs, so the old
    kernel goes too (`-e autoremove=false` skips it). check-updates shows `autoremovable` and
    `config_leftovers`; offer `-e purge=true` only when the user wants the configuration of removed
@@ -76,17 +79,32 @@ counts; the play's last task lists them. They are findings too: report them in t
 8. Snapshots: once the hosts are verified, offer to remove them — they grow with every write and slow the
    guest's storage: `pve_snapshot.py list <guests>`, then `pve_snapshot.py delete <guests> --name prepatch-<date>`
    (the user's yes; the guard asks). A failed update: `pve_snapshot.py rollback <guest> --name …` (the user's yes;
-   the changes since are lost, and a VM is left stopped — start it afterwards).
+   the changes since are lost, and a VM is left stopped — start it afterwards). LXD/Incus hosts: the same with
+   `lxd_snapshot.py list|delete|restore`.
 
-Snapshots by hand ("snapshot web01 before I change it"): `pve_snapshot.py create <guest…> [--name …]`;
-`list` and `check` are read-only.
+Snapshots by hand ("snapshot web01 before I change it"): `pve_snapshot.py create <guest…> [--name …]`
+(`lxd_snapshot.py create <host…>` for LXD/Incus instances); `list` and `check` are read-only.
 
-LXD/Incus containers (plain hosts, QNAP Container Station, …) have no helper yet: on the container host,
-`lxc storage show <pool>` first — `dir` storage copies the whole rootfs (check free space against `du` of
-it), ZFS/btrfs are copy-on-write; `disk` devices (bind-mounted data) are not in the snapshot. Then, with
-the user's yes, `lxc snapshot <ct> prepatch-<date>`; `lxc restore <ct> prepatch-<date>` rolls back,
-`lxc delete <ct>/prepatch-<date>` cleans up (the user's yes). A dist-upgrade: one release at a time, verify,
-snapshot again before the next.
+### LXD/Incus instances
+
+Containers (or VMs) on a plain LXD/Incus host or a QNAP NAS (Container Station's LXD) are snapshotted on that
+host by `lxd_snapshot.py list|check|create|delete|restore <inventory host…> [--name N]`, over SSH with agent keys.
+Set up once, each change with the user's yes:
+1. The instance is in the managed inventory (its OS group, for patching) with host vars `lxd_host: <inventory
+   name of the LXD/Incus host>`, and `lxd_instance` when its LXD name differs from the short host name
+   (`lxd_project` for a non-default project). `lxc list` on the host shows the names.
+2. The LXD/Incus host is in the inventory (`appliances` for a NAS) with `ansible_host`/`ansible_user`, and
+   `lxd_snapshots: true`: appliances are read-only by default, this allows snapshots there and nothing else.
+   `lxd_cli` when the client isn't found (`incus`, `lxc`, QNAP's `/share/*/.qpkg/container-station/bin/lxc`),
+   `lxd_sudo: true` when the SSH user needs `sudo -n` for it.
+3. `lxd_snapshot.py check <host>` (read-only) — the first run against a host also shows that its LXD answers
+   `query`. Report its warnings: `dir` storage copies the whole root filesystem (slow, needs that much free
+   space; it refuses when it can't fit), disk devices are not in the snapshot (bind-mounted data, custom
+   volumes: back them up separately if the update touches them), scheduled snapshots on ZFS.
+Restore (`restore <host> --name N`, the user's yes) restarts a running instance and loses its changes since. On
+ZFS only the newest snapshot can be restored: it refuses while newer ones exist; deleting those first is a
+separate yes. TrueNAS (its middleware manages Incus) and Synology (Docker only) are not covered: use their own
+dataset snapshots. A dist-upgrade of an instance: one release at a time, a snapshot before each, verify between.
 
 ## Patch Proxmox nodes
 
