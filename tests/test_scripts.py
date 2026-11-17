@@ -1186,6 +1186,19 @@ class PveNodePlaybookUpgradeTests(unittest.TestCase):  # issue 23
         note = next(n for n in notes if n["id"] == "patch-proxmox-node")
         self.assertIn("repo-template/ansible/playbooks/patch-proxmox-node.yml", note["action"])
 
+    def test_patch_linux_guard_offered_to_existing_repos(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        run("init_repo.py", str(d), "--components", "ansible", cwd=d)
+        self.assertIn("patch_requires_approval: true",
+                      (d / "ansible/inventory/managed/group_vars/proxmox_nodes.yml").read_text())
+        ids = lambda: [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", "--all", cwd=d).stdout)]
+        self.assertNotIn("patch-requires-approval", ids())
+        pb = d / "ansible/playbooks/patch-linux.yml"
+        pb.write_text(re.sub(r"\n    - name: Refuse hosts that need.*?run_once: true\n", "\n", pb.read_text(), flags=re.S))
+        self.assertNotIn("Refuse hosts that need", pb.read_text())
+        self.assertIn("patch-requires-approval", ids())
+
 
 class FixedIssuesTests(unittest.TestCase):
     """#12: reported entries fixed by the installed release are pointed out and can be resolved."""

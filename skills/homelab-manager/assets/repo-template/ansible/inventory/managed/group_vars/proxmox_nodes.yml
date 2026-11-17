@@ -1,0 +1,5 @@
+# Proxmox VE nodes. Patch them with playbooks/patch-proxmox-node.yml, one node at a time, after
+# pve_node_plan.py — patch-linux.yml refuses hosts with patch_requires_approval unless named in
+# -e patch_approved=<host,…>.
+patch_requires_approval: true
+# proxmox_node_name: pve1   # the node's name in Proxmox, if it differs from the inventory short name

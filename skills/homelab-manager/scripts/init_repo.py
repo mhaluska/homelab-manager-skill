@@ -48,7 +48,7 @@ COMPONENTS = {
                  "ansible/inventory/managed/group_vars/all.yml", "ansible/playbooks/ping.yml",
                  "ansible/playbooks/check-updates.yml", "ansible/playbooks/patch-linux.yml",
                  "ansible/playbooks/patch-proxmox-node.yml", "ansible/playbooks/tasks/",
-                 "ansible/roles/"]),
+                 "ansible/inventory/managed/group_vars/proxmox_nodes.yml", "ansible/roles/"]),
     "discovery": ("Network discovery with nmap in authorized ranges", [], []),
     "windows": ("Windows hosts (Ansible over OpenSSH)", ["ansible"], ["ansible/inventory/managed/group_vars/windows.yml"]),
     "appliances": ("Appliances: NAS, firewall, switches, BMCs (inventory + read-only checks)", ["ansible"],

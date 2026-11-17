@@ -77,6 +77,14 @@
       "when": {"component": "ansible", "file_missing": "ansible/playbooks/patch-proxmox-node.yml"},
       "text": "New patch-proxmox-node.yml patches one Proxmox node at a time: guests on shared storage are live-migrated (and back), HA guests go through node maintenance, pinned guests are shut down and restored. pve_node_plan.py makes its plan.",
       "action": "If the user manages Proxmox nodes with Ansible: copy {template} and the tasks/pve-migrate.yml next to it into ansible/playbooks/ (new files)."
+    },
+    {
+      "version": "0.13.0",
+      "id": "patch-requires-approval",
+      "kind": "template",
+      "when": {"component": "ansible", "file_lacks": ["ansible/playbooks/patch-linux.yml", "Refuse hosts that need their own procedure"]},
+      "text": "patch-linux.yml can refuse hosts that need their own procedure (patch_requires_approval, set for Proxmox nodes in group_vars/proxmox_nodes.yml), so a broad -e target never patches and reboots a hypervisor.",
+      "action": "Copy the 'Refuse hosts that need their own procedure' pre-task from {template} into ansible/playbooks/patch-linux.yml, and add ansible/inventory/managed/group_vars/proxmox_nodes.yml from the same template directory if it is missing."
     }
   ]
 }

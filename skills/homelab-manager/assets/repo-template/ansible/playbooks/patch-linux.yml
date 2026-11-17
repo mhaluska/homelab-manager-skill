@@ -11,6 +11,8 @@
 # Packages listed in `patch_exclude` (set it in the group's group_vars, e.g. kubelet/kubeadm/kubectl
 # for Kubernetes nodes) are never upgraded: dnf exclude on RHEL, apt hold on Debian.
 # Not a play var on purpose — play vars would override group_vars.
+# Hosts with patch_requires_approval: true (group_vars/proxmox_nodes.yml) are refused unless listed in
+# -e patch_approved=<host,…>.
 - name: Patch Linux hosts
   hosts: "{{ target | default('__no_target__') }}"
   serial: "{{ patch_serial | default(1) }}"
@@ -26,6 +28,18 @@
       ansible.builtin.assert:
         that: target is defined and target | length > 0
         fail_msg: "Pass -e target=<group or host>."
+      run_once: true
+
+    - name: Refuse hosts that need their own procedure (patch_requires_approval, e.g. Proxmox nodes)
+      ansible.builtin.assert:
+        that: guarded | length == 0
+        fail_msg: >-
+          {{ guarded | join(', ') }} must not be patched by a broad run (Proxmox nodes: patch-proxmox-node.yml).
+          Only with the user's yes for exactly these hosts: -e patch_approved={{ guarded | join(',') }}
+      vars:
+        guarded: "{{ ansible_play_hosts_all | map('extract', hostvars) | selectattr('patch_requires_approval', 'defined')
+                     | selectattr('patch_requires_approval') | map(attribute='inventory_hostname')
+                     | difference((patch_approved | default('')).split(',')) | list }}"
       run_once: true
 
     - name: Failed systemd units before patching
