@@ -6,7 +6,7 @@ reported to the plugin's GitHub repository.
                   [--body-file F | --body TEXT] [--key K]
     issues.py list [--status open|reported|resolved|all]
     issues.py show SKILL-002
-    issues.py report [--dry-run] [--match SKILL-002=42] [--new SKILL-003] [IDS…]
+    issues.py report [--dry-run] [--match SKILL-002=42] [--new SKILL-003] [--keep WORD] [IDS…]
                                               # refuses (exit 5) entries that aren't English; `add` refuses
                                               # them too (exit 2): the plugin repository is English-only
                                               # send new/changed issues to the plugin repository: comment on
@@ -313,6 +313,21 @@ GENERIC = {"homelab", "localhost", "local", "proxmox", "pve", "main", "default",
            "windows", "appliances", "kubernetes", "template", "templates", "none", "null", "true", "false", "root",
            "admin", "user", "users", "staff", "runner", "ubuntu", "debian", "rocky"}
 
+# Plain words a site may also use as a name (a VLAN "storage", a group "apps", a host "backup"). As names they
+# are redacted only where they read as identifiers: in backticks or quotes, or after `name:`, `vlan=`… — not in
+# running text like "the storage driver" (GitHub issue #47). `report --keep WORD` keeps any word.
+COMMON_WORDS = {
+    "host", "hosts", "guest", "guests", "server", "servers", "storage", "data", "backup", "backups", "media",
+    "app", "apps", "home", "web", "www", "mail", "files", "share", "shares", "nas", "dns", "dhcp", "proxy",
+    "gateway", "router", "switch", "firewall", "test", "testing", "dev", "prod", "production", "staging", "lab",
+    "office", "iot", "cloud", "network", "net", "lan", "wan", "mgmt", "management", "docker", "container",
+    "containers", "vm", "vms", "node", "nodes", "cluster", "master", "worker", "workers", "primary", "secondary",
+    "monitor", "monitoring", "metrics", "logs", "db", "database", "cache", "vault", "git", "build", "public",
+    "private", "internal", "external", "trusted", "untrusted", "secure", "core", "edge", "infra", "services",
+    "service", "nfs", "smb", "iscsi", "ceph", "zfs", "ssd", "hdd", "fast", "slow", "bulk", "archive", "pool",
+    "tank", "vlan", "bridge", "kubernetes", "k8s", "cameras", "camera", "voip", "printer", "printers", "work",
+}
+_ID_KEYS = r"(?:name|hostname|host|node|vlan|storage|pool|bridge|group|target|cluster)"
 
 NAME_KEYS = ("name", "hostname", "node", "fqdn", "cluster")
 # subtrees whose strings are what a host runs, not what it is called: nmap OS guesses (`os: [{name: …}]`),
@@ -438,6 +453,7 @@ class Redactor:
         self.domains, self.hosts = site_terms(cfg)
         self.px = proxmox_terms(self.root)
         self.user = getpass.getuser()
+        self.keep = {w.lower() for w in cfg.get("_keep") or []}
         self.ids: dict[str, dict[str, int]] = {}
         self.seen: dict[str, set] = {}
 
@@ -450,9 +466,24 @@ class Redactor:
         return f"<{kind}-{n}>"
 
     def words(self, text: str, terms, kind: str, numbered: bool) -> str:
+        sub = lambda m: m.group(1) + self.mark(kind, m.group(2), numbered) + m.group(3)
         for t in sorted(terms, key=len, reverse=True):
-            text = re.sub(rf"(?i)(?<![\w-]){re.escape(t)}(?![\w-])", lambda m: self.mark(kind, m.group(0), numbered), text)
+            if t.lower() in self.keep:
+                continue
+            w = re.escape(t)
+            if t.lower() in COMMON_WORDS:  # only where it reads as an identifier (#47)
+                text = re.sub(rf"(?i)([`\"'])({w})(\1)", sub, text)
+                text = re.sub(rf"(?i)((?<![\w-]){_ID_KEYS}\s*[:=]\s*)({w})((?![\w>-]))", sub, text)
+            else:  # `<` / `>`: never inside a placeholder, or <host> becomes <<host>> (#47)
+                text = re.sub(rf"(?i)()((?<![\w<-]){w}(?![\w>-]))()", sub, text)
         return text
+
+    def details(self) -> str:
+        """Plain words redacted as names (dry run): the user can keep a wrong one. Real names are never shown."""
+        plain = sorted({v for k in ("domain", "node", "host", "storage", "pool", "bridge")
+                        for v in self.seen.get(k, ()) if v in COMMON_WORDS})
+        return ("Plain words redacted as site names: " + ", ".join(plain) +
+                " — if one is used generically here, re-run with --keep WORD.") if plain else ""
 
     def secret(self, m: re.Match, rep: str) -> str:
         self.seen.setdefault("secret", set()).add(m.group(0))
@@ -829,6 +860,7 @@ def cmd_report(a, cfg):
     if hmlib.get(cfg, "issues.report") is False:
         print("Reporting is off (issues.report: false in homelab.yaml).", file=sys.stderr)
         return 4
+    cfg["_keep"] = a.keep
     path = issues_path(cfg)
     items = load(path)
     marker = read_marker(path)
@@ -861,6 +893,8 @@ def cmd_report(a, cfg):
                 print("  body:\n" + indent(issue_body(i, cfg)))
     if plan:
         print("\n" + redactor(cfg).summary())
+        if a.dry_run and redactor(cfg).details():
+            print(redactor(cfg).details())
     hint = fixed_hint(items)
     if hint and a.dry_run:
         print("\n" + hint)
@@ -1017,6 +1051,8 @@ def main():
     p.add_argument("--match", action="append", default=[], metavar="ID=NUMBER",
                    help="comment on this GitHub issue instead of the automatic choice")
     p.add_argument("--new", action="append", default=[], metavar="ID", help="create even if a similar one exists")
+    p.add_argument("--keep", action="append", default=[], metavar="WORD",
+                   help="don't redact this word (a plain word the site also uses as a name)")
     for name in ("show", "resolve", "reopen"):
         p = sp.add_parser(name)
         p.add_argument("id")

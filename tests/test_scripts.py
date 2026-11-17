@@ -1244,6 +1244,38 @@ class VlanNameRedactionTests(unittest.TestCase):  # issue 34: VLAN names are sit
             shutil.rmtree(d)
 
 
+class CommonWordRedactionTests(unittest.TestCase):  # issue 47: plain words used as site names
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import issues
+        self.issues = issues
+        self.d = tempfile.mkdtemp()
+        self.cfg = {"_root": self.d, "network": {"vlans": [{"id": 20, "name": "storage"}, {"id": 30, "name": "host"},
+                                                           {"id": 40, "name": "Kitchen-IoT"}]}}
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def test_plain_words_kept_in_running_text(self):
+        out = self.issues.sanitize("Checking the storage driver; one with host networking on a Linux host.", self.cfg)
+        self.assertEqual(out, "Checking the storage driver; one with host networking on a Linux host.")
+
+    def test_plain_words_redacted_as_identifiers(self):
+        out = self.issues.sanitize("VLAN `storage` has no DHCP; vlan: host and name=storage.", self.cfg)
+        self.assertNotIn("storage", out)
+        self.assertNotIn(": host", out)
+
+    def test_placeholders_not_redacted_again(self):
+        cfg = {"_root": self.d, "network": {"vlans": [{"id": 30, "name": "host"}, {"id": 40, "name": "node7"}]}}
+        out = self.issues.sanitize("on node7 and `host`", cfg)
+        self.assertNotIn("<<", out)
+        self.assertIn("<host>", out)
+
+    def test_keep(self):
+        cfg = {**self.cfg, "_keep": ["Kitchen-IoT"]}
+        self.assertIn("Kitchen-IoT", self.issues.sanitize("The VM in Kitchen-IoT got no IP.", cfg))
+
+
 class PveSnapshotTests(unittest.TestCase):  # issue 37
     def setUp(self):
         sys.path.insert(0, str(SCRIPTS))

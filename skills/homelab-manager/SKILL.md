@@ -178,6 +178,7 @@ python3 $HM/scripts/issues.py add --title "…" --kind script|guard|instructions
   and closed: same key, already linked, similar title → **UPDATE** = a comment; else **CREATE**) and
   prints the exact sanitised text (IPs, MACs, domain, host/guest/node names, VMIDs, VLANs, storage, pools,
   bridges, user, paths, secrets → placeholders, counted in `Redacted:`). Anything still site-specific? Edit, re-run.
+  A plain word redacted wrongly (a VLAN named "storage") → re-run with `--keep storage`.
   Fix wrong matches with `--match SKILL-002=<number>` / `--new SKILL-002`. Show the plan, get the
   user's yes, run without `--dry-run` (the guard asks too), commit skill_issues.md. The marker stops
   re-sending; failures leave it for a retry. Labels are only set when the user may triage the repo.
