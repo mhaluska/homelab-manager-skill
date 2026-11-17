@@ -43,6 +43,24 @@ Read-only health and firmware from this Mac over HTTPS; no ipmitool, no SSH into
    (`community.general.redfish_command`, `ipmitool power`) are approval items (the guard asks).
 Keep BMCs on a management network: the drift report flags BMCs found elsewhere.
 
+## Controller-managed devices (UniFi APs and switches)
+
+The UniFi Network controller owns their configuration: anything changed on the device itself is overwritten
+on the next provision, so never configure them over SSH or with Ansible modules. Read-only status only:
+1. Controller: the user creates an API key (Network → Settings → Control Plane → Integrations), stores it in
+   the keychain (`homelab/unifi-api`), and you map it:
+   `config_set.py 'secrets.unifi-api={service: homelab/unifi-api, kind: env, env: UNIFI_API_KEY}'`.
+   Set `unifi_api_url` in `group_vars/unifi.yml` (UniFi OS consoles: `https://<host>/proxy/network/integration/v1`;
+   with no hosts in the `unifi` group pass `-e unifi_api_url=…`).
+2. Devices (optional): add them to the `unifi` group (child of `appliances`) with the SSH user from the
+   controller's device authentication settings. Only `ansible.builtin.raw` works (no Python on the device).
+3. `with_secrets.py unifi-api -- ansible-playbook playbooks/unifi-info.yml` → `discovery/unifi.json`
+   (controller version, sites, devices with model, firmware, state, IP) and each SSH device's status.
+4. Changes (adoption, `set-inform`, firmware upgrades, factory reset, port or WLAN settings) go through the
+   controller — its UI by the user, or its API after the user's yes (the guard asks).
+Other controller-managed gear (Omada, Aruba Instant On, Meraki) follows the same rule: read from the
+controller, change only through it.
+
 ## MikroTik RouterOS (routers, CRS switches, CHR)
 
 Identify and audit, read-only:

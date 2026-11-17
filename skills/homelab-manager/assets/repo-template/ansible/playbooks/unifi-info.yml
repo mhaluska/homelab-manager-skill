@@ -1,0 +1,80 @@
+# Read-only status of controller-managed UniFi devices.
+#   python3 $HM/scripts/with_secrets.py unifi-api -- ansible-playbook playbooks/unifi-info.yml
+# 1. The controller's Integration API (X-API-KEY from UNIFI_API_KEY; secrets.unifi-api, kind env): application
+#    info, sites and every adopted device (model, firmware, state, IP, MAC) → discovery/unifi.json.
+# 2. Devices in the `unifi` group, over SSH with the raw module: `mca-cli-op info` (version, uptime, inform URL,
+#    controller status). `info` is only an interactive shell alias, so it isn't used.
+# Never configures anything: changes go through the controller (its UI or API), with the user's yes.
+- name: UniFi controller (Integration API)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    api: "{{ hostvars[groups['unifi'][0]].unifi_api_url if (groups['unifi'] | default([])) else unifi_api_url | default('') }}"
+    certs: "{{ hostvars[groups['unifi'][0]].unifi_validate_certs | default(false) if (groups['unifi'] | default([])) else false }}"
+    key: "{{ lookup('ansible.builtin.env', 'UNIFI_API_KEY') }}"
+    unifi_file: "{{ playbook_dir }}/../../discovery/unifi.json"
+  tasks:
+    - name: Controller URL and API key are set
+      ansible.builtin.assert:
+        that: api | length > 0 and key | length > 0
+        fail_msg: >-
+          Set unifi_api_url (group_vars/unifi.yml) and run under `with_secrets.py unifi-api --`
+          (secrets.unifi-api: {service: homelab/unifi-api, kind: env, env: UNIFI_API_KEY}).
+
+    - name: Application info
+      ansible.builtin.uri:
+        url: "{{ api }}/info"
+        headers: {X-API-KEY: "{{ key }}", Accept: application/json}
+        validate_certs: "{{ certs | bool }}"
+      register: unifi_info
+      no_log: true
+
+    - name: Sites
+      ansible.builtin.uri:
+        url: "{{ api }}/sites?limit=200"
+        headers: {X-API-KEY: "{{ key }}", Accept: application/json}
+        validate_certs: "{{ certs | bool }}"
+      register: unifi_sites
+      no_log: true
+
+    - name: Devices per site
+      ansible.builtin.uri:
+        url: "{{ api }}/sites/{{ item.id }}/devices?limit=200"
+        headers: {X-API-KEY: "{{ key }}", Accept: application/json}
+        validate_certs: "{{ certs | bool }}"
+      loop: "{{ unifi_sites.json.data | default([]) }}"
+      loop_control:
+        label: "{{ item.name | default(item.id) }}"
+      register: unifi_devices
+      no_log: true
+
+    - name: Write discovery/unifi.json
+      ansible.builtin.copy:
+        dest: "{{ unifi_file }}"
+        mode: "0644"
+        content: >-
+          {{ {'collected_at': now(utc=true).isoformat(),
+              'application': unifi_info.json | default({}),
+              'sites': unifi_devices.results | map(attribute='item') | map(attribute='name', default='?') | list,
+              'devices': unifi_devices.results | map(attribute='json') | map(attribute='data', default=[]) | flatten}
+             | to_nice_json }}
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: >-
+          UniFi Network {{ unifi_info.json.applicationVersion | default('?') }}:
+          {{ unifi_devices.results | map(attribute='json') | map(attribute='data', default=[]) | flatten | length }} device(s)
+          in {{ unifi_sites.json.data | default([]) | length }} site(s)
+
+- name: UniFi devices (SSH, raw, read-only)
+  hosts: "{{ target | default('unifi') }}"
+  gather_facts: false
+  tasks:
+    - name: Device status
+      ansible.builtin.raw: mca-cli-op info
+      register: unifi_dev
+      changed_when: false
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: "{{ unifi_dev.stdout_lines | select('match', '^(Model|Version|Uptime|Status|Hostname)') | list }}"

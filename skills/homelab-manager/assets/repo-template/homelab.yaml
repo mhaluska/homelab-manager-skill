@@ -105,6 +105,7 @@ secrets:
   proxmox-rw:   {service: homelab/proxmox-rw,   kind: proxmox_token}
   s3-state:     {service: homelab/s3-state,     kind: s3_credentials}  # ACCESS_KEY_ID:SECRET_ACCESS_KEY (S3 state only)
   # bmc:        {service: homelab/bmc,          kind: user_password, env: BMC}   # user:password → BMC_USER/BMC_PASSWORD
+  # unifi-api:  {service: homelab/unifi-api,    kind: env, env: UNIFI_API_KEY}   # UniFi Network Integration API key
 
 discovery:
   ignore_unmanaged: []       # IPs you know about and don't want flagged (phones, TVs, …)

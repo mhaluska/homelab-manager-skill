@@ -326,6 +326,15 @@ class GuardConfigTests(unittest.TestCase):
         self.assertIsNone(self.d("ipmitool -I lanplus -H 10.0.10.7 -U u -E sdr list"))
         self.assertIsNone(self.d("python3 /p/with_secrets.py bmc -- ansible-playbook playbooks/bmc-info.yml"))
 
+    def test_unifi_changes_ask(self):  # issue 33
+        self.assertEqual(self.d("ssh admin@10.0.10.20 'set-inform http://10.0.10.5:8080/inform'"), "ask")
+        self.assertEqual(self.d("ssh admin@10.0.10.20 syswrapper.sh restore-default"), "ask")
+        self.assertEqual(self.d("ansible unifi -m raw -a 'mca-cli-op set-inform http://x/inform'"), "ask")
+        self.assertEqual(self.d("curl -sk -X POST -H 'X-API-KEY: k' https://ctl/proxy/network/integration/v1/sites/s/devices/d/actions"), "ask")
+        self.assertIsNone(self.d("curl -sk -H 'X-API-KEY: k' https://ctl/proxy/network/integration/v1/sites"))
+        self.assertIsNone(self.d("ansible unifi -m raw -a 'mca-cli-op info'"))
+        self.assertIsNone(self.d("python3 /p/with_secrets.py unifi-api -- ansible-playbook playbooks/unifi-info.yml"))
+
     def test_reboot_policy_asks(self):  # issue 39: reboot=always|if_required on any playbook
         self.assertEqual(self.d("ansible-playbook site.yml -e reboot=always"), "ask")
         self.assertEqual(self.d("ansible-playbook site.yml -e reboot=if_required"), "ask")

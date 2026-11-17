@@ -70,6 +70,10 @@ RULES: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"\bRestart-Computer\b|\bStop-Computer\b"), ASK, "Reboots or shuts down Windows systems."),
     (re.compile(r"\bredfish_command\b|\bipmitool\b[^\n;&|]*\s(power|chassis\s+power|mc\s+reset|raw)\b"), ASK,
      "BMC power or reset action (Redfish/IPMI): powers off or reboots a server."),
+    (re.compile(r"\b(set-inform|syswrapper\.sh|upgrade\s+https?://)|\bmca-cli-op\s+(?!info\b)\S"
+                r"|\b(curl|wget|http|xh)\b[^\n;&|]*integration/v1[^\n;&|]*(-X\s*(POST|PUT|PATCH|DELETE)|--request\s+(POST|PUT|PATCH|DELETE)|\s-d\s|--data)"
+                r"|\b(curl|wget|http|xh)\b[^\n;&|]*(-X\s*(POST|PUT|PATCH|DELETE)|--request\s+(POST|PUT|PATCH|DELETE)|\s-d\s|--data)[^\n;&|]*integration/v1"), ASK,
+     "Changes a UniFi device or the UniFi controller (adoption, reset, firmware, configuration)."),
     # --- GitHub (gh) / issue tracker --------------------------------------------------
     (re.compile(r"\bgh\s+auth\s+token\b|\bgh\s+auth\s+status\b[^\n;&|]*(--show-token|\s-t\b)"), DENY,
      "This would print the GitHub token."),
