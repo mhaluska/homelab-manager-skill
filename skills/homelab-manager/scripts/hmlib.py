@@ -199,6 +199,23 @@ def clean(value, limit: int = 200):
     return s if len(s) <= limit else s[:limit] + "…"
 
 
+def id_list(value):
+    """A Proxmox ID list ("100,101, 102") as ints; never length-capped (GitHub issue #41).
+
+    None or "" → []; anything that isn't digits and commas → None (unknown, don't trust it).
+    """
+    if value is None or value == "":
+        return []
+    if isinstance(value, list):
+        value = ",".join(str(x) for x in value)
+    s = re.sub(r"\s+", "", str(value))
+    if not s:
+        return []
+    if not re.fullmatch(r"\d+(,\d+)*", s):
+        return None
+    return [int(x) for x in s.split(",")]
+
+
 # ---- VMIDs -------------------------------------------------------------------------------------
 # vmid_ranges hand out the next free ID; vmid_scheme (optional) derives a guest's ID from its
 # network instead, for sites whose IDs encode meaning, e.g. "{vlan}{octet:03d}" → 1020015 for

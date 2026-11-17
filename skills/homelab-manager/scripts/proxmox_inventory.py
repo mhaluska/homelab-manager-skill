@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hmlib  # noqa: E402
-from hmlib import clean  # noqa: E402
+from hmlib import clean, id_list  # noqa: E402
 
 
 class PVE:
@@ -233,8 +233,8 @@ def collect(pve: PVE, details: bool) -> dict:
     try:  # scheduled vzdump jobs (PVEAuditor can read them); None = could not read
         backup_jobs = [{"id": clean(j.get("id")), "enabled": j.get("enabled", 1) not in (0, "0"),
                         "schedule": clean(j.get("schedule")), "storage": clean(j.get("storage")),
-                        "all": bool(j.get("all")), "vmid": clean(j.get("vmid")), "exclude": clean(j.get("exclude")),
-                        "node": clean(j.get("node"))}
+                        "all": bool(j.get("all")), "vmid": id_list(j.get("vmid")), "exclude": id_list(j.get("exclude")),
+                        "pool": clean(j.get("pool")), "node": clean(j.get("node"))}
                        for j in (pve.get("/cluster/backup") or [])]
     except SystemExit:
         backup_jobs = None

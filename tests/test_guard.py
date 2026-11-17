@@ -313,6 +313,14 @@ class RedactTests(unittest.TestCase):
         self.assertEqual(hmlib.clean("ok\x1b[31mred\x00"), "ok[31mred")
         self.assertTrue(hmlib.clean("x" * 500).endswith("…"))
 
+    def test_id_list(self):  # issue 41: ID lists are parsed, never cut
+        long = ",".join(str(1000000 + i) for i in range(40))
+        self.assertEqual(len(hmlib.id_list(long)), 40)
+        self.assertEqual(hmlib.id_list("100, 101"), [100, 101])
+        self.assertEqual(hmlib.id_list(None), [])
+        self.assertEqual(hmlib.id_list([100, 101]), [100, 101])
+        self.assertIsNone(hmlib.id_list("100,10…"))
+
 
 class GuardConfigTests(unittest.TestCase):
     def d(self, cmd):

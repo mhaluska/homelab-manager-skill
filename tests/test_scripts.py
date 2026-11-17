@@ -770,6 +770,26 @@ class DriftTests(unittest.TestCase):
         self.assertIn("No storage accepts `backup` content", r.stdout)
         self.assertIn("104 `test-old` is in no backup job", r.stdout)
         self.assertNotIn("100 `dns01` is in no backup job", r.stdout)
+        self.assertIn("references/proxmox.md", r.stdout)
+
+    def _jobs(self, jobs):
+        p = Path(self.d, "discovery/proxmox.json")
+        snap = json.loads(p.read_text())
+        snap["backup_jobs"] = jobs
+        p.write_text(json.dumps(snap))
+        return run("drift_report.py", "--no-tofu", cwd=self.d).stdout
+
+    def test_backup_job_id_lists(self):  # issue 41
+        out = self._jobs([{"id": "daily", "enabled": True, "all": False, "vmid": [100, 104]}])
+        self.assertNotIn("is in no backup job", out)
+        out = self._jobs([{"id": "all", "enabled": True, "all": True, "vmid": [], "exclude": [104]}])
+        self.assertIn("104 `test-old` is in no backup job", out)
+        self.assertNotIn("100 `dns01` is in no backup job", out)
+
+    def test_truncated_backup_list_is_unknown(self):  # issue 41: old snapshots cut at 200 characters
+        out = self._jobs([{"id": "daily", "enabled": True, "all": False, "vmid": "100,10…"}])
+        self.assertIn("Can't read the guest list of job(s) `daily`", out)
+        self.assertNotIn("is in no backup job", out)
 
 
 class DriftExtraIpsTests(unittest.TestCase):

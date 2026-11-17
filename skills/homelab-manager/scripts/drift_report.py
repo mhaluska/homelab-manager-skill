@@ -278,17 +278,28 @@ def main():
             if not active:
                 found.append("- No enabled scheduled backup job.")
             else:
-                covered_all = [j for j in active if j.get("all")]
-                ids = {int(x) for j in active for x in str(j.get("vmid") or "").split(",") if x.strip().isdigit()}
-                excl = {int(x) for j in covered_all for x in str(j.get("exclude") or "").split(",") if x.strip().isdigit()}
-                for g in live.values():
-                    if g.get("template"):
-                        continue
-                    if not ((covered_all and g["vmid"] not in excl) or g["vmid"] in ids):
-                        found.append(f"- {g['vmid']} `{g['name']}` is in no backup job.")
+                # vmid/exclude: lists since 0.17.0; older snapshots hold strings that may end in "…" (cut
+                # at 200 characters, GitHub issue #41): unknown, so warn instead of reporting false gaps.
+                unknown = [j.get("id") or "?" for j in active
+                           if hmlib.id_list(j.get("vmid")) is None or hmlib.id_list(j.get("exclude")) is None]
+                if unknown:
+                    found.append(f"- Can't read the guest list of job(s) {', '.join(f'`{x}`' for x in unknown)} "
+                                 "(cut off in an older snapshot): run proxmox_inventory.py again.")
+                else:
+                    ids = {i for j in active if not j.get("all") for i in hmlib.id_list(j.get("vmid"))}
+                    pools = {j["pool"] for j in active if j.get("pool")}
+                    for g in live.values():
+                        if g.get("template"):
+                            continue
+                        by_all = any(j.get("all") and g["vmid"] not in hmlib.id_list(j.get("exclude")) for j in active)
+                        if not (by_all or g["vmid"] in ids or (g.get("pool") and g["pool"] in pools)):
+                            found.append(f"- {g['vmid']} `{g['name']}` is in no backup job.")
+
         if found:
             issues += len(found)
             L += found
+            if any(f.endswith("is in no backup job.") for f in found):
+                L += ["", "To add them to a job: references/proxmox.md, \"Backup jobs\"."]
         elif jobs is not None:
             L.append("Every guest is in an enabled backup job.")
         L.append("")

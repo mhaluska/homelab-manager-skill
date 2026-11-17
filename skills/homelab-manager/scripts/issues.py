@@ -419,7 +419,9 @@ def proxmox_terms(root: Path) -> dict[str, set]:
                     and not re.fullmatch(r"vlan\d+", iface):
                 t["bridge"].add(iface)
     for j in px.get("backup_jobs") or []:
-        t["vmid"].update(x.strip() for x in str(j.get("vmid") or "").split(",") if x.strip().isdigit())
+        t["vmid"].update(str(x) for k in ("vmid", "exclude") for x in (hmlib.id_list(j.get(k)) or []))
+        if j.get("pool"):
+            t["pool"].add(str(j["pool"]))
         if j.get("storage") and j["storage"] not in DEFAULT_STORAGE:
             t["storage"].add(str(j["storage"]))
     for k in ("node", "storage", "pool", "bridge"):
