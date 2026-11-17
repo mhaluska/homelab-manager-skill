@@ -1,0 +1,71 @@
+# Read-only BMC inventory over Redfish: system, health, power, thermals, PSUs, BMC and firmware versions.
+#   python3 $HM/scripts/with_secrets.py bmc -- ansible-playbook playbooks/bmc-info.yml [-e target=<bmc host>]
+# Writes discovery/bmc.json, merged: BMCs not checked this run keep their last result (each has collected_at).
+# Nothing here changes a BMC. Power actions (community.general.redfish_command) are reboots: approval only.
+- name: BMC inventory (Redfish, read-only)
+  hosts: "{{ target | default('bmc') }}"
+  gather_facts: false
+  tasks:
+    - name: Credentials are in the environment (run under with_secrets.py bmc)
+      ansible.builtin.assert:
+        that: bmc_user | length > 0 and bmc_password | length > 0
+        fail_msg: "BMC_USER/BMC_PASSWORD are empty: run under `with_secrets.py bmc --` (secrets.bmc in homelab.yaml)."
+      run_once: true
+
+    - name: Redfish service root (no login needed)
+      ansible.builtin.uri:
+        url: "https://{{ ansible_host | default(inventory_hostname) }}/redfish/v1/"
+        validate_certs: "{{ bmc_validate_certs | bool }}"
+        return_content: true
+      register: bmc_root
+
+    - name: Inventory and health
+      community.general.redfish_info:
+        baseuri: "{{ ansible_host | default(inventory_hostname) }}"
+        username: "{{ bmc_user }}"
+        password: "{{ bmc_password }}"
+        validate_certs: "{{ bmc_validate_certs | bool }}"
+        category: [Systems, Chassis, Manager, Update]
+        command: [GetSystemInventory, GetHealthReport, GetChassisInventory, GetChassisPower, GetChassisThermals,
+                  GetPsuInventory, GetManagerInventory, GetFirmwareInventory]
+        timeout: 30
+      register: bmc_info
+      no_log: true   # the module echoes its parameters, password included
+
+    - name: Summarise
+      ansible.builtin.set_fact:
+        bmc_summary:
+          redfish: "{{ bmc_root.json.RedfishVersion | default('?') }}"
+          vendor: "{{ bmc_root.json.Vendor | default(bmc_root.json.Oem | default({}) | list | first | default('?')) }}"
+          product: "{{ bmc_root.json.Product | default('?') }}"
+          facts: "{{ bmc_info.redfish_facts | default({}) }}"
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ bmc_summary.vendor }} {{ bmc_summary.product }}, Redfish {{ bmc_summary.redfish }}"
+
+- name: Write discovery/bmc.json
+  hosts: localhost
+  gather_facts: false
+  vars:
+    bmc_file: "{{ playbook_dir }}/../../discovery/bmc.json"
+    reported: "{{ groups['all'] | map('extract', hostvars) | selectattr('bmc_summary', 'defined') | map(attribute='inventory_hostname') | list }}"
+  tasks:
+    - ansible.builtin.stat:
+        path: "{{ bmc_file }}"
+      register: prev_bmc
+
+    - ansible.builtin.copy:
+        dest: "{{ bmc_file }}"
+        mode: "0644"
+        content: >-
+          {%- set prev = (lookup('ansible.builtin.file', bmc_file) | from_json) if prev_bmc.stat.exists else {} -%}
+          {%- set hosts = {} -%}
+          {%- for name, entry in (prev.hosts | default({})).items() if name in groups['all'] -%}
+            {%- set _ = hosts.update({name: entry}) -%}
+          {%- endfor -%}
+          {%- for name in reported -%}
+            {%- set _ = hosts.update({name: hostvars[name].bmc_summary | combine({'collected_at': now(utc=true).isoformat()})}) -%}
+          {%- endfor -%}
+          {{ {'hosts': hosts} | to_nice_json }}
+      when: reported | length > 0

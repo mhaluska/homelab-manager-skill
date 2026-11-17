@@ -319,6 +319,13 @@ class GuardConfigTests(unittest.TestCase):
         out = guard.decide(guard.evaluate(cmd, "/tmp"))
         return out["hookSpecificOutput"]["permissionDecision"] if out else None
 
+    def test_bmc_power_actions_ask(self):  # issue 32
+        self.assertEqual(self.d("ansible bmc -m community.general.redfish_command -a 'category=Systems command=PowerReboot'"), "ask")
+        self.assertEqual(self.d("ipmitool -I lanplus -H 10.0.10.7 -U u -E chassis power cycle"), "ask")
+        self.assertEqual(self.d("ipmitool -I lanplus -H 10.0.10.7 -U u -E power off"), "ask")
+        self.assertIsNone(self.d("ipmitool -I lanplus -H 10.0.10.7 -U u -E sdr list"))
+        self.assertIsNone(self.d("python3 /p/with_secrets.py bmc -- ansible-playbook playbooks/bmc-info.yml"))
+
     def test_reboot_policy_asks(self):  # issue 39: reboot=always|if_required on any playbook
         self.assertEqual(self.d("ansible-playbook site.yml -e reboot=always"), "ask")
         self.assertEqual(self.d("ansible-playbook site.yml -e reboot=if_required"), "ask")

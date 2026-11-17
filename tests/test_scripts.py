@@ -468,6 +468,21 @@ class StateBackendTests(unittest.TestCase):
             hmlib.read_secret = orig
         self.assertEqual(env, {"AWS_ACCESS_KEY_ID": "AKIDEXAMPLE", "AWS_SECRET_ACCESS_KEY": "secretvalue"})
 
+    def test_user_password_kind(self):  # issue 32: BMC credentials
+        sys.path.insert(0, str(SCRIPTS))
+        import with_secrets, hmlib
+        cfg = {"secrets": {"bmc": {"service": "x", "kind": "user_password", "env": "BMC"},
+                           "bad": {"service": "x", "kind": "user_password"}}}
+        orig = hmlib.read_secret
+        hmlib.read_secret = lambda c, n: "monitor:pa:ss"
+        try:
+            env, _ = with_secrets.env_for(cfg, "bmc")
+            with self.assertRaises(hmlib.ConfigError):
+                with_secrets.env_for(cfg, "bad")
+        finally:
+            hmlib.read_secret = orig
+        self.assertEqual(env, {"BMC_USER": "monitor", "BMC_PASSWORD": "pa:ss"})
+
 
 OLD_ISSUES_MD = """# Issues
 

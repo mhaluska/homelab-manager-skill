@@ -12,6 +12,7 @@ Secret kinds (secrets.<name>.kind):
                  PROXMOX_URL, PROXMOX_USERNAME, PROXMOX_TOKEN (Packer)
   s3_credentials value "ACCESS_KEY_ID:SECRET_ACCESS_KEY" → AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
                  (OpenTofu S3 state backend — MinIO, Garage, AWS)
+  user_password  value "user:password" → <ENV>_USER, <ENV>_PASSWORD, ENV = secrets.<name>.env (e.g. BMC)
   env            plain value → the variable named in secrets.<name>.env (default)
 """
 from __future__ import annotations
@@ -47,6 +48,14 @@ def env_for(cfg: dict, name: str) -> tuple[dict, str]:
             raise hmlib.ConfigError(f"Keychain item for {name!r} must look like ACCESS_KEY_ID:SECRET_ACCESS_KEY.")
         key_id, secret = value.split(":", 1)
         env.update(AWS_ACCESS_KEY_ID=key_id, AWS_SECRET_ACCESS_KEY=secret)
+    elif kind == "user_password":
+        prefix = entry.get("env")
+        if not prefix:
+            raise hmlib.ConfigError(f"secrets.{name}.env is not set (prefix of <ENV>_USER / <ENV>_PASSWORD).")
+        if ":" not in value:
+            raise hmlib.ConfigError(f"Keychain item for {name!r} must look like user:password.")
+        user, password = value.split(":", 1)
+        env.update({f"{prefix}_USER": user, f"{prefix}_PASSWORD": password})
     else:
         var = entry.get("env")
         if not var:

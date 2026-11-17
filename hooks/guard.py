@@ -68,6 +68,8 @@ RULES: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"\bsystemctl\s+(reboot|poweroff|halt|kexec)\b"), ASK, "Reboots or shuts down a system."),
     (re.compile(r"\bansible\b[^\n]*-m\s+(ansible\.(builtin|windows)\.)?(win_)?reboot\b"), ASK, "Reboots remote systems."),
     (re.compile(r"\bRestart-Computer\b|\bStop-Computer\b"), ASK, "Reboots or shuts down Windows systems."),
+    (re.compile(r"\bredfish_command\b|\bipmitool\b[^\n;&|]*\s(power|chassis\s+power|mc\s+reset|raw)\b"), ASK,
+     "BMC power or reset action (Redfish/IPMI): powers off or reboots a server."),
     # --- GitHub (gh) / issue tracker --------------------------------------------------
     (re.compile(r"\bgh\s+auth\s+token\b|\bgh\s+auth\s+status\b[^\n;&|]*(--show-token|\s-t\b)"), DENY,
      "This would print the GitHub token."),

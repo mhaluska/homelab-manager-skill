@@ -53,7 +53,8 @@ COMPONENTS = {
     "discovery": ("Network discovery with nmap in authorized ranges", [], []),
     "windows": ("Windows hosts (Ansible over OpenSSH)", ["ansible"], ["ansible/inventory/managed/group_vars/windows.yml"]),
     "appliances": ("Appliances: NAS, firewall, switches, BMCs (inventory + read-only checks)", ["ansible"],
-                   ["ansible/inventory/managed/group_vars/appliances.yml"]),
+                   ["ansible/inventory/managed/group_vars/appliances.yml", "ansible/inventory/managed/group_vars/bmc.yml",
+                    "ansible/playbooks/bmc-info.yml"]),
     "kubernetes": ("Kubernetes clusters (rolling patching with drain/uncordon)", ["ansible"],
                    ["ansible/playbooks/hooks/k8s-drain.yml", "ansible/playbooks/hooks/k8s-uncordon.yml"]),
 }

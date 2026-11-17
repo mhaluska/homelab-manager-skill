@@ -1,0 +1,10 @@
+# BMCs (HPE iLO, Dell iDRAC, Supermicro, Lenovo XCC …): read over Redfish/HTTPS from this Mac, never configured
+# by Ansible. Put each BMC in the `bmc` group (a child of appliances) with ansible_host = its address.
+# Credentials come from the keychain through with_secrets.py (secrets.bmc, kind user_password, env BMC):
+#   python3 $HM/scripts/with_secrets.py bmc -- ansible-playbook playbooks/bmc-info.yml
+# Use a read-only BMC account (iLO "Login" privilege only, iDRAC "Read Only", Supermicro "User").
+ansible_connection: local
+ansible_python_interpreter: "{{ ansible_playbook_python }}"
+bmc_user: "{{ lookup('ansible.builtin.env', 'BMC_USER') }}"
+bmc_password: "{{ lookup('ansible.builtin.env', 'BMC_PASSWORD') }}"
+bmc_validate_certs: false   # BMCs mostly use self-signed certificates; true once their CA is trusted

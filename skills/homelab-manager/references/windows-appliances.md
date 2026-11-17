@@ -24,6 +24,25 @@ Default stance: **inventory and read-only checks**.
   first, approval always — a bad firewall or switch push can cut off the Mac itself.
 - BMC/IPMI: power actions are reboots → approval. Never change BMC users/network.
 
+## BMCs (HPE iLO, Dell iDRAC, Supermicro, Lenovo XCC) over Redfish
+
+Read-only health and firmware from this Mac over HTTPS; no ipmitool, no SSH into the BMC.
+1. Confirm Redfish: `curl -sk https://<bmc>/redfish/v1/` answers without a login (RedfishVersion, Vendor).
+   iLO 4 (fw 2.x+), iDRAC 8+, Supermicro X10+ and XCC support it; older ones: IPMI only (read with
+   `ipmitool … sdr list`/`fru`, power commands need approval).
+2. Ask the user for a **read-only BMC account** (iLO "Login" privilege only, iDRAC "Read Only", Supermicro
+   "User"); the user stores `user:password` in the keychain (`homelab/bmc`) and you map it in homelab.yaml:
+   `config_set.py 'secrets.bmc={service: homelab/bmc, kind: user_password, env: BMC}'`. One account name and
+   password for all BMCs; different ones → one secret per group (`env` BMC_HPE, and the group's bmc_user/
+   bmc_password vars read `BMC_HPE_USER`/`BMC_HPE_PASSWORD`).
+3. Add the BMCs to the `bmc` group (child of `appliances`) in hosts.yml, `ansible_host` = address.
+4. `with_secrets.py bmc -- ansible-playbook playbooks/bmc-info.yml` → `discovery/bmc.json` (system model,
+   power state, health, PSUs, thermals, BMC and BIOS/firmware versions). Self-signed certificates are
+   accepted (`bmc_validate_certs: false` in group_vars/bmc.yml); set true once the CA is trusted.
+5. Report health problems and outdated firmware; firmware updates and power actions
+   (`community.general.redfish_command`, `ipmitool power`) are approval items (the guard asks).
+Keep BMCs on a management network: the drift report flags BMCs found elsewhere.
+
 ## MikroTik RouterOS (routers, CRS switches, CHR)
 
 Identify and audit, read-only:
