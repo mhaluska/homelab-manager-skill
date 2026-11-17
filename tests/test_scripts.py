@@ -104,6 +104,18 @@ class IssuesTests(unittest.TestCase):
     def issues(self, *args):
         return run("issues.py", *args, cwd=self.d)
 
+    def test_add_refuses_non_english(self):
+        r = self.issues("add", "--title", "Skript padá bez backup_jobs", "--kind", "script")  # lang: allow
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("English", r.stderr)
+        r = self.issues("add", "--title", "drift_report.py crashes", "--kind", "script",
+                        "--body", "### Summary\nSkript pada ked chyba backup jobs v konfiguracii a treba to opravit")  # lang: allow
+        self.assertEqual(r.returncode, 2)
+        self.assertNotIn("SKILL-", Path(self.d, "skill_issues.md").read_text())
+        r = self.issues("add", "--title", "drift_report.py crashes", "--kind", "script",
+                        "--body", "### Evidence\n```\nChyba: súbor neexistuje\n```")  # lang: allow (log in a code block)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_add_list_resolve_roundtrip(self):
         r = self.issues("add", "--title", "drift_report.py crashes without backup_jobs", "--kind", "script",
                         "--key", "script:drift_report:backup_jobs",
@@ -229,6 +241,18 @@ class ReportTests(unittest.TestCase):
 
     def calls(self):
         return [json.loads(l) for l in self.log.read_text().splitlines()] if self.log.exists() else []
+
+    def test_report_refuses_entries_edited_into_another_language(self):
+        self.issues("add", "--title", "Guard asks for gh issue list", "--kind", "guard")
+        p = Path(self.d, "skill_issues.md")
+        p.write_text(p.read_text().replace("Guard asks for gh issue list", "Guard sa pýta na gh issue list"))  # lang: allow
+        dry = self.issues("report", "--dry-run")
+        self.assertEqual(dry.returncode, 5)
+        self.assertIn("SKILL-001: title", dry.stderr)
+        r = self.issues("report")
+        self.assertEqual(r.returncode, 5)
+        self.assertFalse(any(c[:2] == ["issue", "create"] for c in self.calls()))
+        self.assertNotIn("reported-through", p.read_text())
 
     def test_report_targets_plugin_repo_updates_similar_creates_new_and_sets_marker(self):
         self.issues("add", "--title", "drift_report.py crashes without backup_jobs", "--kind", "script")

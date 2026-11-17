@@ -7,6 +7,8 @@ reported to the plugin's GitHub repository.
     issues.py list [--status open|reported|resolved|all]
     issues.py show SKILL-002
     issues.py report [--dry-run] [--match SKILL-002=42] [--new SKILL-003] [IDS…]
+                                              # refuses (exit 5) entries that aren't English; `add` refuses
+                                              # them too (exit 2): the plugin repository is English-only
                                               # send new/changed issues to the plugin repository: comment on
                                               # the same/similar GitHub issue or create one, then set the
                                               # "reported through" marker so they aren't sent again
@@ -517,6 +519,18 @@ def sanitize(text: str, cfg) -> str:
 
 # ---- commands ----
 
+def not_english(title: str, body: str) -> list[str]:
+    """Problems that keep an entry from going to the public, English-only plugin repository. Only the
+    written sections count: Environment is generated and _unknown_ / _none_ are placeholders."""
+    body = "\n\n".join(v for k, v in sections(body).items()
+                       if k != "Environment" and v not in ("_unknown_", "_none_", "_No response_"))
+    return [f"{what}: {p}" for what, text in (("title", title), ("body", body)) for p in hmlib.english_problems(text)]
+
+
+ENGLISH_HINT = ("Entries are sent to the plugin's public GitHub repository, which is English-only: write the "
+                "title and body in English (translate the user's words; keep logs and command output in ``` blocks).")
+
+
 def cmd_template(a, cfg=None):
     print((IDEA_TEMPLATE if is_idea(a.kind or "") else TEMPLATE).read_text().rstrip())
     return 0
@@ -528,6 +542,10 @@ def cmd_add(a, cfg):
     given = a.body_file is not None or a.body is not None
     body = Path(a.body_file).read_text() if a.body_file else (a.body or "")
     body = "\n".join(hmlib.clean(l, 500) for l in body.splitlines())
+    problems = not_english(a.title, body)
+    if problems:
+        print("Not added — not English:\n  " + "\n  ".join(problems) + "\n" + ENGLISH_HINT, file=sys.stderr)
+        return 2
     existing = next((i for i in items if a.key and i.get("key") == a.key and i["status"] != "resolved"), None)
     if existing and not given:
         body = existing["body"]  # seen again without new details: keep them, refresh only Environment
@@ -821,6 +839,8 @@ def cmd_report(a, cfg):
         print(f"warning: {e} — existing issues not checked (gh auth status?)", file=sys.stderr)
         gl = []
     plan = plan_report(items, gl, marker, a, cfg)
+    foreign = {st["item"]["id"]: not_english(st["item"]["title"], st["item"]["body"]) for st in plan}
+    foreign = {k: v for k, v in foreign.items() if v}
     print(f"Target: {repo} (public) — reported through: {marker or 'never'} — "
           f"{len(plan)} issue(s) to report, {len(gl)} GitHub issue(s) checked")
     for st in plan:
@@ -841,10 +861,16 @@ def cmd_report(a, cfg):
     hint = fixed_hint(items)
     if hint and a.dry_run:
         print("\n" + hint)
+    if foreign:
+        print("\nNot English — fix these in skill_issues.md (or issues.py add with the same --key) before reporting:\n"
+              + "\n".join(f"  {k}: " + "; ".join(v) for k, v in foreign.items()) + "\n" + ENGLISH_HINT, file=sys.stderr)
+        if not a.dry_run:
+            print("Nothing sent.", file=sys.stderr)
+            return 5
     if a.dry_run:
         print("\nDry run — nothing sent. Read the text above: anything still site-specific? Edit the issue in "
               "skill_issues.md and re-run. Override matches with --match ID=NUMBER or --new ID.")
-        return 0
+        return 5 if foreign else 0
     failed = []
     for st in plan:
         i, g = st["item"], st["target"]

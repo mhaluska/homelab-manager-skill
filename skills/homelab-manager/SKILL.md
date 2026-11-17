@@ -173,6 +173,7 @@ python3 $HM/scripts/issues.py add --title "…" --kind script|guard|instructions
 - Body follows `issues.py template [--kind idea]`: problems get Summary, Steps to reproduce, Expected,
   Actual, Evidence, optional Proposed fix; ideas get Summary, Context, Proposal, optional Benefit.
   Environment is added automatically. Write about the skill's behaviour, not the site. No secrets.
+  Always in English, whatever language the user speaks: translate their words (`issues.py` refuses other languages).
 - A stable `--key` (`script:drift_report:keyerror-backup_jobs`, `idea:patching:maintenance-window`)
   updates the open entry instead of duplicating: a new title, kind or body replaces the old one
   (no body given keeps the old details).
