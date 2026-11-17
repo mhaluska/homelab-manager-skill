@@ -334,5 +334,45 @@ class GuardConfigTests(unittest.TestCase):
         self.assertNotIn("issues.py", out["hookSpecificOutput"]["permissionDecisionReason"])
 
 
+
+class GhLanguageTests(unittest.TestCase):
+    """Issues and pull requests on the plugin's repository must be in English; other repositories are free."""
+
+    REPO = "mhaluska/homelab-manager-skill"
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.dir)
+
+    def d(self, cmd, cwd=None):
+        return decision(cmd, cwd or self.dir)
+
+    def test_non_english_issue_on_plugin_repo_is_denied(self):
+        self.assertEqual(self.d(f"gh issue create -R {self.REPO} -t 'Skript padá' -b x"), "deny")  # lang: allow
+        self.assertEqual(self.d(f"gh pr create --repo={self.REPO} --title 'Oprava skriptu, ktorý padá'"), "deny")  # lang: allow
+        body = Path(self.dir, "b.md")
+        body.write_text("Skript pada ked chyba backup jobs v konfiguracii a treba to opravit\n")  # lang: allow
+        self.assertEqual(self.d(f"gh issue comment 5 --repo {self.REPO} --body-file b.md"), "deny")
+
+    def test_english_issue_on_plugin_repo_only_asks(self):
+        self.assertEqual(self.d(f"gh issue create -R {self.REPO} -t 'Guard blocks gh issue list' -b 'It should not.'"), "ask")
+
+    def test_other_repositories_may_use_any_language(self):
+        self.assertEqual(self.d("gh issue create -R someone/homelab-infrastructure -t 'Skript padá'"), "ask")  # lang: allow
+        self.assertIsNone(self.d("gh pr create -R someone/other -t 'Oprava skriptu, ktorý padá'"))  # lang: allow
+
+    def test_repo_from_git_remote(self):
+        subprocess.run(["git", "init", "-q", self.dir], check=True)
+        subprocess.run(["git", "-C", self.dir, "remote", "add", "origin", f"git@github.com:{self.REPO}.git"], check=True)
+        self.assertEqual(self.d("gh pr create -t 'Oprava skriptu, ktorý padá' -b ''"), "deny")  # lang: allow
+        self.assertIsNone(self.d("gh pr create -t 'Fix the drift report crash' -b ''"))
+
+    def test_reason_asks_for_translation(self):
+        out = guard.decide(guard.evaluate(f"gh pr create -R {self.REPO} -t 'Skript padá'", self.dir))  # lang: allow
+        self.assertIn("English", out["hookSpecificOutput"]["permissionDecisionReason"])
+
+
 if __name__ == "__main__":
     unittest.main()

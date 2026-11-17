@@ -123,8 +123,8 @@ Ask first, and wait for an explicit yes, before:
 - reporting skill issues (`issues.py report`) or any other GitHub issue write (`gh`) — the plugin repository is public
 
 The plugin's `hooks/guard.py` enforces the critical part of this list: it denies
-scans outside `authorized_ranges`, `-auto-approve`, printing keychain secrets and
-reading private keys, and forces an approval prompt for destructive commands —
+scans outside `authorized_ranges`, `-auto-approve`, printing keychain secrets,
+reading private keys and non-English issues or PRs on the plugin repository, and forces an approval prompt for destructive commands —
 also inside scripts you write and execute. Treat a guard denial as a real "no":
 explain it to the user and adjust. Never rephrase, encode or split a command to get
 around the guard; that defeats the user's safety net and they will notice.

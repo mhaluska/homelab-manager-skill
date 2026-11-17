@@ -3,7 +3,8 @@
 
 The skill text tells Claude how to behave; this hook makes the important rules hold
 even if Claude gets it wrong. It returns one of:
-  deny  — never allowed (scan outside authorized ranges, -auto-approve, printing secrets)
+  deny  — never allowed (scan outside authorized ranges, -auto-approve, printing secrets,
+          non-English issues or pull requests on the plugin's own GitHub repository)
   ask   — the user must approve in the Claude app (destroy, replace, reboot, patching, …)
   (no output) — normal Claude Code permission handling
 
@@ -383,6 +384,61 @@ def check_ansible_playbook(tok: list[str]) -> list[tuple[str, str]]:
     return []
 
 
+GH_REPO_RE = re.compile(r"github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?/?$")
+GH_TEXT_OPTS = {"-t": "title", "--title": "title", "-b": "body", "--body": "body", "-F": "file", "--body-file": "file"}
+
+
+def plugin_repo() -> str | None:
+    """owner/name of the plugin's GitHub repository (plugin.json `repository`)."""
+    try:
+        url = json.loads((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text()).get("repository", "")
+    except (OSError, ValueError):
+        return None
+    m = GH_REPO_RE.search(url or "")
+    return m.group(1).lower() if m else None
+
+
+def check_gh_language(tok: list[str], cwd: str) -> list[tuple[str, str]]:
+    """gh issue/pr create, comment, edit, review aimed at the plugin's repository must be in English."""
+    if len(tok) < 3 or tok[1] not in ("issue", "pr") or tok[2] not in ("create", "comment", "edit", "review"):
+        return []
+    repo, texts, i = None, [], 3
+    while i < len(tok):
+        t, val = tok[i], None
+        if "=" in t and t.startswith("--"):
+            t, val = t.split("=", 1)
+        elif i + 1 < len(tok) and (t in GH_TEXT_OPTS or t in ("-R", "--repo")):
+            val = tok[i + 1]
+            i += 1
+        i += 1
+        if val is None:
+            continue
+        if t in ("-R", "--repo"):
+            repo = val
+        elif GH_TEXT_OPTS.get(t) == "file":
+            f = Path(os.path.expanduser(val))
+            f = f if f.is_absolute() else Path(cwd) / f
+            if val != "-" and f.is_file():
+                texts.append(f.read_text(errors="replace")[:200_000])
+        elif t in GH_TEXT_OPTS:
+            texts.append(val)
+    if repo is None:
+        try:
+            r = subprocess.run(["git", "-C", cwd, "remote", "get-url", "origin"], capture_output=True, text=True, timeout=5)
+            m = GH_REPO_RE.search(r.stdout.strip())
+            repo = m.group(1) if m else None
+        except (OSError, subprocess.TimeoutExpired):
+            repo = None
+    target = plugin_repo()
+    if not repo or not target or repo.removeprefix("https://github.com/").lower() != target:
+        return []
+    problems = [p for text in texts for p in hmlib.english_problems(text)]
+    if not problems:
+        return []
+    return [(DENY, f"{target} is English-only: write the {tok[1]} text in English, translating the user's words "
+                   f"(not English: {'; '.join(problems)}).")]
+
+
 def script_path(tok: list[str], cwd: str) -> Path | None:
     if not tok:
         return None
@@ -437,6 +493,8 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
             findings += check_tofu_apply(tok, cwd)
         elif name == "ansible-playbook":
             findings += check_ansible_playbook(tok)
+        elif name == "gh":
+            findings += check_gh_language(tok, cwd)
         script = script_path(tok, cwd)
         if script and script.name in ("nmap_scan.py", "ssh_probe.py"):
             value_opts = NMAP_SCAN_VALUE_OPTS if script.name == "nmap_scan.py" else SSH_PROBE_VALUE_OPTS
