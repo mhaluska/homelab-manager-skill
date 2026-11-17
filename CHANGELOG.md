@@ -1,6 +1,11 @@
 # Changelog
 
 ## 0.14.0 — 2026-11-17
+- Opt-in `git.auto_push` ([#27](https://github.com/mhaluska/homelab-manager-skill/issues/27)): when true, every
+  verified commit of the operating loop is pushed to the remote (never forced) and the branch checked not to be
+  ahead; a failed push is reported. Setup asks for it when the repo has a remote; existing repos are offered it
+  by the upgrade advisor. `check_env.py` reports commits not pushed to the upstream (a failure with auto_push)
+  and commits on the upstream missing locally.
 
 ## 0.13.0 — 2026-11-17
 - Fix ([#24](https://github.com/mhaluska/homelab-manager-skill/issues/24)): `issues.py add` with the key of an

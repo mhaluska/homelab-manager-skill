@@ -70,6 +70,7 @@ mostly confirms:
 - S3 state → `opentofu.s3.endpoint`, `bucket` (and `key` if they share the bucket). Local state
   needs nothing; `tofu_init.py --print` shows where the file will live.
 - kubernetes → cluster group name(s) in Ansible and whether `kubectl` works on this Mac.
+- git → if the repo has a remote (`git remote -v`): `git.auto_push` (push each verified commit; off-Mac backup).
 Write answers with `python3 $HM/scripts/config_set.py 'site.domain=home.arpa' 'network.authorized_ranges+=CIDR'`
 (it changes only those lines and checks the result). Not `yq -i`: it reflows the whole file and moves comments.
 Node, storage and bridge names are discovered later from the Proxmox API; don't ask for them.
@@ -101,7 +102,7 @@ For every request, in this order. Skip steps that don't apply, but never skip 4�
 7. **Execute** — Packer / OpenTofu / Ansible, secrets via `with_secrets.py`.
 8. **Verify** — the resource exists and is healthy: Proxmox snapshot, guest agent IP, SSH reachable, services active, `tofu plan` shows no changes.
 9. **Record** — refresh `discovery/`, `tofu_to_inventory.py`, `docs/templates.md`, `docs/decisions.md` where relevant.
-10. **Commit** — to `main` when `git.auto_commit` is true and the change is verified. One logical change per commit, message says what and why. Never commit secrets, state or plans (the pre-commit hook also blocks them).
+10. **Commit** — to `main` when `git.auto_commit` is true and the change is verified. One logical change per commit, message says what and why. Never commit secrets, state or plans (the pre-commit hook also blocks them). When `git.auto_push` is true, `git push` after it (never force) and check `git status -sb` isn't ahead; a rejected or failed push goes in the report.
 11. **Report** — what changed, what failed, what's left, in a few lines. Report only what actually ran; anything skipped or assumed is labelled as such, never as a result. Skill problems hit and ideas noticed during the task are already in `skill_issues.md` (§6): name their SKILL-IDs.
 
 Prefer idempotent operations: declarative OpenTofu and Ansible over imperative CLI
@@ -221,7 +222,7 @@ Scripts (all in `$HM/scripts/`):
 | Script | Purpose | Writes |
 |---|---|---|
 | `init_repo.py --components … [--dry-run]` / `--add-components …` / `--sync-managed` | scaffold, extend, or update the repo after a plugin upgrade | repo files |
-| `check_env.py [--keychain] [--json]` | tools, SSH agent, keychain self-test, secrets readable, Proxmox TLS, EL8 Python | — |
+| `check_env.py [--keychain] [--json]` | tools, SSH agent, keychain self-test, secrets readable, Proxmox TLS, EL8 Python, unpushed commits | — |
 | `with_secrets.py <names…> -- <cmd>` | run a command with keychain secrets in env, output redacted | — |
 | `proxmox_inventory.py [--details]` / `--next-vmid vms\|lxc [--ip --vlan]` | read-only Proxmox snapshot + summary table (`--details`: configs, guest IPs) / VMID for a new guest | `discovery/proxmox.json` |
 | `pve_node_plan.py <node> [--max-mem-pct 85] [--no-migrate]` | read-only plan for patching one Proxmox node: migrate, HA, stop/restore per guest | `discovery/pve-patch-<node>.json` |

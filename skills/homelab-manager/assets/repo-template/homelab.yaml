@@ -108,3 +108,4 @@ upgrades:
 git:
   branch: main
   auto_commit: true          # commit config changes after successful, verified operations
+  auto_push: false           # also push each verified commit to the remote (never force) — backs the repo up off this Mac

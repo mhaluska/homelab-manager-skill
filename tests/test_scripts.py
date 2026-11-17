@@ -1577,6 +1577,19 @@ class GitUpstreamTests(unittest.TestCase):  # issue 27
         self.assertIs(r["ok"], False)
         self.assertIn("git pull --ff-only", r["detail"])
 
+    def test_existing_repo_is_offered_auto_push(self):
+        run("init_repo.py", str(self.repo), "--components", "ansible", cwd=self.repo)
+        cfg = self.repo / "homelab.yaml"
+        self.assertEqual(yq(".git.auto_push", cfg), "false")                    # new repos: off, asked in setup
+        ids = lambda: [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", "--all", cwd=self.repo).stdout)]
+        self.assertNotIn("git-auto-push", ids())
+        subprocess.run(["yq", "-i", "del(.git.auto_push)", str(cfg)], check=True)
+        self.assertIn("git-auto-push", ids())
+        r = run("config_set.py", "git.auto_push=true", cwd=self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(yq(".git.auto_push", cfg), "true")
+        self.assertNotIn("git-auto-push", ids())
+
     def test_no_upstream(self):
         self.git("branch", "-q", "--unset-upstream", cwd=self.repo)
         self.assertEqual(self.check(False), [])
