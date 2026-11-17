@@ -211,7 +211,7 @@ Read the reference that matches the task (only that one):
 | Create/clone/resize/start/stop/migrate VMs and LXC, cloud-init, import existing | `references/proxmox.md` |
 | Build or update templates (Rocky, Debian, Ubuntu) | `references/templates.md` |
 | OpenTofu state, backend, modules, imports, plan review details | `references/opentofu.md` |
-| Ansible inventory, roles, playbooks, installing software (e.g. Zabbix Agent 2) | `references/ansible.md` |
+| Ansible inventory, onboarding existing hosts, roles, playbooks, installing software (e.g. Zabbix Agent 2) | `references/ansible.md` |
 | Patching, missing updates, reboots, rolling cluster procedures | `references/patching.md` |
 | Windows hosts and appliances (NAS, firewalls, switches, BMCs) | `references/windows-appliances.md` |
 | Security audit, keychain, tokens, hardening checks | `references/security.md` |

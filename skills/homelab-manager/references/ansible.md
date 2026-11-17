@@ -13,6 +13,32 @@ Install collections once: `ansible-galaxy collection install -r requirements.yml
   `lookup('ansible.builtin.env', 'VAR')`, marked `no_log: true` on tasks that use it.
 - A host goes into managed inventory only on purpose (user said so, or OpenTofu created it).
 
+## Onboarding existing hosts
+
+"Set up Ansible for the Linux servers" when they already run (not created by OpenTofu):
+1. Fresh snapshot: `proxmox_inventory.py --details` (guest config + reported IPs).
+2. Draft: `python3 $HM/scripts/proxmox_to_inventory.py [--vlan 20] [--range 10.0.20.0/24] [--type lxc]`
+   prints YAML for running Linux guests (IP from the static config, else the guest agent / LXC
+   interfaces) in group `onboarding`, and lists what it skipped (Windows/other ostype, stopped, no IP,
+   already managed). Hosts outside Proxmox are added by hand. Show the list; adding hosts to the managed
+   inventory needs the user's yes. Then put them in `hosts.yml`.
+3. Reach and probe without Python (`raw` works on any target):
+   ```bash
+   ansible onboarding -m raw -a '. /etc/os-release; echo "$ID $VERSION_ID"; ls /usr/bin/python3* 2>/dev/null'
+   ```
+   Unreachable = SSH key not authorized or wrong user (`ansible_user` in host/group vars); fix, don't skip.
+4. Move each host into an OS group (`debian`, `ubuntu`, `rocky`, or version-specific `el8`, `el9`) under
+   `linux`, and drop the `onboarding` group. `ansible linux -m ansible.builtin.setup -a filter=ansible_distribution*`
+   confirms Python modules work.
+
+Target Python vs the Mac's ansible-core (`ansible --version`): 2.16 runs on Python 3.6+, 2.17 needs 3.7+,
+2.18–2.19 need 3.8+, newer releases drop more (check the ansible-core support matrix). EL8 (RHEL, Rocky,
+Alma, CentOS Stream 8) ships 3.6: with 2.17+ install a newer Python from AppStream —
+`ansible el8 -b -m raw -a 'dnf -y install python3.12'` (a change: approval) — and set
+`ansible_python_interpreter: /usr/bin/python3.12` in `group_vars/el8.yml`. `dnf` and `package_facts` keep
+working (they re-run under the system Python for its bindings). Same for other old releases (Ubuntu 18.04,
+Debian 10). `check_env.py` flags hosts in EL8-named groups without an interpreter set.
+
 ## Running playbooks
 
 ```bash
