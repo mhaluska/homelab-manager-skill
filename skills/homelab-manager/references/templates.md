@@ -47,6 +47,15 @@ base is reproducible. Fetch the checksum file with `curl -fsSL` (no secrets invo
 8. Existing VMs keep their old template. Offer — don't do — moving tfvars defaults for
    *new* VMs to the new template.
 
+## Another site
+
+Templates are per Proxmox: a site with its own (proxmox.md "Several sites") builds its own, from its own bases
+(`base_images` in its environment's tfvars). Use that site everywhere above: its snapshot
+(`discovery/proxmox-<site>.json`), VMIDs with `--next-vmid templates --site <site>`, its `templates.build_network`
+when the site entry sets one (a free IP in its ranges), its token. Generate `packer/linux/site-<site>.pkrvars.hcl`
+with `site = "<site>"` and the site's node, storage and build network, and pass it instead of `site.pkrvars.hcl`:
+the build fails at once if the token is another site's. Record the site in the `docs/templates.md` row.
+
 ## Retiring templates
 
 Keep `templates.keep_versions` per distro. A template may be deleted only when no tfvars

@@ -6,7 +6,8 @@ Install collections once: `ansible-galaxy collection install -r requirements.yml
 ## Inventory
 
 - `inventory/managed/hosts.yml` — hand-maintained: groups, non-Proxmox hosts, Windows, appliances.
-- `inventory/managed/tofu_hosts.yml` — generated from OpenTofu (`tofu_to_inventory.py`); don't edit.
+- `inventory/managed/tofu_hosts.yml` — generated from OpenTofu (`tofu_to_inventory.py`); don't edit. Another
+  site's environment: `tofu_hosts-<site>.yml`, its hosts also in `site_<site>`.
 - `group_vars/` — non-secret variables. Secrets, if a role needs one, come from the keychain at
   runtime (`lookup('ansible.builtin.pipe', …)` is NOT acceptable — it prints in verbose mode);
   use `with_secrets.py <name> -- ansible-playbook …` and read the env var with

@@ -123,15 +123,25 @@ config_set.py 'sites+={name: offsite, label: Rented server, ranges: [192.0.2.0/2
   that site's Proxmox) and secrets entries.
 - Inventory: each host is in at most one `site_<name>` group (`hosts.yml`); none = the default site. Target a
   site with Ansible patterns: `-e target='site_offsite:&linux'`. Site settings (DNS, NTP, mirrors) go in
-  `group_vars/site_<name>.yml`; set `ansible_group_priority: 10` there, so they win over OS groups on purpose.
-  `check_env.py` and the drift report flag hosts in two site groups and groups with no site in homelab.yaml.
+  `group_vars/site_<name>.yml` (`init_repo.py --add-site` writes it with `ansible_group_priority: 10`, so site
+  settings win over OS groups on purpose). `check_env.py` and the drift report flag hosts in two site groups and
+  groups with no site in homelab.yaml.
 - Read-only: `proxmox_inventory.py --site offsite` → `discovery/proxmox-offsite.json` (`--all-sites` reads each
   and carries on past an unreachable one); `proxmox_to_inventory.py --site offsite` drafts into `site_offsite`.
   The drift report covers every site (VMIDs are shown as `<site>/<vmid>`: they repeat across sites).
 - `pve_snapshot.py --site offsite …`; patch-linux.yml uses the host's site by itself. `with_secrets.py <secret>`
   connects to the site whose tokens name that secret.
-- Not yet: OpenTofu and Packer for other sites, VMID allocation per site, `pve_node_plan.py` / node patching
-  there. The drift report compares other sites by the `tofu` tag only.
+- Provisioning there: `init_repo.py --add-site offsite` (after the site is in homelab.yaml) scaffolds its
+  OpenTofu environment `tofu/environments/offsite` (own state; fill `defaults` from `sites[offsite].proxmox`) and a
+  `site.tf` in it and in the default environment: with_secrets.py tells OpenTofu the token's site, so a plan with
+  the wrong site's token fails before touching that Proxmox. Then everything in opentofu.md with `--site offsite`
+  (`tofu_init.py`, `tofu_to_inventory.py` → `tofu_hosts-offsite.yml`, hosts in `site_offsite`) and that site's
+  tokens (`$W proxmox-offsite-rw $STATE -- tofu plan …`, from `tofu/environments/offsite`).
+- VMIDs: `--next-vmid vms --site offsite` checks that site's snapshot and environment only (IDs repeat across
+  sites). A site may set its own `vmid_ranges`, `vmid_scheme` and `templates` (build network) in its entry;
+  otherwise the top-level ones apply. `network.vlans` entries may name a `site` (a VLAN only there; none = every
+  site): `--vlan <name>` resolves with the site's VLANs.
+- Templates: templates.md "Another site". Node patching: patching.md "Patch Proxmox nodes" with `--site`.
 
 ## Cloud-init and SSH keys
 

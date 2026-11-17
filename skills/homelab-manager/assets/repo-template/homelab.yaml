@@ -28,7 +28,8 @@ network:
   # IPs/CIDRs never scanned, even inside an authorized range.
   excluded_hosts: []
   # VLANs by name, so "create a VM in DMZ" works: --vlan accepts a name, reports show the VLAN of an address.
-  vlans: []                  # e.g. [{id: 20, name: DMZ, cidr: 10.0.20.0/24, gw: 10.0.20.1}]
+  vlans: []                  # e.g. [{id: 20, name: DMZ, cidr: 10.0.20.0/24, gw: 10.0.20.1}]; site: <name>
+                             # for a VLAN of one site only (sites: below)
   dns_servers: []
   gateway: ""
 
@@ -48,6 +49,8 @@ proxmox:
 sites: []                    # optional, for more than one location (references/proxmox.md "Several sites"):
                              # [{name, label, ranges, proxmox}], the default site first; its Proxmox is the
                              # proxmox: block above. Inventory hosts belong to a site via the group site_<name>.
+                             # Another site may set its own vmid_ranges, vmid_scheme, templates; its OpenTofu
+                             # environment is tofu/environments/<name> (init_repo.py --add-site <name>).
 
 vmid_ranges:                 # keep IDs predictable; the skill picks the next free ID in range
   base_images: [9000, 9049]
@@ -76,11 +79,12 @@ opentofu:
   environment: homelab
   state_backend: local       # local | s3 — state is never stored in Git
   local:
-    path: ""                 # empty = ~/.local/share/homelab/tofu-state/<site.name>/<environment>.tfstate
+    path: ""                 # empty = ~/.local/share/homelab/tofu-state/<site.name>/<environment>.tfstate;
+                             # set with several sites: include {env}, e.g. ~/tofu-state/{env}.tfstate
   s3:                        # any S3-compatible store: MinIO, Garage, AWS (locking via lockfile)
     endpoint: ""             # e.g. https://minio.home.arpa:9000
     bucket: ""
-    key: ""                  # empty = <site.name>/<environment>.tfstate
+    key: ""                  # empty = <site.name>/<environment>.tfstate; set with several sites: include {env}
     region: us-east-1        # most self-hosted stores ignore it
     use_path_style: true
   state_secret: s3-state     # keychain secret with the S3 keys (only for state_backend: s3)

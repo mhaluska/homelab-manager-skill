@@ -101,8 +101,7 @@ For every request, in this order. Skip steps that don't apply, but never skip 4�
 10. **Commit** — to `main` when `git.auto_commit` is true and the change is verified. One logical change per commit, message (in `site.language`) says what and why. Never commit secrets, state or plans (the pre-commit hook also blocks them). When `git.auto_push` is true, `git push` after it (never force) and check `git status -sb` isn't ahead; a rejected or failed push goes in the report.
 11. **Report** — what changed, what failed, what's left, in a few lines. Report only what actually ran; anything skipped or assumed is labelled as such, never as a result. Skill problems hit and ideas noticed during the task are already in `skill_issues.md` (§6): name their SKILL-IDs.
 
-Prefer idempotent operations: declarative OpenTofu and Ansible over imperative CLI
-calls. Use `qm`/`pct`/`pvesh` writes only when OpenTofu can't do it, and say why.
+Prefer idempotent operations: declarative OpenTofu and Ansible over imperative CLI calls. Use `qm`/`pct`/`pvesh` writes only when OpenTofu can't do it, and say why.
 
 ## 4. Approval list
 
@@ -112,30 +111,26 @@ Ask first, and wait for an explicit yes, before:
 - reboots and shutdowns, patching with `reboot=if_required|always` (`allow_reboot=true`), and anything on Proxmox nodes themselves
 - cluster-level operations: HA, quorum, migration, Kubernetes drain, rolling changes
 - `tofu import`, `tofu state` edits, `force-unlock`; replacing or deleting a VM template
-- adding a range to `network.authorized_ranges`, any `--profile os` (root) or NSE script scan.
-  (A ping or services scan of an already-authorized range that the user asked for needs no extra yes:
-  the request is the approval.)
+- adding a range to `network.authorized_ranges`, any `--profile os` (root) or NSE script scan. (A ping or services
+  scan of an already-authorized range that the user asked for needs no extra yes: the request is the approval.)
 - installing software on many hosts at once
 - reporting skill issues (`issues.py report`) or any other GitHub issue write (`gh`) — the plugin repository is public
 
-The plugin's `hooks/guard.py` enforces the critical part of this list: it denies
-scans outside `authorized_ranges`, `-auto-approve`, printing keychain secrets,
-reading private keys and non-English issues or PRs on the plugin repository, and forces an approval prompt for destructive commands —
-also inside scripts you write and execute. Treat a guard denial as a real "no":
-explain it to the user and adjust. Never rephrase, encode or split a command to get
-around the guard; that defeats the user's safety net and they will notice.
+The plugin's `hooks/guard.py` enforces the critical part of this list: it denies scans outside `authorized_ranges`,
+`-auto-approve`, printing keychain secrets, reading private keys and non-English issues or PRs on the plugin
+repository, and forces an approval prompt for destructive commands — also inside scripts you write and execute.
+Treat a guard denial as a real "no": explain it to the user and adjust. Never rephrase, encode or split a command
+to get around the guard; that defeats the user's safety net and they will notice.
 
-Never reboot more than one node of the same cluster (Proxmox, Kubernetes, databases,
-anything under `clusters:` in `homelab.yaml`) at a time, and never automatically.
+Never reboot more than one node of the same cluster (Proxmox, Kubernetes, databases, anything under `clusters:` in `homelab.yaml`) at a time, and never automatically.
 
 ## 5. Secrets
 
 - Secrets live only in the login keychain; `homelab.yaml` maps names → keychain items.
 - Run tools that need credentials through the wrapper, which injects env vars and redacts output:
   `python3 $HM/scripts/with_secrets.py proxmox-rw $STATE -- tofu plan -out=plan.tfplan`
-  `$STATE` here and in the references = the `opentofu.state_secret` (e.g. `s3-state`) when
-  `opentofu.state_backend` is `s3`; leave it out for local state.
-- Use the **read-only** token (`proxmox-ro`) for discovery; `proxmox-rw` only for changes.
+  `$STATE` here and in the references = the `opentofu.state_secret` (e.g. `s3-state`) when `opentofu.state_backend` is `s3`; leave it out for local state.
+- Use the **read-only** token (`proxmox-ro`) for discovery; `proxmox-rw` only for changes (another site: its own tokens).
 - Don't echo, print, write to files or pass secrets as arguments. If a secret ever
   appears in output, stop, tell the user, and recommend rotating it.
 - SSH uses the agent (`ssh-add -L` for public keys). Private keys are never read.
@@ -218,23 +213,23 @@ Scripts (all in `$HM/scripts/`):
 
 | Script | Purpose | Writes |
 |---|---|---|
-| `init_repo.py --components … [--dry-run]` / `--add-components …` / `--sync-managed` | scaffold, extend, or update the repo after a plugin upgrade | repo files |
+| `init_repo.py --components … [--dry-run]` / `--add-components …` / `--sync-managed` / `--add-site N` | scaffold, extend, or update the repo after a plugin upgrade; scaffold a site | repo files |
 | `check_env.py [--keychain] [--json]` | tools, SSH agent, keychain self-test, secrets readable, Proxmox TLS, EL8 Python, unpushed commits | — |
 | `with_secrets.py <names…> -- <cmd>` | run a command with keychain secrets in env, output redacted | — |
-| `proxmox_inventory.py [--details] [--site N\|--all-sites]` / `--next-vmid vms\|lxc [--ip --vlan]` | read-only Proxmox snapshot + summary table (`--details`: configs, guest IPs; other sites: references/proxmox.md "Several sites") / VMID for a new guest | `discovery/proxmox[-<site>].json` |
+| `proxmox_inventory.py [--details] [--site N\|--all-sites]` / `--next-vmid vms\|lxc [--ip --vlan --site]` | read-only Proxmox snapshot + summary table (`--details`: configs, guest IPs; other sites: references/proxmox.md "Several sites") / VMID for a new guest | `discovery/proxmox[-<site>].json` |
 | `pve_snapshot.py list\|check\|create\|delete\|rollback <guest…> [--name N]` | guest snapshots around patching (check: can they be; delete/rollback: approval) | — |
 | `lxd_snapshot.py list\|check\|create\|delete\|restore <host…> [--name N]` | LXD/Incus instance snapshots (NAS; host vars lxd_host, lxd_snapshots) (delete/restore: approval) | — |
-| `pve_node_plan.py <node> [--max-mem-pct 85] [--no-migrate]` | read-only plan for patching one Proxmox node: migrate, HA, stop/restore per guest | `discovery/pve-patch-<node>.json` |
+| `pve_node_plan.py <node> [--site N] [--max-mem-pct 85] [--no-migrate]` | read-only plan for patching one Proxmox node: migrate, HA, stop/restore per guest | `discovery/pve-patch-[<site>-]<node>.json` |
 | `nmap_scan.py <targets> [--profile ping\|services\|os] [--only-live]` | scope-checked scan | `discovery/network.json` |
 | `drift_report.py [--tofu-json F]` / `--stale` | Proxmox ↔ OpenTofu ↔ Ansible ↔ network / is drift.md out of date | `discovery/drift.md` |
-| `tofu_to_inventory.py` | OpenTofu output → Ansible inventory | `ansible/inventory/managed/tofu_hosts.yml` |
+| `tofu_to_inventory.py [--site N]` | OpenTofu output → Ansible inventory | `ansible/inventory/managed/tofu_hosts[-<site>].yml` |
 | `proxmox_to_inventory.py [--vlan N] [--range CIDR] [--type vm\|lxc]` | draft inventory entries for existing Linux guests (review before use) | — (stdout) |
 | `ssh_probe.py [targets] [--user U] [--draft]` | read-only SSH probe of discovered hosts: hostname, OS, usable Python, OS group | `discovery/network.json` |
 | `routeros_audit.py <hosts> [--group G] [--user U]` | read-only MikroTik RouterOS inspection + audit findings (Markdown report) | `discovery/routeros.json` |
 | `upgrade_notes.py [--all] [--json]` | opt-in changes newer releases suggest for this repo (shown by `--sync-managed`) | — |
 | `config_set.py 'path=value' 'list+=item' [--delete path] [--dry-run]` | edit homelab.yaml keeping comments and layout | `homelab.yaml` |
 | `issues.py add\|list\|show\|report\|resolve\|fixed` | note problems with / ideas for this skill; report them (sanitised) to the plugin repo | `skill_issues.md` |
-| `tofu_init.py [--print]` | `tofu init` with the state backend from homelab.yaml (local or S3) | `.terraform/` |
+| `tofu_init.py [--site N] [--print]` | `tofu init` with the state backend from homelab.yaml (local or S3) | `.terraform/` |
 
 ## 10. Delegating to subagents (cheaper models)
 

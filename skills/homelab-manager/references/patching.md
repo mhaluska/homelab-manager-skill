@@ -109,13 +109,16 @@ dataset snapshots. A dist-upgrade of an instance: one release at a time, a snaps
 
 ## Patch Proxmox nodes
 
-One node per run; the next only after the previous one is back and its guests are restored.
+One node per run; the next only after the previous one is back and its guests are restored. A node of another
+site (`site_<name>` group): add `--site <name>` to both scripts; the playbook takes that site's plan by itself.
 1. `proxmox_inventory.py --details`, then `pve_node_plan.py <node>` (read-only). It refuses while the
    cluster isn't quorate or another node is offline. Show the user the plan: per guest **migrate → node**
    (running, all disks on shared storage, no passthrough or local ISO; spread by relative free memory,
    never above `--max-mem-pct`, default 85), **ha** (HA node maintenance moves it), **stop** (pinned to
    the node: shut down cleanly, started again after), **stays-stopped**. `--no-migrate` stops instead
    of migrating. Migration needs compatible CPU types; HA guests on local disks need replication.
+   A standalone node (no cluster) has nowhere to move guests: every running one is down during the reboot —
+   say so and agree a time with the user.
 2. Approval for the node and the plan.
 3. Upgrade only (guests keep running), reports `reboot_needed`:
    `ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=<host>`

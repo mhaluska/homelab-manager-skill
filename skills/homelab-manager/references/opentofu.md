@@ -1,7 +1,8 @@
 # OpenTofu
 
 Layout: `tofu/modules/{proxmox-vm,proxmox-lxc,cloud-image-base}`, one environment per
-directory under `tofu/environments/` (default `homelab`). Provider: `bpg/proxmox`.
+directory under `tofu/environments/` (default `homelab`; another site: its name, proxmox.md "Several sites").
+Provider: `bpg/proxmox`.
 Desired state is data in `homelab.auto.tfvars`; edit data, not module calls.
 
 ## Running
@@ -25,7 +26,8 @@ rm plan.tfplan
 State holds resource details (and sometimes cloud-init data), so it never goes into Git.
 `backend.tf` only names the backend type; `tofu_init.py` passes the settings from homelab.yaml.
 - **local** (default): `~/.local/share/homelab/tofu-state/<site>/<env>.tfstate` on this Mac
-  (`opentofu.local.path` overrides), directory mode 700, file locking. Make sure Time Machine (or
+  (`opentofu.local.path` overrides; with several environments it must contain `{env}`, as must a set
+  `opentofu.s3.key` — tofu_init.py refuses otherwise), directory mode 700, file locking. Make sure Time Machine (or
   another backup) covers it; losing it means re-importing every resource.
 - **s3**: any S3-compatible bucket — MinIO, Garage, AWS (`opentofu.s3.*`), locking via a lockfile
   next to the state (`use_lockfile`), credentials `ACCESS_KEY_ID:SECRET_ACCESS_KEY` in the keychain
