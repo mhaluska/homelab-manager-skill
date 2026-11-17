@@ -1,5 +1,6 @@
 # Read-only: which systems have pending (security) updates or need a reboot.
-# Writes discovery/updates.json.  Safe to run any time.
+# Writes discovery/updates.json, merged: hosts not checked this run keep their last result
+# (each host has its own collected_at).  Safe to run any time.
 - name: Pending updates on Linux
   hosts: "{{ target | default('linux') }}"
   gather_facts: true
@@ -81,10 +82,35 @@
 - name: Write discovery/updates.json
   hosts: localhost
   gather_facts: false
+  vars:
+    updates_file: "{{ playbook_dir }}/../../discovery/updates.json"
+    reported: "{{ groups['all'] | map('extract', hostvars) | selectattr('update_summary', 'defined') | map(attribute='inventory_hostname') | list }}"
   tasks:
-    - ansible.builtin.copy:
-        dest: "{{ playbook_dir }}/../../discovery/updates.json"
-        content: "{{ {'collected_at': now(utc=true).isoformat(), 'hosts': dict(reported | zip(reported | map('extract', hostvars, 'update_summary')))} | to_nice_json }}"
-        mode: "0644"
+    - name: Read the previous results
+      ansible.builtin.stat:
+        path: "{{ updates_file }}"
+      register: prev_updates
+
+    # Merge: hosts checked now replace their entry, others keep theirs (each with its own collected_at),
+    # so `-e target=<group>` doesn't drop the rest. Hosts gone from the inventory are dropped; entries
+    # from older files get the file's collected_at.
+    - name: Merge with this run
+      ansible.builtin.set_fact:
+        updates_merged: >-
+          {%- set prev = (lookup('ansible.builtin.file', updates_file) | from_json) if prev_updates.stat.exists else {} -%}
+          {%- set hosts = {} -%}
+          {%- for name, entry in (prev.hosts | default({})).items() if name in groups['all'] -%}
+            {%- set _ = hosts.update({name: {'collected_at': prev.collected_at | default(none)} | combine(entry)}) -%}
+          {%- endfor -%}
+          {%- for name in reported -%}
+            {%- set _ = hosts.update({name: hostvars[name].update_summary | combine({'collected_at': now_utc})}) -%}
+          {%- endfor -%}
+          {{ {'collected_at': now_utc, 'hosts': hosts} }}
       vars:
-        reported: "{{ groups['all'] | map('extract', hostvars) | selectattr('update_summary', 'defined') | map(attribute='inventory_hostname') | list }}"
+        now_utc: "{{ now(utc=true).isoformat() }}"
+
+    - name: Write
+      ansible.builtin.copy:
+        dest: "{{ updates_file }}"
+        content: "{{ updates_merged | to_nice_json }}\n"
+        mode: "0644"

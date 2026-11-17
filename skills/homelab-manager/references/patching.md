@@ -6,7 +6,8 @@
 cd ansible && ansible-playbook playbooks/check-updates.yml          # Linux + Windows
 ansible-playbook playbooks/check-updates.yml -e target=rocky       # subset
 ```
-Writes `discovery/updates.json`. Report a table: host, OS, security updates, total, reboot
+Merges into `discovery/updates.json`: a subset run updates only its hosts, the others keep their last
+result; check each host's `collected_at` before calling it current. Report a table: host, OS, security updates, total, reboot
 pending. Sort by security count. Unreachable hosts are findings too. Commit the JSON.
 
 ## "Patch all Linux servers"

@@ -60,6 +60,14 @@
       "when": {"component": "proxmox", "file_has": ["docs/proxmox-tokens.md", "acl modify /vms --tokens 'homelab@pve!ro' --roles HomelabAgentAudit"]},
       "text": "The guest-agent section of docs/proxmox-tokens.md from 0.11.0 granted HomelabAgentAudit on /vms. That ACL replaces the PVEAuditor role inherited from /, so the read-only token loses VM.Audit and the inventory sees no guests. On Proxmox VE 9 PVEAuditor already covers the guest agent.",
       "action": "Replace that section with the one in {template}. If the user ran the old /vms lines, have them undo them on Proxmox: `pveum acl delete /vms --users homelab@pve --roles HomelabAgentAudit` and `pveum acl delete /vms --tokens 'homelab@pve!ro' --roles HomelabAgentAudit` (then `pveum role delete HomelabAgentAudit` unless needed on 8.x), and refresh `python3 {HM}/scripts/proxmox_inventory.py --details`."
+    },
+    {
+      "version": "0.13.0",
+      "id": "check-updates-merge",
+      "kind": "template",
+      "when": {"component": "ansible", "file_lacks": ["ansible/playbooks/check-updates.yml", "updates_merged"]},
+      "text": "check-updates.yml now merges into discovery/updates.json (each host with its own collected_at); the old play rewrote it with only the hosts of -e target=<group>.",
+      "action": "Replace the final 'Write discovery/updates.json' play of ansible/playbooks/check-updates.yml with the one in {template}, keeping any local edits above it."
     }
   ]
 }

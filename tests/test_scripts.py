@@ -992,6 +992,19 @@ if sys.argv[1:3] == ["issue", "list"]:
 """
 
 
+class CheckUpdatesMergeTests(unittest.TestCase):  # issue 22
+    def test_old_playbook_gets_upgrade_note(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        run("init_repo.py", str(d), "--components", "ansible", cwd=d)
+        pb = d / "ansible/playbooks/check-updates.yml"
+        self.assertIn("updates_merged", pb.read_text())
+        ids = lambda: [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", "--all", cwd=d).stdout)]
+        self.assertNotIn("check-updates-merge", ids())
+        pb.write_text(pb.read_text().split("- name: Write discovery/updates.json")[0])
+        self.assertIn("check-updates-merge", ids())
+
+
 class FixedIssuesTests(unittest.TestCase):
     """#12: reported entries fixed by the installed release are pointed out and can be resolved."""
 

@@ -8,6 +8,10 @@
   downgrades a `hypervisor` guess to `linux`. A product name that identifies the box (Proxmox, TrueNAS, iDRAC…)
   wins over generic Linux evidence, and `device_type_guess` is recomputed from everything known about the host,
   so a later scan never loses what an earlier one found. Re-run a scan to re-guess existing hosts.
+- Fix ([#22](https://github.com/mhaluska/homelab-manager-skill/issues/22)): `check-updates.yml -e target=<group>`
+  no longer rewrites `discovery/updates.json` with only that group. Results are merged: hosts checked now
+  replace their entry, the others keep theirs, each with its own `collected_at`; hosts gone from the inventory
+  are dropped. Existing repos: the upgrade advisor offers the new final play of the (user-owned) playbook.
 
 ## 0.12.4 — 2026-11-17
 - Fix ([#18](https://github.com/mhaluska/homelab-manager-skill/issues/18)): `nmap_scan.py --profile os` no longer
