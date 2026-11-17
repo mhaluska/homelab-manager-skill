@@ -48,12 +48,14 @@ COMPONENTS = {
                  "ansible/inventory/managed/group_vars/all.yml", "ansible/playbooks/ping.yml",
                  "ansible/playbooks/check-updates.yml", "ansible/playbooks/patch-linux.yml",
                  "ansible/playbooks/patch-proxmox-node.yml", "ansible/playbooks/tasks/",
+                 "ansible/playbooks/hooks/vrrp-health.yml",
                  "ansible/inventory/managed/group_vars/proxmox_nodes.yml", "ansible/roles/"]),
     "discovery": ("Network discovery with nmap in authorized ranges", [], []),
     "windows": ("Windows hosts (Ansible over OpenSSH)", ["ansible"], ["ansible/inventory/managed/group_vars/windows.yml"]),
     "appliances": ("Appliances: NAS, firewall, switches, BMCs (inventory + read-only checks)", ["ansible"],
                    ["ansible/inventory/managed/group_vars/appliances.yml"]),
-    "kubernetes": ("Kubernetes clusters (rolling patching with drain/uncordon)", ["ansible"], ["ansible/playbooks/hooks/"]),
+    "kubernetes": ("Kubernetes clusters (rolling patching with drain/uncordon)", ["ansible"],
+                   ["ansible/playbooks/hooks/k8s-drain.yml", "ansible/playbooks/hooks/k8s-uncordon.yml"]),
 }
 CORE = ["homelab.yaml", "README.md", "CLAUDE.md", "skill_issues.md", ".gitignore", ".claude/", "docs/README.md",
         "docs/decisions.md", "scripts/", "discovery/"]

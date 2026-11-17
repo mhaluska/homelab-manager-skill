@@ -109,7 +109,7 @@ calls. Use `qm`/`pct`/`pvesh` writes only when OpenTofu can't do it, and say why
 Ask first, and wait for an explicit yes, before:
 - deleting anything (snapshots too), a snapshot rollback, or any plan that **replaces** (destroy + create) a resource
 - storage changes: new/removed storage, moving or shrinking disks, ZFS/LVM operations
-- reboots and shutdowns, patching with `allow_reboot=true`, and anything on Proxmox nodes themselves
+- reboots and shutdowns, patching with `reboot=if_required|always` (`allow_reboot=true`), and anything on Proxmox nodes themselves
 - cluster-level operations: HA, quorum, migration, Kubernetes drain, rolling changes
 - `tofu import`, `tofu state` edits, `force-unlock`; replacing or deleting a VM template
 - adding a range to `network.authorized_ranges`, any `--profile os` (root) or NSE script scan.

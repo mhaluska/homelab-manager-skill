@@ -88,6 +88,12 @@ clusters: []
 #    ansible_group: k8s_workers
 #    pre_hook: playbooks/hooks/k8s-drain.yml
 #    post_hook: playbooks/hooks/k8s-uncordon.yml
+#  - name: proxy                      # keepalived/VRRP pair: holder of the VIP last, always rebooted, health-gated
+#    ansible_group: proxies
+#    vip: 10.0.10.10
+#    order: vip_holder_last
+#    reboot: always                   # never | if_required | always
+#    health_check: playbooks/hooks/vrrp-health.yml   # its settings: vip_port, health_services, health_containers
 
 # Keychain items (login keychain, account = $USER). Values are never stored in Git.
 # Create one:  security add-generic-password -U -T /usr/bin/security -a "$USER" -s <service> -w

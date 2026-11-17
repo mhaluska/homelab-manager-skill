@@ -319,6 +319,12 @@ class GuardConfigTests(unittest.TestCase):
         out = guard.decide(guard.evaluate(cmd, "/tmp"))
         return out["hookSpecificOutput"]["permissionDecision"] if out else None
 
+    def test_reboot_policy_asks(self):  # issue 39: reboot=always|if_required on any playbook
+        self.assertEqual(self.d("ansible-playbook site.yml -e reboot=always"), "ask")
+        self.assertEqual(self.d("ansible-playbook site.yml -e reboot=if_required"), "ask")
+        self.assertIsNone(self.d("ansible-playbook site.yml -e reboot=never"))
+        self.assertIsNone(self.d("ansible-playbook playbooks/patch-linux.yml --check -e reboot=always"))
+
     def test_snapshot_delete_and_rollback_ask(self):  # issue 37
         self.assertEqual(self.d("python3 /p/pve_snapshot.py delete web01 --name prepatch-20261117"), "ask")
         self.assertEqual(self.d("python3 /p/pve_snapshot.py rollback 101 --name prepatch-20261117"), "ask")

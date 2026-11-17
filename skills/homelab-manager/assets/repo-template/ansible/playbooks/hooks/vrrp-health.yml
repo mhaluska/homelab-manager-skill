@@ -1,0 +1,65 @@
+# Cluster health check for patch-linux.yml (-e health_check=playbooks/hooks/vrrp-health.yml): a keepalived /
+# VRRP cluster, e.g. a pair of reverse proxies. Runs on the node just patched, with sudo; any failed check
+# stops the roll before the next node. Read-only. Settings (homelab.yaml clusters: entry, passed with -e,
+# or group_vars):
+#   vip                 the virtual IP (required)
+#   vip_port            TCP port that must answer on the VIP from this Mac (default 443; '' skips the check)
+#   health_services     units that must be active (default: keepalived)
+#   health_containers   containers that must run and not restart-loop (optional; container_engine: docker|podman)
+#   health_retries / health_delay   how long to wait for the node to settle (default 20 × 6 s)
+#   vrrp_settle         seconds VRRP gets to elect a master once keepalived runs (default 10)
+- name: Services active (keepalived, …)
+  ansible.builtin.command: systemctl is-active {{ item }}
+  loop: "{{ health_services | default(['keepalived']) }}"
+  register: hm_svc
+  until: hm_svc.stdout == 'active'
+  retries: "{{ health_retries | default(20) }}"
+  delay: "{{ health_delay | default(6) }}"
+  changed_when: false
+
+- name: Containers running
+  ansible.builtin.command: >-
+    {{ container_engine | default('docker') }} inspect -f '{{ '{{' }}.State.Running{{ '}}' }} {{ '{{' }}.RestartCount{{ '}}' }}' {{ item }}
+  loop: "{{ health_containers | default([]) }}"
+  register: hm_ct
+  until: hm_ct.stdout is search('^true ')
+  retries: "{{ health_retries | default(20) }}"
+  delay: "{{ health_delay | default(6) }}"
+  changed_when: false
+
+- name: Containers not restart-looping (restart count stable for one interval)
+  ansible.builtin.command: >-
+    {{ container_engine | default('docker') }} inspect -f '{{ '{{' }}.State.Running{{ '}}' }} {{ '{{' }}.RestartCount{{ '}}' }}' {{ item.item }}
+  loop: "{{ hm_ct.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+    pause: "{{ health_delay | default(6) }}"
+  register: hm_ct2
+  failed_when: hm_ct2.stdout != item.stdout
+  changed_when: false
+
+- name: Let VRRP settle
+  ansible.builtin.pause:
+    seconds: "{{ vrrp_settle | default(10) }}"
+
+- name: The VIP is held by exactly one cluster node
+  ansible.builtin.shell: ip -o addr show | grep -cF ' {{ vip }}/' || true
+  delegate_to: "{{ item }}"
+  loop: "{{ ansible_play_hosts_all }}"
+  register: hm_vip_now
+  changed_when: false
+
+- ansible.builtin.assert:
+    that: holders | length == 1
+    fail_msg: "VIP {{ vip }} is held by {{ holders | length }} nodes ({{ holders | join(', ') or 'none' }}): VRRP isn't settled."
+  vars:
+    holders: "{{ hm_vip_now.results | rejectattr('stdout', 'equalto', '0') | map(attribute='item') | list }}"
+
+- name: The VIP answers (from this Mac)
+  ansible.builtin.wait_for:
+    host: "{{ vip }}"
+    port: "{{ vip_port | default(443) }}"
+    timeout: "{{ (health_retries | default(20) | int) * (health_delay | default(6) | int) }}"
+  delegate_to: localhost
+  become: false
+  when: (vip_port | default(443) | string) | length > 0

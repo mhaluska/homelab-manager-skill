@@ -41,7 +41,8 @@ class InitComponentsTests(unittest.TestCase):
         self.assertTrue((p / "skill_issues.md").exists())
         self.assertFalse((p / "tofu").exists())
         self.assertFalse((p / "packer").exists())
-        self.assertFalse((p / "ansible/playbooks/hooks").exists())
+        self.assertFalse((p / "ansible/playbooks/hooks/k8s-drain.yml").exists())  # kubernetes only
+        self.assertTrue((p / "ansible/playbooks/hooks/vrrp-health.yml").exists())  # any cluster (#39)
         self.assertFalse((p / "ansible/inventory/managed/group_vars/windows.yml").exists())
         comps = json.loads(yq(".components", p / "homelab.yaml"))
         self.assertEqual(comps["ansible"], True)

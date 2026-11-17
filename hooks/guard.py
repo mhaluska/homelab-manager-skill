@@ -381,7 +381,7 @@ def check_ansible_playbook(tok: list[str]) -> list[tuple[str, str]]:
         return []
     text = " ".join(tok)
     playbooks = " ".join(Path(t).name for t in tok if t.endswith((".yml", ".yaml")))
-    if HIGH_IMPACT_PLAYBOOK.search(playbooks) or re.search(r"reboot\w*\s*[=:]\s*(true|yes|1)", text, re.I):
+    if HIGH_IMPACT_PLAYBOOK.search(playbooks) or re.search(r"reboot\w*\s*[=:]\s*(true|yes|1|always|if_required)\b", text, re.I):
         return [(ASK, "High-impact playbook run (patching/reboot/removal) — not in --check mode.")]
     return []
 

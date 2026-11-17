@@ -28,12 +28,19 @@ services whose processes still map deleted binaries or libraries: they run the o
      set `patch_exclude: [kubelet, kubeadm, kubectl]` in that group's `group_vars/<group>.yml`
      (the playbook excludes them on dnf and holds them on apt). Never set it as a play var or
      with `-e` scoped wrongly — play vars override group_vars.
+     Other clusters (keepalived/VRRP proxies, DNS pairs, DB replicas) pass their entry's settings the same way:
+     `-e reboot=always -e health_check=playbooks/hooks/vrrp-health.yml -e order=vip_holder_last -e vip=<ip>`
+     (plus `-e snapshot=true` for Proxmox guests). The node holding the VIP goes last, so the VIP moves once;
+     after each node the health check (services, optional containers not restart-looping, exactly one VIP
+     holder, the VIP answering from this Mac) must pass, or the roll stops there. A cluster without a
+     ready-made check: write `playbooks/hooks/<name>-health.yml` like vrrp-health.yml (retry, then fail).
    - **Proxmox nodes** — never via this playbook (it refuses hosts with `patch_requires_approval`):
      use "Patch Proxmox nodes" below, one node at a time, each node an explicit approval.
    - **Critical singletons** the user cares about (DNS, the Git server, the gateway): ask
      whether to include them, and patch them last.
 3. Plan for the user: hosts per batch, security-only or full, reboot policy.
-   Reboots default **off** (`allow_reboot=false`); the run reports `reboot_pending` with the reason and
+   Reboots default **off** (`reboot=never`; `if_required` reboots when needed, `always` every host — old
+   name `allow_reboot=true` = `if_required`); the run reports `reboot_pending` with the reason and
    `restart_pending`. Offer `-e restart_services=true` (restarts those services, except dbus and logind, when
    the host isn't rebooted anyway): no reboot needed, but each service restarts briefly.
    Proxmox guests: offer a pre-patch snapshot (`-e snapshot=true -e hm_scripts=$HM/scripts`): a disk-only
@@ -43,7 +50,7 @@ services whose processes still map deleted binaries or libraries: they run the o
 5. Run: `ansible-playbook playbooks/patch-linux.yml -e target=<group> [-e security_only=true]`.
    The playbook stops on the first failure (`max_fail_percentage: 0`) and checks failed
    systemd units and `health_services` after each host.
-6. Reboots: a separate, approved run with `-e allow_reboot=true`, one cluster member at a
+6. Reboots: a separate, approved run with `-e reboot=if_required` (or the cluster's `reboot`), one cluster member at a
    time (`serial: 1` is the default; never raise it for cluster groups). Wait for health
    checks to pass before the next host — the playbook does this.
 7. Re-run `check-updates.yml` to verify, commit `discovery/updates.json`, report.

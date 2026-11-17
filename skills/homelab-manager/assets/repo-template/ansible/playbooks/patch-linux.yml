@@ -1,28 +1,72 @@
 # Rolling Linux patching with health checks.
 #
-#   ansible-playbook playbooks/patch-linux.yml -e target=<group|host> [-e security_only=true] [-e allow_reboot=true]
-#                    [-e restart_services=true] [-e snapshot=true -e hm_scripts=$HM/scripts]
+#   ansible-playbook playbooks/patch-linux.yml -e target=<group|host> [-e security_only=true]
+#       [-e reboot=never|if_required|always] [-e restart_services=true]
+#       [-e snapshot=true -e hm_scripts=$HM/scripts]
+#       [-e pre_hook=… -e post_hook=… -e health_check=…] [-e order=vip_holder_last -e vip=<ip>]
 #
-# Safe defaults: one host at a time (serial 1), stop at the first failure, NO reboots
-# unless allow_reboot=true. A reboot is needed for a newer kernel than the running one (also on plain Debian,
-# which has no /var/run/reboot-required), needs-restarting -r or the reboot-required flag. Services still
-# using replaced binaries or libraries are reported as restart_pending; restart_services=true restarts them
-# (except restart_exclude) when the host is not rebooted anyway.
+# Safe defaults: one host at a time (serial 1), stop at the first failure, NO reboots.
+# reboot: never (default), if_required (old name: allow_reboot=true) or always (e.g. an app cluster that
+# should come back from a clean boot). A reboot is required for a newer kernel than the running one (also on
+# plain Debian, which has no /var/run/reboot-required), needs-restarting -r or the reboot-required flag.
+# Services still using replaced binaries or libraries are reported as restart_pending; restart_services=true
+# restarts them (except restart_exclude) when the host is not rebooted anyway.
 # snapshot=true: a disk-only Proxmox snapshot of each guest (pve_snapshot.py create, name snapshot_name,
-# default prepatch-<date>) right before it is updated; the guest is the inventory short name, or the host
-# var proxmox_vmid. Needs hm_scripts (the skill's scripts directory). Remove the snapshots after a successful
-# run with pve_snapshot.py delete (the user's yes) — they keep growing. For groups listed under `clusters:` in homelab.yaml, keep
-# serial 1 and set pre_hook/post_hook (drain/uncordon) — never patch a cluster in parallel.
-# Hook paths are relative to ansible/ (as written in homelab.yaml), e.g.
-#   -e pre_hook=playbooks/hooks/k8s-drain.yml -e post_hook=playbooks/hooks/k8s-uncordon.yml
-# Hooks run WITHOUT sudo (become: false): typically kubectl on this Mac via delegate_to: localhost.
+# default prepatch-<date>) right before it is updated; the guest is the inventory short name or the host var
+# proxmox_vmid. Needs hm_scripts (the skill's scripts directory). Remove the snapshots after a successful run
+# with pve_snapshot.py delete (the user's yes): they keep growing.
+#
+# Clusters (`clusters:` in homelab.yaml): never in parallel, keep serial 1, pass the cluster's settings:
+#   pre_hook / post_hook  task files run before/after each node, WITHOUT sudo (kubectl on this Mac: drain/uncordon)
+#   health_check          task file run on each node after it is back (with sudo); it retries itself, and a
+#                         failure stops the roll, e.g. playbooks/hooks/vrrp-health.yml (keepalived/VRRP)
+#   order: vip_holder_last + vip   the node holding the VIP is patched last, so it fails over only once
+# Task file paths are relative to ansible/ (as written in homelab.yaml).
 # Packages listed in `patch_exclude` (set it in the group's group_vars, e.g. kubelet/kubeadm/kubectl
 # for Kubernetes nodes) are never upgraded: dnf exclude on RHEL, apt hold on Debian.
 # Not a play var on purpose — play vars would override group_vars.
 # Hosts with patch_requires_approval: true (group_vars/proxmox_nodes.yml) are refused unless listed in
 # -e patch_approved=<host,…>.
-- name: Patch Linux hosts
+- name: Order the hosts (order=vip_holder_last puts the node holding the VIP last)
   hosts: "{{ target | default('__no_target__') }}"
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Refuse to run without an explicit target
+      ansible.builtin.assert:
+        that: target is defined and target | length > 0
+        fail_msg: "Pass -e target=<group or host>."
+      run_once: true
+
+    - name: order=vip_holder_last needs the VIP
+      ansible.builtin.assert:
+        that: vip is defined and vip | length > 0
+        fail_msg: "Pass -e vip=<address> with order=vip_holder_last."
+      run_once: true
+      when: (order | default('')) == 'vip_holder_last'
+
+    - name: Does this node hold the VIP?
+      ansible.builtin.shell: ip -o addr show | grep -cF ' {{ vip }}/' || true
+      register: hm_vip
+      changed_when: false
+      check_mode: false
+      when: (order | default('')) == 'vip_holder_last'
+
+    - name: Patch order
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups: hm_patch_order
+      loop: "{{ (ansible_play_hosts_all | reject('in', holders) | list) + holders }}"  # keeps inventory order
+      vars:
+        holders: >-
+          {{ ansible_play_hosts_all | map('extract', hostvars)
+             | selectattr('hm_vip.stdout', 'defined') | selectattr('hm_vip.stdout', 'ne', '0')
+             | map(attribute='inventory_hostname') | list }}
+      run_once: true
+      changed_when: false
+
+- name: Patch Linux hosts
+  hosts: hm_patch_order
   serial: "{{ patch_serial | default(1) }}"
   max_fail_percentage: 0
   any_errors_fatal: true
@@ -30,6 +74,7 @@
   vars:
     security_only: false
     allow_reboot: false
+    reboot: "{{ 'if_required' if allow_reboot | bool else 'never' }}"
     restart_services: false
     snapshot: false
     snapshot_name: "prepatch-{{ now().strftime('%Y%m%d') }}"
@@ -37,10 +82,10 @@
     restart_exclude: [dbus.service, dbus-broker.service, systemd-logind.service]
 
   pre_tasks:
-    - name: Refuse to run without an explicit target
+    - name: reboot is never, if_required or always
       ansible.builtin.assert:
-        that: target is defined and target | length > 0
-        fail_msg: "Pass -e target=<group or host>."
+        that: reboot in ['never', 'if_required', 'always']
+        fail_msg: "reboot={{ reboot }}: use never, if_required or always."
       run_once: true
 
     - name: snapshot=true needs the skill's scripts
@@ -121,11 +166,11 @@
     - name: Reboot required, services still running replaced code
       ansible.builtin.include_tasks: tasks/restart-check.yml
 
-    - name: Reboot (only with allow_reboot=true)
+    - name: Reboot (reboot=always, or if_required and needed)
       ansible.builtin.reboot:
         reboot_timeout: 900
         msg: "Reboot by homelab-manager patching"
-      when: needs_reboot | bool and allow_reboot | bool
+      when: reboot == 'always' or (reboot == 'if_required' and needs_reboot | bool)
       register: rebooted
 
     - name: Restart services still running replaced code (only with restart_services=true)
@@ -165,6 +210,11 @@
         apply:
           become: false
       when: post_hook is defined
+
+    - name: Cluster health check (the roll stops here if the node isn't healthy)
+      ansible.builtin.include_tasks:
+        file: "{{ [playbook_dir, '..', health_check] | path_join }}"  # absolute paths win
+      when: health_check is defined
 
     - name: Result
       ansible.builtin.debug:
