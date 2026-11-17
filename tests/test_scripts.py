@@ -1088,6 +1088,91 @@ class OnboardingTests(unittest.TestCase):  # issue 20
         self.assertEqual(check_env.el8_without_interpreter(inv), [])
 
 
+class PveNodePlanTests(unittest.TestCase):  # issue 23
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import pve_node_plan
+        self.p = pve_node_plan
+        node = lambda n, mem, used, status="online": {"node": n, "status": status, "mem_gib": mem, "mem_used_gib": used}
+        g = lambda vmid, kind, conf, mem=4, status="running", **kw: {
+            "vmid": vmid, "type": kind, "name": f"g{vmid}", "node": "pve1", "status": status, "template": False,
+            "mem_gib": mem, "config": conf, **kw}
+        self.inv = {
+            "collected_at": "t", "cluster": {"name": "c", "quorate": 1},
+            "nodes": [node("pve1", 64, 40), node("pve2", 64, 20), node("pve3", 32, 8)],
+            "storage": [{"storage": "ceph", "node": n, "shared": True} for n in ("pve1", "pve2", "pve3")]
+                       + [{"storage": "local-zfs", "node": "pve1", "shared": False},
+                          {"storage": "local", "node": "pve1", "shared": False}],
+            "guests": [
+                g(101, "vm", {"scsi0": "ceph:vm-101-disk-0,size=32G", "ide2": "none,media=cdrom", "onboot": 1,
+                              "startup": "order=1"}, mem=16),
+                g(102, "vm", {"scsi0": "ceph:vm-102-disk-0", "ide2": "local:iso/x.iso,media=cdrom"}),
+                g(103, "vm", {"scsi0": "local-zfs:vm-103-disk-0", "startup": "order=2"}),
+                g(104, "vm", {"scsi0": "ceph:vm-104-disk-0", "hostpci0": "0000:01:00"}),
+                g(105, "lxc", {"rootfs": "ceph:subvol-105-disk-0", "mp0": "/srv/data,mp=/data"}),
+                g(106, "lxc", {"rootfs": "ceph:subvol-106-disk-0"}, mem=2),
+                g(107, "vm", {"scsi0": "ceph:vm-107-disk-0"}, hastate="started"),
+                g(108, "vm", {"scsi0": "ceph:vm-108-disk-0"}, status="stopped"),
+                {**g(9000, "vm", {"scsi0": "ceph:base"}), "template": True},
+                {**g(201, "vm", {"scsi0": "ceph:vm-201"}), "node": "pve2"},
+            ]}
+
+    def actions(self, plan):
+        return {r["vmid"]: (r["action"], r["target"]) for r in plan["guests"]}
+
+    def test_shared_storage_guests_migrate_and_spread(self):
+        plan, blockers = self.p.make_plan(self.inv, "pve1")
+        self.assertEqual(blockers, [])
+        acts = self.actions(plan)
+        self.assertEqual(acts[101], ("migrate", "pve2"))        # 16 GiB: pve2 36/64=56% beats pve3 24/32=75%
+        self.assertEqual(acts[106], ("migrate", "pve3"))        # pve3 10/32=31% beats pve2 (36+2)/64=59%
+        self.assertEqual(acts[102][0], "stop")                  # local ISO pins it
+        self.assertEqual(acts[103][0], "stop")
+        self.assertEqual(acts[104][0], "stop")                  # passthrough
+        self.assertEqual(acts[105][0], "stop")                  # bind mount
+        self.assertEqual(acts[107][0], "ha")
+        self.assertEqual(acts[108][0], "stays-stopped")
+        self.assertNotIn(9000, acts)
+        self.assertNotIn(201, acts)
+        self.assertEqual(plan["stop_order"], [105, 104, 102, 103])  # unordered first (reverse startup order)
+        self.assertIn("ide2 on local", next(r for r in plan["guests"] if r["vmid"] == 102)["reason"])
+        self.assertTrue(next(r for r in plan["guests"] if r["vmid"] == 101)["onboot"])
+
+    def test_capacity_and_no_migrate(self):
+        plan, _ = self.p.make_plan(self.inv, "pve1", max_pct=40)
+        self.assertEqual(self.actions(plan)[101][0], "stop")     # 16 GiB fits nowhere below 40 %
+        self.assertIn("no node has room", next(r for r in plan["guests"] if r["vmid"] == 101)["reason"])
+        plan, _ = self.p.make_plan(self.inv, "pve1", migrate=False)
+        self.assertNotIn("migrate", {a for a, _ in self.actions(plan).values()})
+
+    def test_blockers(self):
+        self.inv["nodes"][2]["status"] = "offline"
+        self.inv["cluster"]["quorate"] = 0
+        _, blockers = self.p.make_plan(self.inv, "pve1")
+        self.assertTrue(any("not quorate" in b for b in blockers))
+        self.assertTrue(any("pve3" in b for b in blockers))
+        plan, blockers = self.p.make_plan(self.inv, "nope")
+        self.assertEqual(plan, {})
+
+    def test_cli_writes_plan_only_without_blockers(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        run("init_repo.py", str(d), "--components", "proxmox,ansible", cwd=d)
+        (d / "discovery/proxmox.json").write_text(json.dumps(self.inv))
+        r = run("pve_node_plan.py", "pve1", cwd=d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("migrate → pve2", r.stdout)
+        plan = json.loads((d / "discovery/pve-patch-pve1.json").read_text())
+        self.assertEqual(plan["node"], "pve1")
+        (d / "discovery/pve-patch-pve1.json").unlink()
+        self.inv["cluster"]["quorate"] = 0
+        (d / "discovery/proxmox.json").write_text(json.dumps(self.inv))
+        r = run("pve_node_plan.py", "pve1", cwd=d)
+        self.assertEqual(r.returncode, 4)
+        self.assertIn("Do NOT patch", r.stdout)
+        self.assertFalse((d / "discovery/pve-patch-pve1.json").exists())
+
+
 class FixedIssuesTests(unittest.TestCase):
     """#12: reported entries fixed by the installed release are pointed out and can be resolved."""
 

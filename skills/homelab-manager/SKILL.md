@@ -224,6 +224,7 @@ Scripts (all in `$HM/scripts/`):
 | `check_env.py [--keychain] [--json]` | tools, SSH agent, keychain self-test, secrets readable, Proxmox TLS, EL8 Python | — |
 | `with_secrets.py <names…> -- <cmd>` | run a command with keychain secrets in env, output redacted | — |
 | `proxmox_inventory.py [--details]` / `--next-vmid vms\|lxc [--ip --vlan]` | read-only Proxmox snapshot + summary table (`--details`: configs, guest IPs) / VMID for a new guest | `discovery/proxmox.json` |
+| `pve_node_plan.py <node> [--max-mem-pct 85] [--no-migrate]` | read-only plan for patching one Proxmox node: migrate, HA, stop/restore per guest | `discovery/pve-patch-<node>.json` |
 | `nmap_scan.py <targets> [--profile ping\|services\|os] [--only-live]` | scope-checked scan | `discovery/network.json` |
 | `drift_report.py [--tofu-json F]` | Proxmox ↔ OpenTofu ↔ Ansible ↔ network | `discovery/drift.md` |
 | `tofu_to_inventory.py` | OpenTofu output → Ansible inventory | `ansible/inventory/managed/tofu_hosts.yml` |

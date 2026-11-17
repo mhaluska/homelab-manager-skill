@@ -20,6 +20,14 @@
   `ansible_python_interpreter` when the installed ansible-core (2.17+) can no longer use EL8's Python 3.6.
   `references/ansible.md` has a new "Onboarding existing hosts" section: draft, probe OS and Python with
   `raw`, OS-based groups, target Python per ansible-core version and the EL8 fix (`python3.12` from AppStream).
+- Proxmox node patching ([#23](https://github.com/mhaluska/homelab-manager-skill/issues/23)): new read-only
+  `pve_node_plan.py <node> [--max-mem-pct 85] [--no-migrate]` decides per guest of the node: live/restart
+  migration (running, shared storage only, no passthrough or local ISO), placed largest memory first on the
+  node with the lowest relative memory use and never above the limit; HA node maintenance for HA-managed
+  guests; clean shutdown and restore for the rest; stopped guests stay stopped. It shows autostart and
+  storage per guest, refuses while the cluster isn't quorate or another node is offline, and writes
+  `discovery/pve-patch-<node>.json`. `proxmox_inventory.py --details` now records passthrough devices,
+  EFI/TPM/unused disks and the startup order it needs.
 
 ## 0.12.4 — 2026-11-17
 - Fix ([#18](https://github.com/mhaluska/homelab-manager-skill/issues/18)): `nmap_scan.py --profile os` no longer
