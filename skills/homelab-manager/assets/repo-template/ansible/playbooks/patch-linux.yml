@@ -1,13 +1,17 @@
 # Rolling Linux patching with health checks.
 #
 #   ansible-playbook playbooks/patch-linux.yml -e target=<group|host> [-e security_only=true] [-e allow_reboot=true]
-#                    [-e restart_services=true]
+#                    [-e restart_services=true] [-e snapshot=true -e hm_scripts=$HM/scripts]
 #
 # Safe defaults: one host at a time (serial 1), stop at the first failure, NO reboots
 # unless allow_reboot=true. A reboot is needed for a newer kernel than the running one (also on plain Debian,
 # which has no /var/run/reboot-required), needs-restarting -r or the reboot-required flag. Services still
 # using replaced binaries or libraries are reported as restart_pending; restart_services=true restarts them
-# (except restart_exclude) when the host is not rebooted anyway. For groups listed under `clusters:` in homelab.yaml, keep
+# (except restart_exclude) when the host is not rebooted anyway.
+# snapshot=true: a disk-only Proxmox snapshot of each guest (pve_snapshot.py create, name snapshot_name,
+# default prepatch-<date>) right before it is updated; the guest is the inventory short name, or the host
+# var proxmox_vmid. Needs hm_scripts (the skill's scripts directory). Remove the snapshots after a successful
+# run with pve_snapshot.py delete (the user's yes) — they keep growing. For groups listed under `clusters:` in homelab.yaml, keep
 # serial 1 and set pre_hook/post_hook (drain/uncordon) — never patch a cluster in parallel.
 # Hook paths are relative to ansible/ (as written in homelab.yaml), e.g.
 #   -e pre_hook=playbooks/hooks/k8s-drain.yml -e post_hook=playbooks/hooks/k8s-uncordon.yml
@@ -27,6 +31,8 @@
     security_only: false
     allow_reboot: false
     restart_services: false
+    snapshot: false
+    snapshot_name: "prepatch-{{ now().strftime('%Y%m%d') }}"
     # never restarted automatically (a reboot or the user's own step instead): restarting these drops sessions
     restart_exclude: [dbus.service, dbus-broker.service, systemd-logind.service]
 
@@ -36,6 +42,13 @@
         that: target is defined and target | length > 0
         fail_msg: "Pass -e target=<group or host>."
       run_once: true
+
+    - name: snapshot=true needs the skill's scripts
+      ansible.builtin.assert:
+        that: hm_scripts is defined
+        fail_msg: "Pass -e hm_scripts=<skill dir>/scripts with snapshot=true (pve_snapshot.py)."
+      run_once: true
+      when: snapshot | bool
 
     - name: Refuse hosts that need their own procedure (patch_requires_approval, e.g. Proxmox nodes)
       ansible.builtin.assert:
@@ -53,6 +66,18 @@
       ansible.builtin.command: systemctl list-units --state=failed --no-legend --plain
       register: failed_before
       changed_when: false
+
+    - name: Pre-patch snapshot (snapshot=true)
+      ansible.builtin.command:
+        argv: [python3, "{{ hm_scripts }}/pve_snapshot.py", create, "{{ proxmox_vmid | default(inventory_hostname_short) }}",
+               --name, "{{ snapshot_name }}"]
+        chdir: "{{ playbook_dir }}/../.."
+      delegate_to: localhost
+      become: false
+      changed_when: "'done' in snap.stdout"
+      register: snap
+      when: snapshot | bool
+      check_mode: false
 
     - name: Cluster pre-hook (drain, maintenance mode, …)
       ansible.builtin.include_tasks:

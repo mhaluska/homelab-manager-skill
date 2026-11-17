@@ -107,7 +107,7 @@ calls. Use `qm`/`pct`/`pvesh` writes only when OpenTofu can't do it, and say why
 ## 4. Approval list
 
 Ask first, and wait for an explicit yes, before:
-- deleting anything, or any plan that **replaces** (destroy + create) a resource
+- deleting anything (snapshots too), a snapshot rollback, or any plan that **replaces** (destroy + create) a resource
 - storage changes: new/removed storage, moving or shrinking disks, ZFS/LVM operations
 - reboots and shutdowns, patching with `allow_reboot=true`, and anything on Proxmox nodes themselves
 - cluster-level operations: HA, quorum, migration, Kubernetes drain, rolling changes
@@ -221,6 +221,7 @@ Scripts (all in `$HM/scripts/`):
 | `check_env.py [--keychain] [--json]` | tools, SSH agent, keychain self-test, secrets readable, Proxmox TLS, EL8 Python, unpushed commits | — |
 | `with_secrets.py <names…> -- <cmd>` | run a command with keychain secrets in env, output redacted | — |
 | `proxmox_inventory.py [--details]` / `--next-vmid vms\|lxc [--ip --vlan]` | read-only Proxmox snapshot + summary table (`--details`: configs, guest IPs) / VMID for a new guest | `discovery/proxmox.json` |
+| `pve_snapshot.py list\|create\|delete\|rollback <guest…> [--name N]` | guest snapshots around patching (delete/rollback: approval) | — |
 | `pve_node_plan.py <node> [--max-mem-pct 85] [--no-migrate]` | read-only plan for patching one Proxmox node: migrate, HA, stop/restore per guest | `discovery/pve-patch-<node>.json` |
 | `nmap_scan.py <targets> [--profile ping\|services\|os] [--only-live]` | scope-checked scan | `discovery/network.json` |
 | `drift_report.py [--tofu-json F]` / `--stale` | Proxmox ↔ OpenTofu ↔ Ansible ↔ network / is drift.md out of date | `discovery/drift.md` |

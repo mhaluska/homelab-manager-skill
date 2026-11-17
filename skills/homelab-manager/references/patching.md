@@ -36,6 +36,9 @@ services whose processes still map deleted binaries or libraries: they run the o
    Reboots default **off** (`allow_reboot=false`); the run reports `reboot_pending` with the reason and
    `restart_pending`. Offer `-e restart_services=true` (restarts those services, except dbus and logind, when
    the host isn't rebooted anyway): no reboot needed, but each service restarts briefly.
+   Proxmox guests: offer a pre-patch snapshot (`-e snapshot=true -e hm_scripts=$HM/scripts`): a disk-only
+   snapshot `prepatch-<date>` of each guest right before its update (guest = inventory short name or host var
+   `proxmox_vmid`; needs snapshot-capable storage and the provisioning token).
 4. Approval (the guard asks for any patch run outside `--check`).
 5. Run: `ansible-playbook playbooks/patch-linux.yml -e target=<group> [-e security_only=true]`.
    The playbook stops on the first failure (`max_fail_percentage: 0`) and checks failed
@@ -44,6 +47,13 @@ services whose processes still map deleted binaries or libraries: they run the o
    time (`serial: 1` is the default; never raise it for cluster groups). Wait for health
    checks to pass before the next host — the playbook does this.
 7. Re-run `check-updates.yml` to verify, commit `discovery/updates.json`, report.
+8. Snapshots: once the hosts are verified, offer to remove them — they grow with every write and slow the
+   guest's storage: `pve_snapshot.py list <guests>`, then `pve_snapshot.py delete <guests> --name prepatch-<date>`
+   (the user's yes; the guard asks). A failed update: `pve_snapshot.py rollback <guest> --name …` (the user's yes;
+   the changes since are lost, and a VM is left stopped — start it afterwards).
+
+Snapshots by hand ("snapshot web01 before I change it"): `pve_snapshot.py create <guest…> [--name …]`;
+`list` is read-only.
 
 ## Patch Proxmox nodes
 

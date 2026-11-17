@@ -319,6 +319,12 @@ class GuardConfigTests(unittest.TestCase):
         out = guard.decide(guard.evaluate(cmd, "/tmp"))
         return out["hookSpecificOutput"]["permissionDecision"] if out else None
 
+    def test_snapshot_delete_and_rollback_ask(self):  # issue 37
+        self.assertEqual(self.d("python3 /p/pve_snapshot.py delete web01 --name prepatch-20261117"), "ask")
+        self.assertEqual(self.d("python3 /p/pve_snapshot.py rollback 101 --name prepatch-20261117"), "ask")
+        self.assertIsNone(self.d("python3 /p/pve_snapshot.py create web01 db01"))
+        self.assertIsNone(self.d("python3 /p/pve_snapshot.py list web01"))
+
     def test_widening_scan_scope_asks(self):
         self.assertEqual(self.d("python3 /p/config_set.py 'network.authorized_ranges+=10.0.30.0/24'"), "ask")
         self.assertEqual(self.d("python3 /p/config_set.py 'network.authorized_ranges=[\"10.0.30.0/24\"]'"), "ask")

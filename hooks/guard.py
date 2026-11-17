@@ -54,6 +54,8 @@ RULES: list[tuple[re.Pattern, str, str]] = [
                 r"restore|importdisk|import|disk|move[-_]disk|move[-_]volume|rollback|delsnapshot|template|unlock|mount)\b"), ASK,
      "Changes a Proxmox VM/container directly (outside OpenTofu)."),
     (re.compile(r"\bpvesh\s+(create|set|delete)\b"), ASK, "Writes to the Proxmox API."),
+    (re.compile(r"pve_snapshot\.py\b[^\n;&|]*\s(delete|rollback)\b"), ASK,
+     "Deletes a guest snapshot or rolls a guest back to one (its changes since are lost)."),
     (re.compile(r"\bpvecm\s+(add|addnode|delnode|expected|create|updatecerts)\b"), ASK, "Changes Proxmox cluster membership/quorum."),
     (re.compile(r"\bha-manager\s+(add|remove|set|migrate|relocate|crm-command)\b"), ASK, "Changes Proxmox HA configuration."),
     (re.compile(r"\bpvesm\s+(add|remove|set|free|alloc)\b"), ASK, "Changes Proxmox storage."),

@@ -42,15 +42,37 @@ class PVE:
         with urllib.request.urlopen(req, context=self.ctx, timeout=30) as r:
             return json.load(r).get("data")
 
-    def get(self, path: str, **params):
+    def _write(self, method: str, path: str, **params):
+        data = urllib.parse.urlencode(params).encode() if params else None
+        req = urllib.request.Request(self.base + path, data=data, method=method,
+                                     headers={**self.headers, "Content-Type": "application/x-www-form-urlencoded"})
+        with urllib.request.urlopen(req, context=self.ctx, timeout=60) as r:
+            return json.load(r).get("data")
+
+    def write(self, method: str, path: str, **params):
+        """POST/PUT/DELETE (provisioning token): same error handling as get()."""
+        return self.get(path, _method=method, **params)
+
+    def get(self, path: str, _method: str = "GET", **params):
         try:
-            return self._get(path, **params)
+            return self._get(path, **params) if _method == "GET" else self._write(_method, path, **params)
         except urllib.error.HTTPError as e:
             if e.code == 401:
                 raise SystemExit(f"Proxmox API refused {path} (401): the token {self.token_id!r} or its secret is "
                                  "wrong, or the token was removed/expired. Check the keychain item (check_env.py).")
+            if e.code == 403 and _method != "GET":
+                raise SystemExit(f"Proxmox API refused {_method} {path} (403): the token {self.token_id!r} lacks the "
+                                 "privilege (HomelabProvisioner role in docs/proxmox-tokens.md, granted to the token "
+                                 "and its user).")
             if e.code == 403:
                 raise SystemExit(f"Proxmox API refused {path} (403). " + self.permission_hint())
+            if _method != "GET":
+                try:
+                    detail = json.loads(e.read() or b"{}")
+                except ValueError:
+                    detail = {}
+                msg = detail.get("errors") or detail.get("message") or e.reason
+                raise SystemExit(f"Proxmox API refused {_method} {path} ({e.code}): {msg}")
             raise
         except urllib.error.URLError as e:
             hint = (" — run check_env.py: it tells whether the CA is trusted only in the macOS keychain"

@@ -1,4 +1,6 @@
 """Tests for init_repo.py (components, upgrades) and issues.py (skill-problem tracker)."""
+import contextlib
+import io
 import json
 import os
 import re
@@ -1171,6 +1173,72 @@ class OnboardingTests(unittest.TestCase):  # issue 20
         self.assertEqual(check_env.el8_without_interpreter(inv), ["a"])
         inv["linux"] = {"children": ["el9"]}
         self.assertEqual(check_env.el8_without_interpreter(inv), [])
+
+
+class PveSnapshotTests(unittest.TestCase):  # issue 37
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import pve_snapshot
+        import proxmox_inventory
+        self.s = pve_snapshot
+        self.pve = proxmox_inventory.PVE("https://pve.example:8006", "homelab@pve!rw=s3cret", None)
+        self.snaps = {101: [{"name": "current"}, {"name": "old", "snaptime": 1}]}
+        self.calls = []
+
+        def get(path, _method="GET", **params):
+            self.calls.append((_method, path, params))
+            if path == "/cluster/resources":
+                return [{"type": "qemu", "vmid": 101, "name": "web01", "node": "pve1"},
+                        {"type": "lxc", "vmid": 901, "name": "dns", "node": "pve2"},
+                        {"type": "qemu", "vmid": 9050, "name": "tpl", "node": "pve1", "template": 1},
+                        {"type": "storage", "id": "x"}]
+            if path.endswith("/status"):
+                return {"status": "stopped", "exitstatus": "OK"}
+            if path.endswith("/snapshot") and _method == "GET":
+                return self.snaps.get(int(path.split("/")[4]), [{"name": "current"}])
+            return "UPID:pve1:1"
+        self.pve.get = get
+
+    def test_resolves_guests_by_vmid_or_name(self):
+        gs = self.s.find_guests(self.pve, ["web01", "901"])
+        self.assertEqual([(g["vmid"], g["type"], g["node"]) for g in gs], [(101, "qemu", "pve1"), (901, "lxc", "pve2")])
+        with self.assertRaises(SystemExit):
+            self.s.find_guests(self.pve, ["tpl"])
+        with self.assertRaises(SystemExit):
+            self.s.find_guests(self.pve, ["nope"])
+
+    def test_create_waits_for_task_and_skips_existing(self):
+        g = self.s.find_guests(self.pve, ["web01"])[0]
+        self.assertEqual([s["name"] for s in self.s.snapshots(self.pve, g)], ["old"])
+        self.s.wait(self.pve, "pve1", "UPID:pve1:1", "x")
+        self.assertIn(("GET", "/nodes/pve1/tasks/UPID:pve1:1/status", {}), self.calls)
+
+    def test_apply(self):
+        gs = self.s.find_guests(self.pve, ["web01", "dns"])
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.s.apply(self.pve, "create", gs, "prepatch-20261117")
+            self.s.apply(self.pve, "create", gs[:1], "old")        # exists: kept, nothing sent
+            self.s.apply(self.pve, "delete", gs[:1], "old")
+        writes = [(m, p, prm) for m, p, prm in self.calls if m != "GET"]
+        self.assertEqual(writes[0], ("POST", "/nodes/pve1/qemu/101/snapshot",
+                                     {"snapname": "prepatch-20261117", "description": "homelab-manager prepatch-20261117",
+                                      "vmstate": 0}))
+        self.assertEqual(writes[1][1], "/nodes/pve2/lxc/901/snapshot")
+        self.assertNotIn("vmstate", writes[1][2])
+        self.assertEqual(writes[2], ("DELETE", "/nodes/pve1/qemu/101/snapshot/old", {}))
+        self.assertEqual(len(writes), 3)
+        self.assertIn("already exists", out.getvalue())
+        with self.assertRaises(SystemExit):
+            self.s.apply(self.pve, "rollback", gs[1:], "missing")
+
+    def test_failed_task_raises(self):
+        self.pve.get = lambda path, **_: {"status": "stopped", "exitstatus": "snapshot feature is not available"}
+        with self.assertRaises(SystemExit) as e:
+            self.s.wait(self.pve, "pve1", "UPID", "create snapshot")
+        self.assertIn("not available", str(e.exception))
+
+    def test_default_name_is_valid(self):
+        self.assertRegex(self.s.default_name(), self.s.NAME_RE)
 
 
 class PveNodePlanTests(unittest.TestCase):  # issue 23
