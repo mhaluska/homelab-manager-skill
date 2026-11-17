@@ -3,7 +3,7 @@
 # Writes discovery/updates.json, merged: hosts not checked this run keep their last result
 # (each host has its own collected_at). A host that fails or can't be reached gets an entry with `error`
 # (and `last_ok_at`, when its last good result was), so a gap is visible instead of silently missing.
-# Safe to run any time.
+# Safe to run any time. A subset: -e target=<group|host> (or -l <host>: the result is still written).
 - name: Pending updates on Linux
   hosts: "{{ target | default('linux') }}"
   gather_facts: false
@@ -133,16 +133,22 @@
           reboot_required: "{{ win_upd.reboot_required | default(false) }}"
       when: update_error is not defined
 
+# Runs on the checked hosts, writing once on this Mac: a `hosts: localhost` play would be skipped by
+# --limit (-l <host>), losing the result (GitHub issue #48).
 - name: Write discovery/updates.json
-  hosts: localhost
+  hosts: "{{ target | default('linux') }}:{{ windows_target | default('windows') }}"
   gather_facts: false
+  become: false
   vars:
     updates_file: "{{ playbook_dir }}/../../discovery/updates.json"
     checked: "{{ groups['all'] | map('extract', hostvars) | selectattr('hm_checked', 'defined') | list }}"
     reported: "{{ checked | selectattr('update_summary', 'defined') | rejectattr('update_error', 'defined') | map(attribute='inventory_hostname') | list }}"
     failed: "{{ checked | map(attribute='inventory_hostname') | reject('in', reported) | list }}"
   tasks:
+    # one write for all hosts, on this Mac (the file is local)
     - name: Read the previous results
+      run_once: true
+      delegate_to: localhost
       ansible.builtin.stat:
         path: "{{ updates_file }}"
       register: prev_updates
@@ -151,6 +157,8 @@
     # so `-e target=<group>` doesn't drop the rest. Hosts gone from the inventory are dropped; entries
     # from older files get the file's collected_at.
     - name: Merge with this run
+      run_once: true
+      delegate_to: localhost
       ansible.builtin.set_fact:
         updates_merged: >-
           {%- set prev = (lookup('ansible.builtin.file', updates_file) | from_json) if prev_updates.stat.exists else {} -%}
@@ -173,12 +181,16 @@
         now_utc: "{{ now(utc=true).isoformat() }}"
 
     - name: Write
+      run_once: true
+      delegate_to: localhost
       ansible.builtin.copy:
         dest: "{{ updates_file }}"
         content: "{{ updates_merged | to_nice_json }}\n"
         mode: "0644"
 
     - name: Hosts without a result
+      run_once: true
+      delegate_to: localhost
       ansible.builtin.debug:
         msg: "{% for h in failed %}{{ h }}: {{ hostvars[h].update_error | default('failed') }}{{ '; ' if not loop.last }}{% endfor %}"
       when: failed | length > 0

@@ -197,6 +197,20 @@
       "when": {"component": "ansible", "file_missing": "ansible/playbooks/docker-containers.yml"},
       "text": "New read-only playbooks/docker-containers.yml lists Docker/Podman containers and Kubernetes runtimes on Linux hosts into discovery/containers.json; the drift report matches container addresses instead of calling them unmanaged (#40).",
       "action": "Copy {template} into ansible/playbooks/, then follow references/discovery.md 'Containers'."
+    },
+    {
+      "version": "0.18.0",
+      "id": "check-updates-limit",
+      "kind": "template",
+      "when": {
+        "component": "ansible",
+        "file_lacks": [
+          "ansible/playbooks/check-updates.yml",
+          "delegate_to: localhost"
+        ]
+      },
+      "text": "check-updates.yml writes discovery/updates.json also when run with --limit (-l <host>); before, the result was lost (#48).",
+      "action": "Replace ansible/playbooks/check-updates.yml with {template}, carrying over any local edits (show the user the diff first)."
     }
   ]
 }
