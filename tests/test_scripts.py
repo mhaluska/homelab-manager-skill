@@ -1264,3 +1264,44 @@ class SkillProblemHookTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NmapInterfaceTests(unittest.TestCase):  # issue 18
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "skills/homelab-manager/scripts"))
+        import nmap_scan
+        self.n = nmap_scan
+
+    def test_parse_route(self):
+        direct = "   route to: 10.0.10.5\ndestination: 10.0.10.0\n  interface: en0\n      flags: <UP,DONE,CLONING>\n"
+        routed = "   route to: 10.0.20.5\n    gateway: 10.0.10.1\n  interface: en0\n      flags: <UP,GATEWAY,DONE,STATIC>\n"
+        self.assertEqual(self.n.parse_route(direct), ("en0", False))
+        self.assertEqual(self.n.parse_route(routed), ("en0", True))
+        self.assertEqual(self.n.parse_route(""), (None, False))
+
+    def test_probe_ip(self):
+        self.assertEqual(self.n.probe_ip("10.0.10.0/24"), "10.0.10.1")
+        self.assertEqual(self.n.probe_ip("10.0.10.5"), "10.0.10.5")
+        self.assertEqual(self.n.probe_ip("10.0.10.20-30"), "10.0.10.21")
+
+    def _xml(self, hosts):
+        rows = "".join(f'<host><status state="up" reason="{r}"/><address addr="{ip}" addrtype="ipv4"/>'
+                       + (f'<address addr="{m}" addrtype="mac"/>' if m else "") + "</host>" for ip, r, m in hosts)
+        p = Path(tempfile.mkdtemp()) / "s.xml"
+        p.write_text(f"<nmaprun>{rows}</nmaprun>")
+        return p
+
+    def test_proxy_arp_detected(self):
+        same = [(f"10.0.10.{i}", "arp-response", "AA:BB:CC:00:00:01") for i in range(1, 40)]
+        self.assertEqual(self.n.proxy_arp_mac(self._xml(same)), "aa:bb:cc:00:00:01")
+        real = [(f"10.0.10.{i}", "arp-response", f"AA:BB:CC:00:00:{i:02x}") for i in range(1, 40)]
+        self.assertIsNone(self.n.proxy_arp_mac(self._xml(real)))
+        few = same[:5]
+        self.assertIsNone(self.n.proxy_arp_mac(self._xml(few)))
+        nomac = [(f"10.0.10.{i}", "syn-ack", None) for i in range(1, 40)]
+        self.assertIsNone(self.n.proxy_arp_mac(self._xml(nomac)))
+
+    def test_live_hosts(self):
+        db = {"hosts": {"10.0.10.5": {}, "10.0.10.40": {}, "10.0.11.2": {}, "fe80::1": {}}}
+        self.assertEqual(self.n.live_hosts(db, ["10.0.10.0/24"]), ["10.0.10.5", "10.0.10.40"])
+        self.assertEqual(self.n.live_hosts(db, ["10.0.10.1-10"]), ["10.0.10.5"])

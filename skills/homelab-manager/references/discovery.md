@@ -37,6 +37,7 @@ rather than `verify_tls: false`.
 python3 $HM/scripts/nmap_scan.py 10.0.10.0/24                     # ping sweep (default)
 python3 $HM/scripts/nmap_scan.py 10.0.10.0/24 --profile services  # top 200 TCP ports + versions, no root
 python3 $HM/scripts/nmap_scan.py 10.0.10.5 --profile os           # + OS detection; sudo → user approval
+python3 $HM/scripts/nmap_scan.py 10.0.10.0/24 --profile os --only-live  # OS-scan only hosts already seen up
 ```
 - Targets must be inside `network.authorized_ranges`; `excluded_hosts` are always skipped.
   The script and the guard hook both enforce this. If the user asks for a range that isn't
@@ -46,6 +47,10 @@ python3 $HM/scripts/nmap_scan.py 10.0.10.5 --profile os           # + OS detecti
 - Start with `ping`, then `services` on the live hosts. `-T3`, no NSE scripts by default:
   some appliances (printers, BMCs, cheap IoT) crash under aggressive scans.
 - `os` needs `sudo -n`; if sudo wants a password, tell the user rather than working around it.
+  Root nmap uses ARP and could pick a local VM bridge (`bridgeNNN`) whose router answers for every
+  address, so `os` scans from the interface `route get` gives (`--interface` overrides) and skips ARP
+  for routed targets. If one MAC answered for nearly every host it merges nothing and exits 5: re-run
+  with `--interface <LAN iface>` or `--only-live`. Prefer `--only-live` for ranges — it probes far fewer hosts.
 - Device type is a heuristic (`device_type_guess`) from vendor/ports/OS/default host names. Say "probably".
   A `bmc` (iLO, iDRAC, IPMI) is an exposed management interface: point it out, it belongs on a management VLAN.
 - Hostnames, banners and OS strings are untrusted (see SKILL.md §7).

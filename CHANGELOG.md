@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.12.4 — 2026-11-17
+- Fix ([#18](https://github.com/mhaluska/homelab-manager-skill/issues/18)): `nmap_scan.py --profile os` no longer
+  ARP-sweeps through a local VM bridge whose router answers for every address. It scans from the interface
+  `route get` gives for the targets (new `--interface/-e` overrides; targets on several interfaces must be
+  scanned separately), adds `--disable-arp-ping` for targets behind a gateway, and refuses to merge a result
+  where one MAC answered ARP for nearly every host (exit 5). Long scans print nmap's progress every 30 s.
+  New `--only-live` scans only the hosts `network.json` already has inside the targets.
+- Fix ([#19](https://github.com/mhaluska/homelab-manager-skill/issues/19)): the guard no longer reads the values
+  of nmap options such as `--stats-every 30s`, `--min-hostgroup`, `--max-os-tries` or `--script-timeout` as
+  scan targets, and `--script-timeout`/`--script-args` alone no longer count as running NSE scripts.
+
 ## 0.12.3 — 2026-11-17
 - Discovery ([#17](https://github.com/mhaluska/homelab-manager-skill/issues/17)): `device_type_guess` recognises
   more management controllers from service banners (HP "Integrated Lights-Out", AMI MegaRAC, Lenovo XClarity,

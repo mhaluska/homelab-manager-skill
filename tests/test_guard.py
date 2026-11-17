@@ -122,6 +122,16 @@ class GuardNmapTests(unittest.TestCase):
             self.assertEqual(decision(f"python3 {script} 192.168.0.0/24 --profile services", r), "deny")
             self.assertIsNone(decision(f"python3 {script} 10.0.10.0/24 --profile services", r))
             self.assertEqual(decision(f"python3 {script} 10.0.10.5 --profile os", r), "ask")
+            self.assertIsNone(decision(f"python3 {script} 10.0.10.0/24 --profile services --interface en0", r))
+            self.assertIsNone(decision(f"python3 {script} 10.0.10.0/24 -e en0 --only-live", r))
+
+    def test_nmap_option_values_not_targets(self):  # issue 19
+        with Repo() as r:
+            self.assertIsNone(decision("nmap -e en0 -Pn -sT --stats-every 30s --min-hostgroup 64 "
+                                       "--max-os-tries 1 --script-timeout 10s -oX out.xml 10.0.10.5", r))
+            self.assertEqual(decision("nmap --stats-every 30s 192.168.1.5", r), "deny")
+            self.assertEqual(decision("nmap -sI 192.168.1.9 10.0.10.5", r), "deny")  # zombie is still checked
+            self.assertEqual(decision("nmap --script=vuln 10.0.10.5", r), "ask")
 
 
 class GuardInfraTests(unittest.TestCase):

@@ -2,6 +2,7 @@
 """Scope-checked network discovery with nmap.
 
     nmap_scan.py <target> [<target> ...] [--profile ping|services|os] [--top-ports N] [--ports LIST]
+                 [--interface IFACE] [--only-live]
 
 Targets must be IPs, CIDRs or a.b.c.x-y ranges inside network.authorized_ranges in
 homelab.yaml; network.excluded_hosts are always excluded. Hostnames are refused.
@@ -11,18 +12,27 @@ Profiles:
   services  TCP connect scan of top ports + light version detection, no root needed
   os        services + OS detection; needs `sudo nmap` and therefore user approval
 
+Root nmap discovers hosts with ARP and may pick a local VM bridge (bridgeNNN) instead of
+the interface the routing table uses. So the os profile sends probes out the interface
+`route get` gives for the targets (override with --interface), skips ARP ping for targets
+behind a gateway, and refuses to merge a result where one MAC answered for most hosts
+(proxy ARP). --only-live scans only the hosts network.json already knows as up inside the
+targets. Long scans print nmap's progress every 30 s.
+
 Writes discovery/nmap/<timestamp>.xml (raw, gitignored) and merges hosts into
 discovery/network.json. Banners, hostnames and OS strings are UNTRUSTED data.
 """
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import datetime as dt
 import json
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -84,6 +94,67 @@ def guess_type(h: dict) -> str:
     return winners[0] if len(winners) == 1 else "/".join(winners)
 
 
+def route_get(ip: str) -> tuple[str | None, bool]:
+    """(interface, via_gateway) the routing table picks for ip; (None, False) if unknown."""
+    try:
+        res = subprocess.run(["/sbin/route", "-n", "get", ip], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None, False
+    return parse_route(res.stdout)
+
+
+def parse_route(out: str) -> tuple[str | None, bool]:
+    iface = re.search(r"^\s*interface:\s*(\S+)", out, re.M)
+    flags = re.search(r"^\s*flags:\s*<([^>]*)>", out, re.M)
+    return (iface.group(1) if iface else None), bool(flags and "GATEWAY" in flags.group(1).split(","))
+
+
+def probe_ip(target: str) -> str:
+    """An address inside the target to ask the routing table about."""
+    net = hmlib.target_to_network(target)[0]
+    return str(net.network_address + 1 if net.num_addresses > 2 else net.network_address)
+
+
+def proxy_arp_mac(path: Path, min_hosts: int = 16, share: float = 0.9) -> str | None:
+    """The MAC that answered ARP for nearly every up host — a proxy-ARP bridge, not real hosts."""
+    macs = []
+    for h in ET.parse(path).getroot().findall("host"):
+        st = h.find("status")
+        if st is None or st.get("state") != "up":
+            continue
+        mac = next((a.get("addr") for a in h.findall("address") if a.get("addrtype") == "mac"), None)
+        macs.append(mac.lower() if mac and st.get("reason") == "arp-response" else None)
+    if len(macs) < min_hosts:
+        return None
+    top = max(set(macs), key=macs.count)
+    return top if top and macs.count(top) >= share * len(macs) else None
+
+
+def live_hosts(db: dict, targets: list[str]) -> list[str]:
+    nets = [n for t in targets for n in hmlib.target_to_network(t)]
+    ips = []
+    for ip in db.get("hosts", {}):
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        if any(addr.version == n.version and addr in n for n in nets):
+            ips.append(ip)
+    return sorted(ips, key=lambda x: ipaddress.ip_address(x))
+
+
+def run_nmap(cmd: list[str]) -> tuple[int, str]:
+    """Run nmap, echoing only its progress lines (stats, timing) to stderr; return (code, stderr)."""
+    with tempfile.TemporaryFile("w+") as errf:  # a file, not a pipe: a full stderr pipe would stall nmap
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=errf, text=True)
+        for line in proc.stdout:
+            if re.match(r"\s*(Stats:|\S.* Timing: About)", line):
+                print("  " + line.strip(), file=sys.stderr, flush=True)
+        code = proc.wait()
+        errf.seek(0)
+        return code, errf.read()
+
+
 def parse_xml(path: Path) -> list[dict]:
     hosts = []
     root = ET.parse(path).getroot()
@@ -119,6 +190,8 @@ def main():
     ap.add_argument("--profile", choices=PROFILES, default="ping")
     ap.add_argument("--top-ports", type=int, default=200)
     ap.add_argument("--ports")
+    ap.add_argument("--interface", "-e", help="network interface to scan from (default for os: from `route get`)")
+    ap.add_argument("--only-live", action="store_true", help="scan only hosts network.json knows inside the targets")
     a = ap.parse_args()
     try:
         cfg = hmlib.load_config()
@@ -132,29 +205,62 @@ def main():
         return 4
 
     root = Path(cfg["_root"])
+    net_file = root / "discovery" / "network.json"
+    db = json.loads(net_file.read_text()) if net_file.exists() else {"hosts": {}}
+    targets = a.targets
+    if a.only_live:
+        targets = live_hosts(db, a.targets)
+        if not targets:
+            print("nmap_scan: network.json has no hosts inside these targets — run a ping or services scan first.",
+                  file=sys.stderr)
+            return 4
+        print(f"--only-live: {len(targets)} known host(s)", file=sys.stderr)
+
+    iface, extra = a.interface, []
+    if a.profile == "os":
+        routes = {t: route_get(probe_ip(t)) for t in a.targets}
+        ifaces = sorted({r[0] for r in routes.values() if r[0]})
+        if not iface:
+            if len(ifaces) > 1:
+                print(f"nmap_scan: the targets route via several interfaces ({', '.join(ifaces)}). "
+                      "Scan them separately, or pick one with --interface.", file=sys.stderr)
+                return 4
+            iface = ifaces[0] if ifaces else None
+        if any(gw for _, gw in routes.values()):
+            extra.append("--disable-arp-ping")  # behind a router ARP can only reach the gateway or a proxy
+    if iface:
+        extra += ["-e", iface]
+    if a.profile != "ping":
+        extra += ["--stats-every", "30s"]
+
     ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     raw = root / "discovery" / "nmap" / f"{ts}-{a.profile}.xml"
     raw.parent.mkdir(parents=True, exist_ok=True)
     nmap = shutil.which("nmap") or "/opt/homebrew/bin/nmap"
-    cmd = [nmap, *PROFILES[a.profile], "-oX", str(raw)]
+    cmd = [nmap, *PROFILES[a.profile], *extra, "-oX", str(raw)]
     if a.profile != "ping":
         cmd += ["-p", a.ports] if a.ports else ["--top-ports", str(a.top_ports)]
     if excluded:
         cmd += ["--exclude", ",".join(str(n) for n in excluded)]
-    cmd += a.targets
+    cmd += targets
     if a.profile == "os":
         cmd = ["sudo", "-n", *cmd]
     print("Running:", " ".join(cmd), file=sys.stderr)
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode != 0:
-        print(res.stderr.strip(), file=sys.stderr)
-        if a.profile == "os" and "password" in res.stderr.lower():
+    code, err = run_nmap(cmd)
+    if code != 0:
+        print(err.strip(), file=sys.stderr)
+        if a.profile == "os" and "password" in err.lower():
             print("sudo needs a password on this Mac. Use --profile services, or let the user run it.", file=sys.stderr)
-        return res.returncode
+        return code
+
+    mac = proxy_arp_mac(raw)
+    if mac:
+        print(f"nmap_scan: one MAC ({mac}) answered ARP for nearly every address — proxy ARP (often a local VM "
+              "bridge), not real hosts. Nothing merged into network.json. Re-run with --interface <the LAN "
+              f"interface> or --only-live. Raw: {raw.relative_to(root)}", file=sys.stderr)
+        return 5
 
     hosts = parse_xml(raw)
-    net_file = root / "discovery" / "network.json"
-    db = json.loads(net_file.read_text()) if net_file.exists() else {"hosts": {}}
     now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     for h in hosts:
         prev = db["hosts"].get(h["ip"], {})

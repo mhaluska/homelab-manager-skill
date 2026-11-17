@@ -84,7 +84,7 @@ RULES: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"(\bcurl\b|\bwget\b|base64\s+(-d|--decode|-D))[^\n;&]*\|\s*(sudo\s+)?(ba|z|da|k)?sh\b"), ASK,
      "Pipes downloaded or decoded content into a shell."),
     (re.compile(r"\bsudo\s+nmap\b"), ASK, "Runs nmap as root (OS detection). Root nmap can do anything on this Mac."),
-    (re.compile(r"\bnmap\b[^\n;&|]*\s(--script\b|--script=|-sC\b|-A\b)"), ASK, "NSE scripts are intrusive."),
+    (re.compile(r"\bnmap\b[^\n;&|]*\s(--script(?=[\s=]|$)|-sC\b|-A\b)"), ASK, "NSE scripts are intrusive."),
     (re.compile(r"nmap_scan\.py\b[^\n;&|]*--profile[ =]os\b"), ASK, "OS detection needs `sudo nmap -O`."),
     (re.compile(r"(config_set\.py|\byq\b[^\n;&|]*\s-i\b)[^\n;&|]*authorized_ranges\s*\+?=(?!=)"), ASK,
      "Widens the scan scope (network.authorized_ranges): only for ranges the user owns, with their yes."),
@@ -99,7 +99,12 @@ NMAP_VALUE_OPTS = {"-p", "-oX", "-oN", "-oG", "-oA", "-oS", "-oM", "-iL", "--exc
                    "--data-length", "--min-rate", "--max-rate", "--min-parallelism", "--max-parallelism",
                    "--scan-delay", "--max-scan-delay", "--min-rtt-timeout", "--max-rtt-timeout", "--initial-rtt-timeout",
                    "--version-intensity", "--ttl", "--dns-servers", "--stylesheet", "--datadir", "--resume", "-M",
-                   "--port-ratio", "--exclude-ports", "--proxies", "--spoof-mac", "--mtu", "-iR"}
+                   "--port-ratio", "--exclude-ports", "--proxies", "--spoof-mac", "--mtu", "-iR",
+                   "--stats-every", "--min-hostgroup", "--max-hostgroup", "--max-os-tries", "--script-timeout",
+                   "--script-args-file", "--script-help", "--scanflags", "--servicedb", "--versiondb", "--data",
+                   "--data-string", "--ip-options"}
+# nmap_scan.py options whose next argument is a value, not a target
+NMAP_SCAN_VALUE_OPTS = {"--profile", "--ports", "--top-ports", "--out", "--interface", "-e"}
 
 SCRIPT_RUNNERS = {"bash", "sh", "zsh", "dash", "ksh", "python", "python3", "perl", "ruby", "node", "source", "."}
 INFRA_HINT = re.compile(r"\b(tofu|terraform|packer|ansible|ansible-playbook|nmap|qm|pct|pvesh|ssh|security)\b")
@@ -434,7 +439,7 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
         if script and script.name == "nmap_scan.py":
             args = tok[tok.index(next(t for t in tok if t.endswith("nmap_scan.py"))) + 1:]
             targets = [a for i, a in enumerate(args) if not a.startswith("-")
-                       and (i == 0 or args[i - 1] not in ("--profile", "--ports", "--out", "--top-ports"))]
+                       and (i == 0 or args[i - 1] not in NMAP_SCAN_VALUE_OPTS)]
             findings += check_nmap(targets, cwd, label="nmap_scan.py")
         elif script and depth < 2:
             try:
