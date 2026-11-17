@@ -25,8 +25,8 @@ pending. Sort by security count. Unreachable hosts are findings too. Commit the 
      set `patch_exclude: [kubelet, kubeadm, kubectl]` in that group's `group_vars/<group>.yml`
      (the playbook excludes them on dnf and holds them on apt). Never set it as a play var or
      with `-e` scoped wrongly — play vars override group_vars.
-   - **Proxmox nodes** — never via this playbook automatically: migrate guests off, patch,
-     reboot, verify quorum, next node — each node an explicit approval.
+   - **Proxmox nodes** — never via this playbook (it refuses hosts with `patch_requires_approval`):
+     use "Patch Proxmox nodes" below, one node at a time, each node an explicit approval.
    - **Critical singletons** the user cares about (DNS, the Git server, the gateway): ask
      whether to include them, and patch them last.
 3. Plan for the user: hosts per batch, security-only or full, reboot policy.
@@ -39,6 +39,25 @@ pending. Sort by security count. Unreachable hosts are findings too. Commit the 
    time (`serial: 1` is the default; never raise it for cluster groups). Wait for health
    checks to pass before the next host — the playbook does this.
 7. Re-run `check-updates.yml` to verify, commit `discovery/updates.json`, report.
+
+## Patch Proxmox nodes
+
+One node per run; the next only after the previous one is back and its guests are restored.
+1. `proxmox_inventory.py --details`, then `pve_node_plan.py <node>` (read-only). It refuses while the
+   cluster isn't quorate or another node is offline. Show the user the plan: per guest **migrate → node**
+   (running, all disks on shared storage, no passthrough or local ISO; spread by relative free memory,
+   never above `--max-mem-pct`, default 85), **ha** (HA node maintenance moves it), **stop** (pinned to
+   the node: shut down cleanly, started again after), **stays-stopped**. `--no-migrate` stops instead
+   of migrating. Migration needs compatible CPU types; HA guests on local disks need replication.
+2. Approval for the node and the plan.
+3. Upgrade only (guests keep running), reports `reboot_needed`:
+   `ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=<host>`
+4. Reboot run, a separate approval: add `-e allow_reboot=true`. The playbook checks the plan against
+   the live cluster (stale → refresh steps 1–2), records the guests in `discovery/pve-patch-<node>-state.json`,
+   moves them off, reboots, waits for quorum and Proxmox services, restores them, migrates them back
+   (`-e migrate_back=false` leaves them where they are) and asserts every guest that ran runs again.
+   A guest that won't shut down cleanly aborts the run before the reboot, with the stopped ones started again.
+5. Report: migrated, stopped/restored, still pending. Commit the plan and state files.
 
 ## Windows
 

@@ -39,6 +39,7 @@
   `patch-linux.yml` refuses hosts with `patch_requires_approval: true` (new `group_vars/proxmox_nodes.yml`
   sets it for Proxmox nodes) unless they are named in `-e patch_approved=<host,…>`, so a broad target
   can't patch and reboot a hypervisor; the upgrade advisor offers the pre-task to existing repos.
+  `references/patching.md` has a "Patch Proxmox nodes" procedure for both.
 
 ## 0.12.4 — 2026-11-17
 - Fix ([#18](https://github.com/mhaluska/homelab-manager-skill/issues/18)): `nmap_scan.py --profile os` no longer
