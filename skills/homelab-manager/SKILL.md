@@ -173,7 +173,8 @@ python3 $HM/scripts/issues.py add --title "…" --kind script|guard|instructions
   Actual, Evidence, optional Proposed fix; ideas get Summary, Context, Proposal, optional Benefit.
   Environment is added automatically. Write about the skill's behaviour, not the site. No secrets.
 - A stable `--key` (`script:drift_report:keyerror-backup_jobs`, `idea:patching:maintenance-window`)
-  updates the entry instead of duplicating.
+  updates the open entry instead of duplicating: a new title, kind or body replaces the old one
+  (no body given keeps the old details).
 - Tell the user in one line (`Noted SKILL-002 — a bug in drift_report.py; say "report skill issues" to send it`).
 - **"Report skill issues"**: `issues.py report --dry-run` checks the plugin repository's issues (open
   and closed: same key, already linked, similar title → **UPDATE** = a comment; else **CREATE**) and

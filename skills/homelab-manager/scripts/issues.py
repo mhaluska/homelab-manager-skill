@@ -515,24 +515,32 @@ def cmd_template(a, cfg=None):
 def cmd_add(a, cfg):
     path = issues_path(cfg)
     items = load(path)
+    given = a.body_file is not None or a.body is not None
     body = Path(a.body_file).read_text() if a.body_file else (a.body or "")
     body = "\n".join(hmlib.clean(l, 500) for l in body.splitlines())
+    existing = next((i for i in items if a.key and i.get("key") == a.key and i["status"] != "resolved"), None)
+    if existing and not given:
+        body = existing["body"]  # seen again without new details: keep them, refresh only Environment
     body, blank = structure(body, environment(cfg), a.kind)
     if blank:
         print(f"note: no {', '.join(blank)} yet — fill {'it' if len(blank) == 1 else 'them'} in "
               f"(issues.py template{' --kind ' + a.kind if is_idea(a.kind) else ''} shows what goes where)",
               file=sys.stderr)
-    if a.key:
-        for i in items:
-            if i.get("key") == a.key and i["status"] != "resolved":
-                i["last_seen"] = today()
-                i["last_seen_version"] = plugin_info().get("version", "")  # a fix must be newer than this
-                if body != i["body"]:
-                    i["seen_at"] = now_iso()  # changed → report again
-                    i["body"] = body
-                save(path, items)
-                print(f"{i['id']} already tracked (key {a.key}); last seen updated.")
-                return 0
+    if existing:
+        i, changed = existing, []
+        i["last_seen"] = today()
+        i["last_seen_version"] = plugin_info().get("version", "")  # a fix must be newer than this
+        title = hmlib.clean(a.title, 120)
+        for field, new in (("title", title), ("kind", a.kind), ("body", body)):
+            if new != i[field]:
+                i[field] = new
+                changed.append(field)
+        if changed:
+            i["seen_at"] = now_iso()  # changed → report again
+        save(path, items)
+        print(f"{i['id']} already tracked (key {a.key}); "
+              + (f"updated {', '.join(changed)}, " if changed else "") + "last seen updated.")
+        return 0
     nums = [int(m.group(1)) for i in items if (m := re.match(r"SKILL-(\d+)$", i["id"]))]
     item = {"id": f"SKILL-{max(nums + [0]) + 1:03d}", "title": hmlib.clean(a.title, 120), "kind": a.kind,
             "status": "open", "found": today(), "seen_at": now_iso(), "key": a.key or "",

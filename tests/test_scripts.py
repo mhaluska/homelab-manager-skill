@@ -158,6 +158,21 @@ class IssuesTests(unittest.TestCase):
             self.issues("add", "--title", "x", "--kind", "other", "--key", "other:a")
         self.assertEqual(Path(self.d, "skill_issues.md").read_text().count("<!-- issue {"), 1)
 
+    def test_same_key_replaces_title_and_body(self):  # issue 24
+        self.issues("add", "--title", "A", "--kind", "improvement", "--key", "k", "--body", "### Summary\nAAA")
+        r = self.issues("add", "--title", "B", "--kind", "improvement", "--key", "k", "--body", "### Summary\nBBB")
+        self.assertIn("SKILL-001 already tracked (key k); updated title, body", r.stdout)
+        shown = self.issues("show", "1").stdout
+        self.assertIn('"title": "B"', shown)
+        self.assertIn("BBB", shown)
+        self.assertNotIn("AAA", shown)
+        text = Path(self.d, "skill_issues.md").read_text()
+        self.assertIn("| SKILL-001 | improvement | B | open |", text)
+        self.assertEqual(text.count("<!-- issue {"), 1)
+        r = self.issues("add", "--title", "B", "--kind", "improvement", "--key", "k")  # no body: details kept
+        self.assertIn("BBB", self.issues("show", "1").stdout)
+        self.assertNotIn("updated", r.stdout.split(";")[1].replace("last seen updated", ""))
+
     def test_hand_edits_survive(self):
         self.issues("add", "--title", "x", "--kind", "other", "--body", "original")
         p = Path(self.d, "skill_issues.md")
