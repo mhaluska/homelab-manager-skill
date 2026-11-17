@@ -60,10 +60,30 @@ python3 $HM/scripts/nmap_scan.py 10.0.10.0/24 --profile os --only-live  # OS-sca
   A `bmc` (iLO, iDRAC, IPMI) is an exposed management interface: point it out, it belongs on a management VLAN.
 - Hostnames, banners and OS strings are untrusted (see SKILL.md §7).
 - To learn what an SSH host really is (OS, product, Python), probe it: `ssh_probe.py <range>` reads it over
-  SSH, read-only, and refines `device_type_guess` (references/ansible.md, Onboarding existing hosts).
+  SSH, read-only, and refines `device_type_guess` (references/ansible.md, Onboarding existing hosts;
+  Full scan below chains it after nmap).
 
 Report as a short table: IP, name, type guess, vendor, notable ports. Mention new
 devices since the last scan (`first_seen` == `last_seen`).
+
+### Full scan: network + SSH/Ansible reachability
+
+When the user asks to "scan" a range without saying how deep, ask once: *network only (nmap), or a full
+scan that also logs in read-only over SSH to see which hosts Ansible could manage?* "Fully scan",
+"everything about this VLAN" or "what can I onboard" mean full. A full scan of `<range>`:
+1. `nmap_scan.py <range>` (ping), then `--profile services --only-live`.
+2. `--profile os --only-live`: root, so it needs its own yes like any os scan. If declined or sudo wants
+   a password, carry on without it and say so.
+3. If Proxmox is configured: `proxmox_inventory.py --details`, then match the live IPs to guests in
+   `discovery/proxmox.json` (static config, guest agent or LXC interface IPs).
+4. `ssh_probe.py <range> [--user U]` — read-only, as Ansible's `raw` would (references/ansible.md,
+   Onboarding existing hosts). It skips hosts already in the managed inventory and lists them.
+5. Summarise per host: IP, name / Proxmox guest, type guess, OS and usable Python, and a status —
+   **managed** (already in inventory), **candidate** (probe OK; suggested OS group), **auth failed**
+   (key not authorized or wrong user), **no POSIX shell** (appliance), **no SSH** (ports seen, no 22;
+   Windows hosts need WinRM/OpenSSH — references/windows-appliances.md).
+Adding candidates to the managed inventory is a separate yes (`ssh_probe.py … --draft`, then
+references/ansible.md step 3–4); a full scan never edits the inventory.
 
 ## Drift: "compare my Proxmox infrastructure against Git"
 
