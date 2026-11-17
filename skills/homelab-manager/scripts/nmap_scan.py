@@ -73,8 +73,8 @@ HOSTNAME_HINTS = [  # (reverse-DNS name prefix, device type): factory default na
 
 
 def guess_type(h: dict) -> str:
-    """Score evidence: vendor (MAC OUI) and OS matches weigh 3, a default host name prefix (uap-, ilo-…) 2,
-    each open port's service/product 1.
+    """Score evidence: vendor (MAC OUI), OS matches and what ssh_probe.py read on the host weigh 3, a default
+    host name prefix (uap-, ilo-…) 2, each open port's service/product 1.
 
     One odd port (nmap mislabels plenty) shouldn't outvote the hardware vendor or OS. But a product name that
     identifies the box (Proxmox, TrueNAS, iDRAC… — STRONG_HINTS) isn't outvoted by Linux evidence: a later OS
@@ -83,6 +83,8 @@ def guess_type(h: dict) -> str:
     sources = [((h.get("vendor") or "").lower(), 3)]
     sources += [(o["name"].lower(), 3) for o in h.get("os", []) if o.get("name")]
     sources += [(f"{p.get('service') or ''} {p.get('product') or ''}".lower(), 1) for p in h.get("ports", [])]
+    probe = h.get("ssh_probe") or {}  # what the host said about itself over SSH (ssh_probe.py)
+    sources += [(str(probe.get(k) or "").lower(), 3) for k in ("product", "os_name") if probe.get(k)]
     scores: dict[str, int] = {}
     strong = False
     for name in h.get("hostnames") or []:  # weight 2: a default name beats one generic banner (Dropbear, …)

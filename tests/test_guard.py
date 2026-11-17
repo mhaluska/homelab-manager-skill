@@ -286,6 +286,15 @@ class DeviceGuessTests(unittest.TestCase):
         self.assertEqual(self.g({"vendor": None, "os": linux, "ports": cups}), "linux")  # weak hints still lose
 
 
+    def test_ssh_probe_evidence(self):  # GitHub issue #25: what the host says about itself over SSH
+        ssh = [{"service": "ssh", "product": "OpenSSH 9.2p1 Debian"}]
+        self.assertEqual(self.g({"vendor": None, "os": [], "ports": ssh}), "linux")
+        pve = {"product": "pve-manager/8.3.1/fb48e850ef9dde27", "os_name": "Debian GNU/Linux 12 (bookworm)"}
+        self.assertEqual(self.g({"vendor": None, "os": [], "ports": ssh, "ssh_probe": pve}), "hypervisor")
+        opn = {"ok": True, "product": "OPNsense 24.7.9", "kernel": "FreeBSD 14.1-RELEASE-p6"}
+        self.assertEqual(self.g({"vendor": None, "os": [], "ports": ssh, "ssh_probe": opn}), "firewall")
+        self.assertEqual(self.g({"vendor": None, "os": [], "ports": ssh, "ssh_probe": {"ok": False}}), "linux")
+
 class RedactTests(unittest.TestCase):
     def test_redact(self):
         s = "token=homelab@pve!rw=0123-abcd-secret"
