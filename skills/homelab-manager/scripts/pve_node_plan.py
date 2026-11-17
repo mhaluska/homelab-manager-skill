@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Plan patching one Proxmox VE node: what happens to each of its guests (read-only).
 
-    pve_node_plan.py <node> [--max-mem-pct 85] [--no-migrate] [--json]
+    pve_node_plan.py <node> [--site NAME] [--max-mem-pct 85] [--no-migrate] [--json]
 
 Reads discovery/proxmox.json (refresh it first: `proxmox_inventory.py --details`) and decides per guest:
   migrate      running, every disk on shared storage, no passthrough/local ISO, not HA-managed: live-migrated
@@ -14,6 +14,9 @@ Reads discovery/proxmox.json (refresh it first: `proxmox_inventory.py --details`
 Writes discovery/pve-patch-<node>.json, which patch-proxmox-node.yml executes after checking it against
 the live cluster, and prints the plan with each guest's autostart and storage. Exit 4 if the node can't be
 patched safely now (cluster not quorate, another node offline, unknown node, snapshot without --details).
+Another site (sites: in homelab.yaml): --site NAME reads discovery/proxmox-NAME.json and writes
+discovery/pve-patch-NAME-<node>.json (node names repeat across sites). A standalone node (no cluster) has no
+other node: every running guest is stopped for the reboot.
 """
 from __future__ import annotations
 
@@ -132,7 +135,8 @@ def make_plan(inv: dict, node: str, max_pct: float = 85, migrate: bool = True) -
                 row.update(action="migrate", target=t, reason="shared storage only")
             else:
                 row.update(action="stop", reason=f"no node has room below {max_pct:g}% memory")
-    plan = {"node": node, "created_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+    plan = {"node": node, "site": inv.get("site") or "", "standalone": not cluster and len(nodes) == 1,
+            "created_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
             "snapshot_at": inv.get("collected_at"), "max_mem_pct": max_pct, "guests": rows,
             # shut down in reverse startup order, start in startup order (as Proxmox does)
             "stop_order": [r["vmid"] for r in sorted(rows, key=lambda r: (-r["startup_order"], -r["vmid"]))
@@ -141,7 +145,11 @@ def make_plan(inv: dict, node: str, max_pct: float = 85, migrate: bool = True) -
 
 
 def render(plan: dict, blockers: list[str]) -> str:
-    lines = [f"Patch plan for node {plan['node']} (snapshot {plan.get('snapshot_at') or '?'}):", ""]
+    where = f" at site {plan['site']}" if plan.get("site") else ""
+    lines = [f"Patch plan for node {plan['node']}{where} (snapshot {plan.get('snapshot_at') or '?'}):", ""]
+    if plan.get("standalone"):
+        lines += ["Standalone node (no cluster): nowhere to move guests — every running guest is down during the "
+                  "reboot.", ""]
     lines.append(f"  {'VMID':>6} {'TYPE':<4} {'NAME':<20} {'STATUS':<8} {'ONBOOT':<6} {'HA':<3} "
                  f"{'STORAGE':<22} ACTION")
     for r in plan["guests"]:
@@ -166,22 +174,27 @@ def main():
     ap.add_argument("--max-mem-pct", type=float, default=85, help="never fill a target node above this (default 85)")
     ap.add_argument("--no-migrate", action="store_true", help="stop and restore every running guest instead")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--site", help="a node of this site (sites: in homelab.yaml; default: the default site)")
     a = ap.parse_args()
     try:
         cfg = hmlib.load_config()
+        st = hmlib.site(cfg, a.site)
     except hmlib.ConfigError as e:
         print(f"pve_node_plan: {e}", file=sys.stderr)
         return 3
     root = Path(cfg["_root"])
-    snap = root / "discovery" / "proxmox.json"
+    snap = hmlib.proxmox_snapshot_file(root, st["name"], st["default"])
     if not snap.exists():
-        print("pve_node_plan: no discovery/proxmox.json — run proxmox_inventory.py --details first.", file=sys.stderr)
+        print(f"pve_node_plan: no {snap.relative_to(root)} — run proxmox_inventory.py --details"
+              + (f" --site {st['name']}" if not st["default"] else "") + " first.", file=sys.stderr)
         return 4
-    plan, blockers = make_plan(json.loads(snap.read_text()), a.node, a.max_mem_pct, not a.no_migrate)
+    inv = json.loads(snap.read_text())
+    inv["site"] = st["name"]
+    plan, blockers = make_plan(inv, a.node, a.max_mem_pct, not a.no_migrate)
     if not plan:
         print("pve_node_plan: " + "; ".join(blockers), file=sys.stderr)
         return 4
-    out = root / "discovery" / f"pve-patch-{a.node}.json"
+    out = root / "discovery" / (f"pve-patch-{a.node}.json" if st["default"] else f"pve-patch-{st['name']}-{a.node}.json")
     if not blockers:
         out.write_text(json.dumps(plan, indent=2) + "\n")
     print(json.dumps({"plan": plan, "blockers": blockers}, indent=2) if a.json else render(plan, blockers))

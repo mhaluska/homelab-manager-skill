@@ -1823,6 +1823,27 @@ class PveNodePlanTests(unittest.TestCase):  # issue 23
         self.assertFalse((d / "discovery/pve-patch-pve1.json").exists())
 
 
+    def test_other_site_and_standalone_node(self):  # issue 52
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        run("init_repo.py", str(d), "--components", "proxmox,ansible", cwd=d)
+        run("config_set.py", "sites+={name: home}", "sites+={name: offsite, proxmox: {endpoint: 'https://x:8006'}}", cwd=d)
+        (d / "discovery/proxmox.json").write_text(json.dumps(self.inv))
+        alone = {**self.inv, "site": "offsite", "cluster": None, "nodes": self.inv["nodes"][:1]}
+        (d / "discovery/proxmox-offsite.json").write_text(json.dumps(alone))
+        r = run("pve_node_plan.py", "pve1", "--site", "offsite", cwd=d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("at site offsite", r.stdout)
+        self.assertIn("Standalone node", r.stdout)
+        plan = json.loads((d / "discovery/pve-patch-offsite-pve1.json").read_text())
+        self.assertEqual((plan["site"], plan["standalone"]), ("offsite", True))
+        self.assertEqual({r["action"] for r in plan["guests"]}, {"stop", "ha", "stays-stopped"})
+        self.assertFalse((d / "discovery/pve-patch-pve1.json").exists())   # the home node's plan is separate
+        self.assertEqual(run("pve_node_plan.py", "pve1", cwd=d).returncode, 0)
+        plan = json.loads((d / "discovery/pve-patch-pve1.json").read_text())
+        self.assertEqual((plan["site"], plan["standalone"]), ("home", False))
+
+
 class PveNodePlaybookUpgradeTests(unittest.TestCase):  # issue 23
     def test_new_playbook_offered_to_existing_repos(self):
         d = Path(tempfile.mkdtemp())

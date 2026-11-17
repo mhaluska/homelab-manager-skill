@@ -2,6 +2,9 @@
 #
 #   python3 $HM/scripts/proxmox_inventory.py --details && python3 $HM/scripts/pve_node_plan.py <node>
 #   ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=<inventory host> [-e allow_reboot=true]
+# A node of another site (inventory group site_<name>): --site <name> on both scripts; the plan is then
+# discovery/pve-patch-<site>-<node>.json. A standalone node (no cluster) has nowhere to move guests: every running
+# one is shut down for the reboot.
 #
 # Executes discovery/pve-patch-<node>.json (pve_node_plan.py; show it to the user first) after checking it
 # against the live cluster. Without allow_reboot=true it only upgrades packages (guests keep running) and
@@ -22,8 +25,12 @@
     allow_reboot: false
     migrate_back: true
     pve_node: "{{ proxmox_node_name | default(inventory_hostname_short) }}"
-    plan_file: "{{ playbook_dir }}/../../discovery/pve-patch-{{ pve_node }}.json"
-    state_file: "{{ playbook_dir }}/../../discovery/pve-patch-{{ pve_node }}-state.json"
+    hm_site: "{{ group_names | select('match', '^site_') | map('regex_replace', '^site_', '') | first | default('') }}"
+    # pve_node_plan.py --site <site> writes pve-patch-<site>-<node>.json; the default site pve-patch-<node>.json
+    plan_file: >-
+      {{ lookup('ansible.builtin.first_found', ([playbook_dir ~ '/../../discovery/pve-patch-' ~ hm_site ~ '-' ~ pve_node ~ '.json']
+         if hm_site else []) + [playbook_dir ~ '/../../discovery/pve-patch-' ~ pve_node ~ '.json']) }}
+    state_file: "{{ plan_file | regex_replace('\\.json$', '-state.json') }}"
     plan_ids: "{{ plan.guests | map(attribute='vmid') | list }}"
     plan_running: "{{ plan.guests | selectattr('status', 'equalto', 'running') | map(attribute='vmid') | list }}"
     by_action: "{{ plan.guests | groupby('action') | items2dict(key_name=0, value_name=1) }}"
@@ -43,8 +50,15 @@
 
     - name: Plan is for this node
       ansible.builtin.assert:
-        that: plan.node == pve_node
-        fail_msg: "{{ plan_file }} is for {{ plan.node }}, not {{ pve_node }} (set proxmox_node_name?)"
+        that: plan.node == pve_node and (not hm_site or plan.site | default('') == hm_site)
+        fail_msg: >-
+          {{ plan_file }} is for {{ plan.node }}{{ (' at site ' ~ plan.site) if plan.site | default('') else '' }},
+          not {{ pve_node }}{{ (' at site ' ~ hm_site) if hm_site else '' }} (set proxmox_node_name?)
+
+    - name: Part of a cluster?
+      ansible.builtin.stat:
+        path: /etc/pve/corosync.conf
+      register: pve_corosync
 
     - name: Cluster quorum
       ansible.builtin.command: pvecm status
@@ -52,6 +66,7 @@
       changed_when: false
       check_mode: false
       failed_when: pve_quorum.stdout is not search('Quorate:\s+Yes')
+      when: pve_corosync.stat.exists
 
     - name: Cluster resources now
       ansible.builtin.command: pvesh get /cluster/resources --output-format json
@@ -170,6 +185,7 @@
           until: pve_quorum_after.stdout is search('Quorate:\s+Yes')
           retries: 60
           delay: 10
+          when: pve_corosync.stat.exists
 
         - name: Wait for Proxmox services and onboot guests (pve-guests)
           ansible.builtin.command: systemctl is-active pve-cluster pvedaemon pveproxy pvestatd pve-guests
