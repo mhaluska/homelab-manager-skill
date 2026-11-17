@@ -66,7 +66,8 @@ class UpdateCheckTests(unittest.TestCase):
         new = json.loads(r.stdout)                                        # new repo: only the language, for Claude
         self.assertNotIn("systemMessage", new)
         self.assertIn("no site.language", new["hookSpecificOutput"]["additionalContext"])
-        subprocess.run(["yq", "-i", "del(.upgrades)", str(repo / "homelab.yaml")], check=True)
+        subprocess.run(["yq", "-i", 'del(.upgrades) | .site.language = "en" | .network.vlans = [{"id": 10, "name": "mgmt"}]',
+                        str(repo / "homelab.yaml")], check=True)
         doc = repo / "docs" / "proxmox-tokens.md"
         doc.write_text(doc.read_text().replace("HomelabAgentAudit", "Custom"))
         (repo / "discovery").mkdir(exist_ok=True)

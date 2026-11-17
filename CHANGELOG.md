@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.16.0 — 2026-11-17
+- Language: new `site.language` in homelab.yaml (setup asks, or takes the language the user writes in). Claude
+  replies and writes docs, commit messages and new code comments in it; identifiers and plugin-managed files
+  stay English. Skill issues are always English: `issues.py add`/`report` refuse non-English text (Claude
+  translates it), and the guard denies non-English `gh issue`/`gh pr` writes to the plugin repository.
+- English-only repository: a `Language check` workflow fails pull requests whose added lines, commit messages,
+  title or description aren't English (`.github/check_english.py`, heuristic; `lang: allow` marks deliberate
+  samples), and non-English issues get the `needs-english` label and a comment. See `CONTRIBUTING.md`.
+- Fix ([#35](https://github.com/mhaluska/homelab-manager-skill/issues/35)): `check-updates.yml`, `patch-linux.yml` and `patch-proxmox-node.yml` read facts via
+  `ansible_facts.*`; ansible-core 2.24 drops injected fact variables.
+- Fix ([#36](https://github.com/mhaluska/homelab-manager-skill/issues/36)): `check-updates.yml` counts EL security updates from `dnf check-update --security` packages only,
+  not header or metadata lines.
+- Fix ([#38](https://github.com/mhaluska/homelab-manager-skill/issues/38)): new `tasks/restart-check.yml` sees a reboot is due when a newer kernel is installed (plain
+  Debian has no `/var/run/reboot-required`), and lists services still running replaced binaries or libraries
+  (`restart_pending`). `patch-linux.yml -e restart_services=true` restarts them when the host isn't rebooted.
+- Secondary addresses ([#31](https://github.com/mhaluska/homelab-manager-skill/issues/31)): host var `hm_extra_ips` (VIPs, extra NICs) is listed in `drift_report.py` and
+  no longer reported as ghost hosts; `drift_report.py --stale` tells whether the report is older than its inputs.
+- Guest snapshots ([#37](https://github.com/mhaluska/homelab-manager-skill/issues/37)): new `pve_snapshot.py list|create|delete|rollback` (disk-only, waits for each Proxmox
+  task); `patch-linux.yml -e snapshot=true` snapshots each Proxmox guest right before updating it. Deleting
+  and rolling back need the user's yes (the guard asks).
+- Rolling cluster patches ([#39](https://github.com/mhaluska/homelab-manager-skill/issues/39)): `patch-linux.yml` takes `reboot=never|if_required|always`,
+  `order=vip_holder_last` with `vip` (the VIP moves once) and a `health_check` hook after each host; new
+  `hooks/vrrp-health.yml` for keepalived pairs. `clusters:` entries in homelab.yaml can name these settings.
+- VLAN names ([#34](https://github.com/mhaluska/homelab-manager-skill/issues/34)): optional `network.vlans` (id, name, cidr); `--vlan` accepts names, the drift report
+  labels addresses with them and `issues.py` redacts them. RouterOS: steps, no automatic collector.
+- BMCs ([#32](https://github.com/mhaluska/homelab-manager-skill/issues/32)): `bmc` inventory group and read-only `playbooks/bmc-info.yml` (Redfish: health, power, PSUs,
+  thermals, firmware → `discovery/bmc.json`); secret kind `user_password`. Redfish and IPMI power actions ask.
+- UniFi ([#33](https://github.com/mhaluska/homelab-manager-skill/issues/33)): `unifi` group (raw SSH only) and read-only `playbooks/unifi-info.yml` (controller Integration
+  API → `discovery/unifi.json`). Changes go through the controller; the guard asks for `set-inform`,
+  `syswrapper.sh`, firmware upgrades and API writes. Marking controller-managed devices in drift: later.
+- Existing repos: `init_repo.py --sync-managed --dry-run` lists the opt-in changes (new playbooks, CLAUDE.md
+  language rule, `site.language`, `network.vlans`).
+
 ## 0.15.0 — 2026-11-17
 - Full scan ([#29](https://github.com/mhaluska/homelab-manager-skill/issues/29)): `references/discovery.md` describes a full scan of a range — ping, services,
   `os --only-live` (its own yes), Proxmox guest mapping and a read-only `ssh_probe.py` — summarised per host as

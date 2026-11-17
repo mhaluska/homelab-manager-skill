@@ -93,6 +93,70 @@
       "when": {"config_empty": "git.auto_push"},
       "text": "New git.auto_push in homelab.yaml: push each verified commit to the remote (never force), so the repo is backed up off this Mac. check_env.py now reports commits not pushed to or not pulled from the upstream.",
       "action": "If the repo has a remote (`git remote -v`), ask the user whether to push after each verified commit, then `python3 {HM}/scripts/config_set.py 'git.auto_push=true'` (or `=false`)."
+    },
+    {
+      "version": "0.16.0",
+      "id": "site-language",
+      "kind": "config",
+      "when": {"config_empty": "site.language"},
+      "text": "New site.language in homelab.yaml: the language Claude replies in and writes docs, commit messages and new code comments in. Identifiers, plugin-managed files and skill issues stay English.",
+      "action": "Ask the user which language to use for this repo (default: the one they write in), then `python3 {HM}/scripts/config_set.py 'site.language=<code>'` (e.g. en, sk, de)."
+    },
+    {
+      "version": "0.16.0",
+      "id": "claude-md-language",
+      "kind": "template",
+      "when": {"file_lacks": ["CLAUDE.md", "site.language"]},
+      "text": "The repo's CLAUDE.md has a new house rule about site.language.",
+      "action": "Copy the 'Language:' bullet from {template} into CLAUDE.md, under the house rules."
+    },
+    {
+      "version": "0.16.0",
+      "id": "check-updates-restart-check",
+      "kind": "template",
+      "when": {"component": "ansible", "file_lacks": ["ansible/playbooks/check-updates.yml", "tasks/restart-check.yml"]},
+      "text": "check-updates.yml: facts via ansible_facts (ansible-core 2.24 drops injected fact variables, #35), correct EL security counts (#36), and a reboot check that sees newer kernels on plain Debian plus services still running replaced libraries (reboot_reasons, restart_pending, #38).",
+      "action": "Replace ansible/playbooks/check-updates.yml with {template} (re-apply any local edits) and copy ansible/playbooks/tasks/restart-check.yml from the same template directory."
+    },
+    {
+      "version": "0.16.0",
+      "id": "patch-linux-clusters",
+      "kind": "template",
+      "when": {"component": "ansible", "file_lacks": ["ansible/playbooks/patch-linux.yml", "hm_patch_order"]},
+      "text": "patch-linux.yml: reboot=never|if_required|always, VIP holder last (order=vip_holder_last), health_check hooks such as hooks/vrrp-health.yml (#39), Proxmox snapshots before each guest (-e snapshot=true, #37), restart_services, the restart check and ansible_facts (#35, #38).",
+      "action": "Replace ansible/playbooks/patch-linux.yml with {template} (re-apply any local edits) and copy ansible/playbooks/hooks/vrrp-health.yml and ansible/playbooks/tasks/restart-check.yml from the same template directory. Clusters in homelab.yaml can now name reboot, order, vip and health_check (see the commented example in the template homelab.yaml)."
+    },
+    {
+      "version": "0.16.0",
+      "id": "patch-proxmox-node-facts",
+      "kind": "template",
+      "when": {"component": "ansible", "file_lacks": ["ansible/playbooks/patch-proxmox-node.yml", "ansible_facts.kernel"]},
+      "text": "patch-proxmox-node.yml reads facts via ansible_facts (#35): injected fact variables like ansible_kernel go away in ansible-core 2.24.",
+      "action": "Replace ansible/playbooks/patch-proxmox-node.yml with {template}, or change ansible_kernel/ansible_distribution* to ansible_facts.kernel/ansible_facts.distribution* in it."
+    },
+    {
+      "version": "0.16.0",
+      "id": "network-vlans",
+      "kind": "config",
+      "when": {"config_empty": "network.vlans"},
+      "text": "Optional network.vlans in homelab.yaml names VLANs (id, name, cidr): --vlan accepts names, and the drift report labels addresses with them (#34).",
+      "action": "If the network has VLANs, offer to record them: `python3 {HM}/scripts/config_set.py 'network.vlans=[{id: 10, name: mgmt, cidr: 10.0.10.0/24}]'` with the user's values (see references/discovery.md 'VLAN names')."
+    },
+    {
+      "version": "0.16.0",
+      "id": "bmc-redfish",
+      "kind": "template",
+      "when": {"component": "appliances", "file_missing": "ansible/playbooks/bmc-info.yml"},
+      "text": "New read-only BMC support (#32): a bmc inventory group and playbooks/bmc-info.yml read health and firmware over Redfish into discovery/bmc.json.",
+      "action": "If the user has iLO/iDRAC/IPMI BMCs: copy {template} and ansible/inventory/managed/group_vars/bmc.yml from the template, add a `bmc` child group under appliances in hosts.yml, then follow references/windows-appliances.md 'BMCs'."
+    },
+    {
+      "version": "0.16.0",
+      "id": "unifi-controller",
+      "kind": "template",
+      "when": {"component": "appliances", "file_missing": "ansible/playbooks/unifi-info.yml"},
+      "text": "New read-only UniFi support (#33): a unifi inventory group (raw SSH only) and playbooks/unifi-info.yml reading the controller's Integration API into discovery/unifi.json. Device changes go through the controller.",
+      "action": "If the user has UniFi devices: copy {template} and ansible/inventory/managed/group_vars/unifi.yml from the template, add a `unifi` child group under appliances in hosts.yml, then follow references/windows-appliances.md 'Controller-managed devices'."
     }
   ]
 }

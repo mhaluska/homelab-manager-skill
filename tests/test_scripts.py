@@ -1073,6 +1073,8 @@ class UpgradeNotesTests(unittest.TestCase):
         self.make_old()
         run("config_set.py", "upgrades.reviewed=0.10.0", "vmid_scheme={vlan}{octet:03d}", cwd=self.d)
         Path(self.d, "discovery/drift.md").write_text("## Proxmox guests ↔ network\n")
+        subprocess.run(["yq", "-i", '.site.language = "en" | .network.vlans = [{"id": 10, "name": "mgmt"}]',
+                        str(self.cfg)], check=True)                     # config notes of 0.16.0 settled
         out = run("upgrade_notes.py", "--json", cwd=self.d).stdout
         ids = [n["id"] for n in json.loads(out)]
         self.assertEqual(ids, ["inventory-guest-ips"])
