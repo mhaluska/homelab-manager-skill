@@ -20,13 +20,19 @@ Install collections once: `ansible-galaxy collection install -r requirements.yml
 2. Draft: `python3 $HM/scripts/proxmox_to_inventory.py [--vlan 20] [--range 10.0.20.0/24] [--type lxc]`
    prints YAML for running Linux guests (IP from the static config, else the guest agent / LXC
    interfaces) in group `onboarding`, and lists what it skipped (Windows/other ostype, stopped, no IP,
-   already managed). Hosts outside Proxmox are added by hand. Show the list; adding hosts to the managed
-   inventory needs the user's yes. Then put them in `hosts.yml`.
-3. Reach and probe without Python (`raw` works on any target):
+   already managed). Show the list; adding hosts to the managed inventory needs the user's yes.
+3. Probe OS and Python, read-only, for these and for hosts nmap found outside Proxmox:
    ```bash
-   ansible onboarding -m raw -a '. /etc/os-release; echo "$ID $VERSION_ID"; ls /usr/bin/python3* 2>/dev/null'
+   python3 $HM/scripts/ssh_probe.py 10.0.20.0/24 [--user admin]   # SSH hosts network.json knows in the range
+   python3 $HM/scripts/ssh_probe.py 10.0.20.11 10.0.20.12 --draft  # given hosts → YAML draft by OS group
    ```
-   Unreachable = SSH key not authorized or wrong user (`ansible_user` in host/group vars); fix, don't skip.
+   Same as `raw` (no Python needed) over `ssh -T`, agent keys only, a timeout per host and a throwaway
+   known_hosts; csh root shells work. It shows the Python this ansible-core can use, the
+   `ansible_python_interpreter` to set when `python3` is too old, an OS group, and merges into network.json
+   (better `device_type_guess`). `auth failed` = key not authorized or wrong user: fix, don't skip.
+   `sh did not run` = no POSIX shell (RouterOS, switches): an appliance, not a Linux host.
+   Put the reviewed hosts in `hosts.yml`. The probe trusts no host key: `ansible.cfg` checks them, so before
+   the first run accept each once (`ssh -o StrictHostKeyChecking=accept-new <host> true`) on a network you trust.
 4. Move each host into an OS group (`debian`, `ubuntu`, `rocky`, or version-specific `el8`, `el9`) under
    `linux`, and drop the `onboarding` group. `ansible linux -m ansible.builtin.setup -a filter=ansible_distribution*`
    confirms Python modules work.

@@ -56,6 +56,8 @@ python3 $HM/scripts/nmap_scan.py 10.0.10.0/24 --profile os --only-live  # OS-sca
   Linux evidence. Proxmox's web UI port 8006 is not in the top 200: add `--ports 22,8006,…` to confirm nodes. Say "probably".
   A `bmc` (iLO, iDRAC, IPMI) is an exposed management interface: point it out, it belongs on a management VLAN.
 - Hostnames, banners and OS strings are untrusted (see SKILL.md §7).
+- To learn what an SSH host really is (OS, product, Python), probe it: `ssh_probe.py <range>` reads it over
+  SSH, read-only, and refines `device_type_guess` (references/ansible.md, Onboarding existing hosts).
 
 Report as a short table: IP, name, type guess, vendor, notable ports. Mention new
 devices since the last scan (`first_seen` == `last_seen`).
