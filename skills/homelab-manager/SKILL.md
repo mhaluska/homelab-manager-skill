@@ -221,7 +221,7 @@ Scripts (all in `$HM/scripts/`):
 | `init_repo.py --components … [--dry-run]` / `--add-components …` / `--sync-managed` | scaffold, extend, or update the repo after a plugin upgrade | repo files |
 | `check_env.py [--keychain] [--json]` | tools, SSH agent, keychain self-test, secrets readable, Proxmox TLS, EL8 Python, unpushed commits | — |
 | `with_secrets.py <names…> -- <cmd>` | run a command with keychain secrets in env, output redacted | — |
-| `proxmox_inventory.py [--details]` / `--next-vmid vms\|lxc [--ip --vlan]` | read-only Proxmox snapshot + summary table (`--details`: configs, guest IPs) / VMID for a new guest | `discovery/proxmox.json` |
+| `proxmox_inventory.py [--details] [--site N\|--all-sites]` / `--next-vmid vms\|lxc [--ip --vlan]` | read-only Proxmox snapshot + summary table (`--details`: configs, guest IPs; other sites: references/proxmox.md "Several sites") / VMID for a new guest | `discovery/proxmox[-<site>].json` |
 | `pve_snapshot.py list\|check\|create\|delete\|rollback <guest…> [--name N]` | guest snapshots around patching (check: can they be; delete/rollback: approval) | — |
 | `lxd_snapshot.py list\|check\|create\|delete\|restore <host…> [--name N]` | LXD/Incus instance snapshots (NAS; host vars lxd_host, lxd_snapshots) (delete/restore: approval) | — |
 | `pve_node_plan.py <node> [--max-mem-pct 85] [--no-migrate]` | read-only plan for patching one Proxmox node: migrate, HA, stop/restore per guest | `discovery/pve-patch-<node>.json` |

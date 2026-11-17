@@ -45,6 +45,10 @@ proxmox:
     read_only: proxmox-ro    # secret name below; role PVEAuditor on /
     provisioning: proxmox-rw # secret name below; custom role, see docs/proxmox-tokens.md
 
+sites: []                    # optional, for more than one location (references/proxmox.md "Several sites"):
+                             # [{name, label, ranges, proxmox}], the default site first; its Proxmox is the
+                             # proxmox: block above. Inventory hosts belong to a site via the group site_<name>.
+
 vmid_ranges:                 # keep IDs predictable; the skill picks the next free ID in range
   base_images: [9000, 9049]
   templates: [9050, 9999]

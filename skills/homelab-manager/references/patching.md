@@ -50,7 +50,8 @@ counts; the play's last task lists them. They are findings too: report them in t
    the host isn't rebooted anyway): no reboot needed, but each service restarts briefly.
    Offer a pre-patch snapshot (`-e snapshot=true -e hm_scripts=$HM/scripts`): a disk-only snapshot
    `prepatch-<date>` of each host right before its update. Proxmox guests: `pve_snapshot.py` (guest = inventory
-   short name or host var `proxmox_vmid`; needs snapshot-capable storage and the provisioning token). Hosts with
+   short name or host var `proxmox_vmid`; needs snapshot-capable storage and the provisioning token; a host in a
+   `site_<name>` group uses that site's Proxmox). One site at a time: `-e target='site_offsite:&linux'`. Hosts with
    the host var `lxd_host`: `lxd_snapshot.py` (see "LXD/Incus instances" below). Before anything else the run
    checks every target (`pve_snapshot.py check` / `lxd_snapshot.py check`, read-only, also by hand) and refuses
    with the list of hosts that can't be snapshotted: not a Proxmox guest and no `lxd_host`, a container with a

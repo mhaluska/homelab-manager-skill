@@ -108,6 +108,31 @@ changing anything, show the user the jobs (`jq .backup_jobs discovery/proxmox.js
   in `docs/proxmox-tokens.md` ("Backup jobs") — the user runs it on a node — or the GUI instead:
   Datacenter → Backup → the job → Edit → add the guests. Re-run `proxmox_inventory.py` and drift afterwards.
 
+## Several sites
+
+A site is a location: home, a rented server, family's house reached over VPN. One site needs nothing (no
+`sites:`). For more, list them in homelab.yaml, the default site first; its Proxmox stays the `proxmox:` block:
+```bash
+config_set.py 'sites+={name: home}'      # first time only: name the existing site
+config_set.py 'sites+={name: offsite, label: Rented server, ranges: [192.0.2.0/24], proxmox: {endpoint: "https://…:8006", tokens: {read_only: proxmox-offsite-ro, provisioning: proxmox-offsite-rw}}}'
+```
+- Name: lowercase letters, digits and `_` (it becomes the Ansible group `site_<name>`); the user chooses it
+  when adding the site — there is no rename yet. `label` is free text for reports. `ranges`: the site's
+  networks (the drift report labels devices there). `proxmox` (optional: a site may have only a NAS and a
+  router) takes the same keys as the `proxmox:` block, with its own tokens (docs/proxmox-tokens.md, run on
+  that site's Proxmox) and secrets entries.
+- Inventory: each host is in at most one `site_<name>` group (`hosts.yml`); none = the default site. Target a
+  site with Ansible patterns: `-e target='site_offsite:&linux'`. Site settings (DNS, NTP, mirrors) go in
+  `group_vars/site_<name>.yml`; set `ansible_group_priority: 10` there, so they win over OS groups on purpose.
+  `check_env.py` and the drift report flag hosts in two site groups and groups with no site in homelab.yaml.
+- Read-only: `proxmox_inventory.py --site offsite` → `discovery/proxmox-offsite.json` (`--all-sites` reads each
+  and carries on past an unreachable one); `proxmox_to_inventory.py --site offsite` drafts into `site_offsite`.
+  The drift report covers every site (VMIDs are shown as `<site>/<vmid>`: they repeat across sites).
+- `pve_snapshot.py --site offsite …`; patch-linux.yml uses the host's site by itself. `with_secrets.py <secret>`
+  connects to the site whose tokens name that secret.
+- Not yet: OpenTofu and Packer for other sites, VMID allocation per site, `pve_node_plan.py` / node patching
+  there. The drift report compares other sites by the `tofu` tag only.
+
 ## Cloud-init and SSH keys
 
 Keys come from `defaults.ssh_public_keys` (agent public keys). Cloud-init user data only

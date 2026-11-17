@@ -4,7 +4,7 @@ Discovery is read-only. Three pictures of the homelab are kept apart on purpose:
 
 | Picture | Where | Produced by |
 |---|---|---|
-| What is running | `discovery/proxmox.json`, `discovery/network.json`, `discovery/updates.json`, `discovery/containers.json` | scripts and playbooks below |
+| What is running | `discovery/proxmox.json` (other sites: `proxmox-<site>.json`), `discovery/network.json`, `discovery/updates.json`, `discovery/containers.json` | scripts and playbooks below |
 | What OpenTofu manages | OpenTofu state (local file or S3) | `tofu apply` |
 | What Git declares | `tofu/**/homelab.auto.tfvars`, `ansible/inventory/managed/` | you + the user |
 

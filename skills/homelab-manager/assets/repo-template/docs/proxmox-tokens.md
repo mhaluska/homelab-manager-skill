@@ -9,6 +9,10 @@ and to the token. Without the user ACL the tokens get nothing (403 on every call
 no password, so it cannot log in; only its tokens are used. Check a token's effective rights with
 `pveum user token permissions homelab@pve <tokenid>`.
 
+Several sites (`sites:` in homelab.yaml): run the same steps on each site's Proxmox, store its tokens under
+their own keychain items and secrets names (e.g. `proxmox-offsite-ro`), and name those in the site's
+`proxmox.tokens`.
+
 ## Read-only (discovery, drift)
 
 ```bash
