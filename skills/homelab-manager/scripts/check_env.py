@@ -2,6 +2,7 @@
 """Check that this Mac is ready to manage the homelab.
 
     check_env.py              tools + SSH agent + config + configured keychain items + Proxmox TLS
+                              + whether the repo is ahead of or behind its upstream (git.auto_push)
                               + Ansible targets whose Python the installed ansible-core can't use
     check_env.py --keychain   also run a keychain self-test (write, read, delete a dummy item)
     check_env.py --json       machine-readable output
@@ -292,12 +293,47 @@ def check_ansible_targets(cfg):
                        "group's group_vars (references/ansible.md, Onboarding existing hosts)"}]
 
 
+def git_sync_status(ahead: int | None, behind: int | None, upstream: str | None, auto_push: bool):
+    """Result for the repo's branch vs its upstream (counts as of the last fetch). None = nothing to say."""
+    if not upstream:
+        if not auto_push:
+            return None
+        return {"check": "git:upstream", "ok": False,
+                "detail": "git.auto_push is true but the branch has no upstream: add a remote and push once with "
+                          "`git push -u origin <branch>` (or set git.auto_push: false)"}
+    if behind:
+        return {"check": "git:upstream", "ok": False,
+                "detail": f"{behind} commit(s) on {upstream} not in this clone: `git pull --ff-only` before changing "
+                          "anything, or the next push is rejected"}
+    if ahead:
+        return {"check": "git:upstream", "ok": False if auto_push else None,
+                "detail": f"{ahead} commit(s) not pushed to {upstream}: not backed up off this Mac — `git push`"
+                          + ("" if auto_push else " (git.auto_push: true pushes after each verified commit)")}
+    return {"check": "git:upstream", "ok": True, "detail": f"in sync with {upstream} (as of the last fetch)"}
+
+
+def check_git_upstream(cfg):
+    root = Path(cfg["_root"]) if cfg else None
+    if not root or not shutil.which("git") or not (root / ".git").exists():
+        return []
+    auto_push = hmlib.get(cfg, "git.auto_push", False) is True
+    rc, so, _ = run(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=root)
+    upstream = so.strip() if rc == 0 else None
+    ahead = behind = None
+    if upstream:
+        rc, so, _ = run(["git", "rev-list", "--left-right", "--count", "HEAD...@{u}"], cwd=root)
+        if rc == 0 and len(so.split()) == 2:
+            ahead, behind = (int(x) for x in so.split())
+    r = git_sync_status(ahead, behind, upstream, auto_push)
+    return [r] if r else []
+
+
 def main(argv):
     results = check_tools() + check_ssh_agent() + check_gh() + check_keychain_unlocked()
     if "--keychain" in argv:
         results += check_keychain_selftest()
     cfg_results, cfg = check_config_and_secrets()
-    results += cfg_results + check_proxmox_tls(cfg) + check_ansible_targets(cfg)
+    results += cfg_results + check_proxmox_tls(cfg) + check_ansible_targets(cfg) + check_git_upstream(cfg)
     if "--json" in argv:
         print(json.dumps(results, indent=2))
     else:

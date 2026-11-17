@@ -1541,3 +1541,45 @@ class NmapInterfaceTests(unittest.TestCase):  # issue 18
         ping = self.n.merge_host(os_scan, {"ip": "10.0.10.2", "os": [], "ports": []}, "ping", "t4")
         self.assertEqual(ping["device_type_guess"], "hypervisor")
         self.assertEqual(ping["first_seen"], "t1")
+
+
+class GitUpstreamTests(unittest.TestCase):  # issue 27
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import check_env
+        self.ce = check_env
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d)
+        g = lambda *a, cwd: subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True, check=True)
+        self.git = g
+        g("init", "-q", "--bare", "-b", "main", str(self.d / "remote.git"), cwd=self.d)
+        self.repo = self.d / "repo"
+        g("clone", "-q", str(self.d / "remote.git"), str(self.repo), cwd=self.d)
+        for k, v in (("user.name", "t"), ("user.email", "t@example.test"), ("commit.gpgsign", "false")):
+            g("config", k, v, cwd=self.repo)
+        g("commit", "-q", "--allow-empty", "-m", "one", cwd=self.repo)
+        g("push", "-q", "-u", "origin", "main", cwd=self.repo)
+
+    def check(self, auto_push):
+        return self.ce.check_git_upstream({"_root": str(self.repo), "git": {"auto_push": auto_push}})
+
+    def test_in_sync_ahead_and_behind(self):
+        self.assertEqual(self.check(True)[0]["ok"], True)
+        self.git("commit", "-q", "--allow-empty", "-m", "two", cwd=self.repo)
+        r = self.check(False)[0]
+        self.assertIsNone(r["ok"])                                       # a hint, not a failure
+        self.assertIn("1 commit(s) not pushed to origin/main", r["detail"])
+        self.assertIn("git.auto_push: true", r["detail"])
+        self.assertIs(self.check(True)[0]["ok"], False)                  # auto_push should have pushed it
+        self.git("reset", "-q", "--hard", "HEAD~1", cwd=self.repo)
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD@{1}", cwd=self.repo)
+        r = self.check(False)[0]
+        self.assertIs(r["ok"], False)
+        self.assertIn("git pull --ff-only", r["detail"])
+
+    def test_no_upstream(self):
+        self.git("branch", "-q", "--unset-upstream", cwd=self.repo)
+        self.assertEqual(self.check(False), [])
+        r = self.check(True)[0]
+        self.assertIs(r["ok"], False)
+        self.assertIn("no upstream", r["detail"])
