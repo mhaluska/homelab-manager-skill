@@ -62,6 +62,9 @@ counts; the play's last task lists them. They are findings too: report them in t
    and not before; in LXC guests kernel-module and kernel-filesystem units that fail on every boot don't
    count. A oneshot named as new may still be such a unit: check `journalctl -b -u <unit>`, and only if the
    update did not cause it, add it to `failed_units_ignore` (group_vars) with the user's yes.
+   Docker/Podman containers that ran before must run again; Docker containers that stay down get one restart
+   of containerd and then Docker (needed after a containerd upgrade), else the host fails with each
+   container's state and error.
 6. Reboots: a separate, approved run with `-e reboot=if_required` (or the cluster's `reboot`), one cluster member at a
    time (`serial: 1` is the default; never raise it for cluster groups). Wait for health
    checks to pass before the next host — the playbook does this.

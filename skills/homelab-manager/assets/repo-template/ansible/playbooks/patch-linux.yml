@@ -31,6 +31,8 @@
 # Task file paths are relative to ansible/ (as written in homelab.yaml).
 # After each host: no unit may fail that didn't before, except failed_units_ignore (group_vars) and, in LXC
 # guests, lxc_failed_units_ignore (kernel-module units that fail on every boot in a container).
+# Containers (Docker, Podman) that ran before must run again; Docker containers that are down get one
+# restart of containerd and then Docker (an upgraded containerd needs it), else the host fails.
 # Packages listed in `patch_exclude` (set it in the group's group_vars, e.g. kubelet/kubeadm/kubectl
 # for Kubernetes nodes) are never upgraded: dnf exclude on RHEL, apt hold on Debian.
 # Not a play var on purpose — play vars would override group_vars.
@@ -156,6 +158,17 @@
       register: failed_before
       changed_when: false
 
+    - name: Running containers before patching (Docker, Podman)
+      ansible.builtin.shell: |
+        for e in docker podman; do
+          command -v "$e" >/dev/null 2>&1 || continue
+          "$e" ps --format '{{ '{{' }}.Names{{ '}}' }}' 2>/dev/null | sed "s/^/$e /"
+        done
+        true
+      changed_when: false
+      check_mode: false
+      register: containers_before
+
     - name: Pre-patch snapshot (snapshot=true)
       ansible.builtin.command:
         argv: [python3, "{{ hm_scripts }}/pve_snapshot.py", create, "{{ proxmox_vmid | default(inventory_hostname_short) }}",
@@ -263,6 +276,72 @@
       failed_when: svc.status.ActiveState != "active"
       loop: "{{ health_services | default([]) }}"
 
+    # An update can stop containers without failing a unit, e.g. containerd upgraded after dockerd restarted
+    # ("shim was started through the deprecated API"): GitHub issue #50. Containers get time to come back.
+    - name: Containers that ran before run again
+      ansible.builtin.shell: |
+        for e in docker podman; do
+          command -v "$e" >/dev/null 2>&1 || continue
+          "$e" ps --format '{{ '{{' }}.Names{{ '}}' }}' 2>/dev/null | sed "s/^/$e /"
+        done
+        true
+      changed_when: false
+      check_mode: false
+      register: containers_after
+      until: containers_before.stdout_lines | difference(containers_after.stdout_lines) | length == 0
+      retries: "{{ container_retries | default(10) }}"
+      delay: 6
+      failed_when: false
+      when: containers_before.stdout_lines | length > 0
+
+    - name: Docker containers down — restart containerd, then Docker (once)
+      ansible.builtin.shell: |
+        systemctl restart containerd
+        systemctl restart docker
+      register: hm_docker_restarted
+      when: >-
+        containers_before.stdout_lines | difference(containers_after.stdout_lines | default([]))
+        | select('match', 'docker ') | list | length > 0
+
+    - name: Containers after restarting Docker
+      ansible.builtin.shell: |
+        for e in docker podman; do
+          command -v "$e" >/dev/null 2>&1 || continue
+          "$e" ps --format '{{ '{{' }}.Names{{ '}}' }}' 2>/dev/null | sed "s/^/$e /"
+        done
+        true
+      changed_when: false
+      check_mode: false
+      register: containers_after_restart
+      until: containers_before.stdout_lines | difference(containers_after_restart.stdout_lines) | length == 0
+      retries: "{{ container_retries | default(10) }}"
+      delay: 6
+      failed_when: false
+      when: hm_docker_restarted is changed
+
+    - name: Why the containers stopped
+      ansible.builtin.shell: >-
+        {{ item.split(' ')[0] }} inspect -f '{{ '{{' }}.State.Status{{ '}}' }} ({{ '{{' }}.State.ExitCode{{ '}}' }})
+        {{ '{{' }}.State.Error{{ '}}' }}' {{ item.split(' ')[1] | quote }}
+      loop: "{{ hm_stopped }}"
+      register: hm_stopped_why
+      changed_when: false
+      failed_when: false
+      vars:
+        hm_stopped: >-
+          {{ containers_before.stdout_lines | difference(
+               (containers_after_restart if hm_docker_restarted is changed else containers_after).stdout_lines
+               | default([])) }}
+
+    - name: No containers stopped
+      ansible.builtin.assert:
+        that: hm_stopped_why.results | default([]) | length == 0
+        fail_msg: >-
+          Containers that ran before patching don't run now{{ ' (also after restarting containerd and Docker)'
+          if hm_docker_restarted is changed else '' }}: {% for r in hm_stopped_why.results %}{{ r.item }}: {{
+          r.stdout | default('') | trim or 'gone' }}{{ '; ' if not loop.last }}{% endfor %}.
+          A container without a restart policy doesn't come back after a reboot: start it, or give it one.
+
     - name: Failed systemd units after patching
       ansible.builtin.command: systemctl list-units --state=failed --no-legend --plain
       register: failed_after
@@ -315,4 +394,5 @@
         msg: "{{ inventory_hostname }}: updated={{ (upd_rh.changed | default(false)) or (upd_deb.changed | default(false)) }},
               reboot_pending={{ needs_reboot and not (rebooted.rebooted | default(false)) }}
               {{ ('(' ~ reboot_reasons | join('; ') ~ ')') if needs_reboot and not (rebooted.rebooted | default(false)) else '' }},
-              restart_pending={{ restart_pending }}"
+              restart_pending={{ restart_pending }}{{ ', containerd and docker restarted (containers were down)'
+              if hm_docker_restarted is changed else '' }}"
