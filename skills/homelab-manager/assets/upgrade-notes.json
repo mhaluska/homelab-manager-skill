@@ -239,6 +239,20 @@
       },
       "text": "Optional failed_units_ignore in group_vars: failed units patch-linux.yml must not count as new (e.g. ones that fail on every boot).",
       "action": "Add the failed_units_ignore line from {template} to ansible/inventory/managed/group_vars/all.yml (empty list unless the user names units)."
+    },
+    {
+      "version": "0.19.0",
+      "id": "patch-linux-lxd-snapshots",
+      "kind": "template",
+      "when": {
+        "component": "ansible",
+        "file_lacks": [
+          "ansible/playbooks/patch-linux.yml",
+          "lxd_snapshot.py"
+        ]
+      },
+      "text": "patch-linux.yml -e snapshot=true also snapshots LXD/Incus instances (e.g. containers on a NAS) with lxd_snapshot.py: hosts with the host var lxd_host (#44).",
+      "action": "Replace ansible/playbooks/patch-linux.yml with {template}, carrying over any local edits (show the user the diff first). To use it, follow references/patching.md 'LXD/Incus instances'."
     }
   ]
 }
