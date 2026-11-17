@@ -69,7 +69,8 @@ mostly confirms:
 - git → if the repo has a remote (`git remote -v`): `git.auto_push` (push each verified commit; off-Mac backup).
 Write answers with `python3 $HM/scripts/config_set.py 'site.domain=home.arpa' 'network.authorized_ranges+=CIDR'`
 (it changes only those lines and checks the result). Not `yq -i`: it reflows the whole file and moves comments.
-Node, storage and bridge names are discovered later from the Proxmox API; don't ask for them.
+Node, storage and bridge names are discovered later from the Proxmox API (storage that differs between nodes:
+`proxmox.nodes`, references/proxmox.md "Storage per node"); don't ask for them.
 
 **Round 3 — credentials, done by the user**: show the token setup from
 `docs/proxmox-tokens.md` (only if Proxmox is selected). The **user** runs those commands on

@@ -56,6 +56,14 @@ when the site entry sets one (a free IP in its ranges), its token. Generate `pac
 with `site = "<site>"` and the site's node, storage and build network, and pass it instead of `site.pkrvars.hcl`:
 the build fails at once if the token is another site's. Record the site in the `docs/templates.md` row.
 
+## A node with its own storage
+
+Without shared storage a template serves only nodes where the VM's storage has the same name (proxmox.md
+"Storage per node"). For a node with other storage (`proxmox.nodes`): a base image on that node (`base_images`
+entry with `node`; its storage follows the node) and a template built there — the same steps, with that node and
+its `default_storage` in the Packer vars (`node`, `storage`) and a VMID of its own. Record the node in the
+`docs/templates.md` row, and rebuild it together with the others when a distro gets a new template.
+
 ## Retiring templates
 
 Keep `templates.keep_versions` per distro. A template may be deleted only when no tfvars

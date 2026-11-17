@@ -14,6 +14,7 @@ All lifecycle changes go through OpenTofu (`tofu/environments/<env>/homelab.auto
      summary warns that existing VMIDs don't fit the ranges, ask the user before picking one.
    - Node/storage/bridge: entry overrides → `defaults` in tfvars → `homelab.yaml`. If
      `defaults` isn't filled yet, fill it from `homelab.yaml` (ask for the gaps).
+   - Template on another node: see "Storage per node" (`template_node`, or a template on that node).
    - IP: static CIDR if the user gives one or the network has a plan; otherwise `dhcp`.
    - Disk: default 20 GiB unless asked; check free space on the target storage.
    - 8 GB = `memory_mib = 8192`.
@@ -51,9 +52,26 @@ via API with approval; the guard asks for `qm reboot/stop/shutdown`.
 ## Migrate (cluster only)
 
 Change `node` in the entry → for bpg this is an in-place migration when the VM's storage
-allows it (shared storage, or local with online migration). Read the plan: if it says
-replace, stop. HA-managed guests: migrate through `ha-manager` instead and tell the user.
+allows it (shared storage, or local with online migration). To a node with other storage (`proxmox.nodes`)
+the disks would have to move too: read the plan; if it says replace, stop. HA-managed guests: migrate through `ha-manager` instead and tell the user.
 Approval required.
+
+## Storage per node
+
+Storage comes from `homelab.yaml` (`proxmox.default_storage`, `lxc_storage`, `image_storage`), mirrored in
+tfvars `defaults` (`datastore`, `lxc_datastore`, `image_datastore`). LXC root filesystems need a storage with
+`rootdir` content, VM disks one with `images` (the snapshot shows each storage's content).
+A node whose storage differs (a cluster without shared storage, one node on LVM among ZFS nodes) gets an entry in
+`proxmox.nodes` (`{pve3: {default_storage: local-lvm}}`) and the same in `defaults.node_datastores`
+(`pve3 = { datastore = "local-lvm" }`). On a listed node that entry replaces VM and LXC storage (LXC falls back to
+the node's own `datastore`, never to a site pool the node may not have); images use its `image_datastore`, else
+the site's. An entry's own `datastore` always wins. The drift report's "Storage" section lists storage that a node
+lacks or that doesn't take the content it is used for: fix those before a plan.
+
+Templates on local storage: a VM may name `template_node` when the template is on another node. The provider
+then clones there and migrates the clone, which only works when the VM's storage has the same name on both nodes
+(e.g. `local-zfs` on each ZFS node). A node with other storage (LVM) needs its own template, built on that node
+(templates.md "A node with its own storage"); its entry uses that template's VMID and no `template_node`.
 
 ## LXC containers
 
