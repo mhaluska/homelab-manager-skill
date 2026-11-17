@@ -295,6 +295,34 @@
       },
       "text": "The Packer template takes a site file per site (site-<name>.pkrvars.hcl) and refuses to build with another site's token (#52). Only needed with sites: in homelab.yaml.",
       "action": "Replace packer/linux/linux.pkr.hcl with {template} and add the site and proxmox_site variables from the template's packer/linux/variables.pkr.hcl, carrying over any local edits (show the user the diff first); run packer validate."
+    },
+    {
+      "version": "0.22.0",
+      "id": "patch-linux-health-timeout",
+      "kind": "template",
+      "when": {
+        "component": "ansible",
+        "file_lacks": [
+          "ansible/playbooks/patch-linux.yml",
+          "health_timeout"
+        ]
+      },
+      "text": "patch-linux.yml waits for the boot to finish after a reboot and gives health_services units that are still activating up to health_timeout seconds (default 300) instead of failing at once (#53).",
+      "action": "Replace ansible/playbooks/patch-linux.yml with {template}, carrying over any local edits (show the user the diff first)."
+    },
+    {
+      "version": "0.22.0",
+      "id": "tofu-storage-per-node",
+      "kind": "template",
+      "when": {
+        "component": "proxmox",
+        "file_lacks": [
+          "tofu/environments/homelab/variables.tf",
+          "node_datastores"
+        ]
+      },
+      "text": "OpenTofu environments take an LXC storage (defaults.lxc_datastore) and storage per node (defaults.node_datastores, homelab.yaml proxmox.nodes) for a cluster without shared storage or a node with other disks; VMs may name template_node (#54). The drift report checks each node's storage.",
+      "action": "In each environment under tofu/environments/, bring the locals block and module arguments of main.tf and the defaults/vms types of variables.tf in line with {HM}/assets/repo-template/tofu/environments/homelab/ (show the user the diff first), then tofu validate and plan: expect no changes. Set proxmox.lxc_storage / proxmox.nodes only if the user's storage needs them (drift report, Storage section)."
     }
   ]
 }

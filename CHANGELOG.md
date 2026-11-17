@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.22.0 — 2026-11-18
+- `patch-linux.yml` waits for slow services after a reboot ([#53](https://github.com/mhaluska/homelab-manager-skill/issues/53)):
+  it waits until the boot has finished (`systemctl is-system-running`), and `health_services` units still
+  `activating` get time to come up, both up to `health_timeout` seconds (default 300, group_vars or `-e`).
+  A unit that ends `failed` still fails at once.
+- Storage for LXC and per node ([#54](https://github.com/mhaluska/homelab-manager-skill/issues/54)):
+  - `homelab.yaml`: `proxmox.lxc_storage` (LXC root filesystems; empty = `default_storage`) and `proxmox.nodes`
+    for a node whose storage differs (a cluster without shared storage, one node on LVM among ZFS nodes);
+    also under `sites[].proxmox`.
+  - OpenTofu environment: `defaults.lxc_datastore` and `defaults.node_datastores`; a listed node takes VM, LXC
+    and base image storage from its entry. VMs may name `template_node` (clone there, then migrate: same
+    storage name on both nodes); a node with other storage gets its own template.
+  - The drift report's new Storage section lists storage a node lacks or that doesn't take `images` / `rootdir`.
+- Upgrade notes for `patch-linux.yml` and the OpenTofu environments: `init_repo.py --sync-managed`.
+
 ## 0.21.0 — 2026-11-17
 - Sites, part 2 ([#52](https://github.com/mhaluska/homelab-manager-skill/issues/52)): provisioning and node patching at other sites.
   - `init_repo.py --add-site N` scaffolds the site's OpenTofu environment `tofu/environments/N` (its own state)
