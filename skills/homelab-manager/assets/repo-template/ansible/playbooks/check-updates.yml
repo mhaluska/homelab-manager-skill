@@ -58,6 +58,21 @@
           changed_when: false
           when: ansible_facts.os_family == "Debian"
 
+        - name: Debian family — packages autoremove would remove, configuration left by removed packages
+          ansible.builtin.shell: |
+            apt-get -s -o Debug::NoLocking=1 autoremove | grep -c '^Remv' || true
+            dpkg-query -W -f='${db:Status-Abbrev}\n' | grep -c '^rc' || true
+          register: deb_left
+          changed_when: false
+          when: ansible_facts.os_family == "Debian"
+
+        - name: RHEL family — packages autoremove would remove
+          ansible.builtin.command: dnf -q repoquery --unneeded
+          register: rh_left
+          changed_when: false
+          failed_when: false
+          when: ansible_facts.os_family == "RedHat"
+
         - name: Reboot required, services still running replaced code
           ansible.builtin.include_tasks: tasks/restart-check.yml
 
@@ -77,6 +92,11 @@
               reboot_required: "{{ needs_reboot }}"
               reboot_reasons: "{{ reboot_reasons }}"
               restart_pending: "{{ restart_pending }}"
+              # left over after patching (old kernels and dependencies); patch-linux.yml autoremoves them
+              autoremovable: >-
+                {{ (deb_left.stdout_lines[0] | default(0) | int) if ansible_facts.os_family == 'Debian'
+                   else (rh_left.stdout_lines | default([]) | length) }}
+              config_leftovers: "{{ (deb_left.stdout_lines[1] | default(0) | int) if ansible_facts.os_family == 'Debian' else 0 }}"
 
       rescue:
         - name: Record the failure

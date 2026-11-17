@@ -48,6 +48,10 @@ counts; the play's last task lists them. They are findings too: report them in t
    Proxmox guests: offer a pre-patch snapshot (`-e snapshot=true -e hm_scripts=$HM/scripts`): a disk-only
    snapshot `prepatch-<date>` of each guest right before its update (guest = inventory short name or host var
    `proxmox_vmid`; needs snapshot-capable storage and the provisioning token).
+   Clean-up: after the reboot (or when there is none) the run autoremoves packages nothing needs, so the old
+   kernel goes too (`-e autoremove=false` skips it). check-updates shows `autoremovable` and
+   `config_leftovers`; offer `-e purge=true` only when the user wants the configuration of removed
+   Debian packages gone as well.
 4. Approval (the guard asks for any patch run outside `--check`).
 5. Run: `ansible-playbook playbooks/patch-linux.yml -e target=<group> [-e security_only=true]`.
    The playbook stops on the first failure (`max_fail_percentage: 0`) and checks failed

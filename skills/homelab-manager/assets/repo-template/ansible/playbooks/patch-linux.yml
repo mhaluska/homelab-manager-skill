@@ -2,7 +2,7 @@
 #
 #   ansible-playbook playbooks/patch-linux.yml -e target=<group|host> [-e security_only=true]
 #       [-e reboot=never|if_required|always] [-e restart_services=true]
-#       [-e snapshot=true -e hm_scripts=$HM/scripts]
+#       [-e snapshot=true -e hm_scripts=$HM/scripts] [-e autoremove=false] [-e purge=true]
 #       [-e pre_hook=… -e post_hook=… -e health_check=…] [-e order=vip_holder_last -e vip=<ip>]
 #
 # Safe defaults: one host at a time (serial 1), stop at the first failure, NO reboots.
@@ -15,6 +15,10 @@
 # default prepatch-<date>) right before it is updated; the guest is the inventory short name or the host var
 # proxmox_vmid. Needs hm_scripts (the skill's scripts directory). Remove the snapshots after a successful run
 # with pve_snapshot.py delete (the user's yes): they keep growing.
+# autoremove (default true): after the reboot (or when there is none) remove packages nothing needs any more
+# (apt/dnf autoremove). Only then can the kernel that was running during the update go, so old kernels
+# don't pile up. purge=true also removes the configuration left behind by removed Debian packages (`rc` in
+# dpkg -l); off by default, those files may still be wanted.
 #
 # Clusters (`clusters:` in homelab.yaml): never in parallel, keep serial 1, pass the cluster's settings:
 #   pre_hook / post_hook  task files run before/after each node, WITHOUT sudo (kubectl on this Mac: drain/uncordon)
@@ -77,6 +81,8 @@
     reboot: "{{ 'if_required' if allow_reboot | bool else 'never' }}"
     restart_services: false
     snapshot: false
+    autoremove: true
+    purge: false
     snapshot_name: "prepatch-{{ now().strftime('%Y%m%d') }}"
     # never restarted automatically (a reboot or the user's own step instead): restarting these drops sessions
     restart_exclude: [dbus.service, dbus-broker.service, systemd-logind.service]
@@ -157,7 +163,6 @@
       ansible.builtin.apt:
         upgrade: "{{ 'yes' if security_only | bool else 'dist' }}"
         update_cache: true
-        autoremove: true
       environment:
         NEEDRESTART_MODE: a
       when: ansible_facts.os_family == "Debian"
@@ -185,6 +190,32 @@
         restart_pending: >-
           {{ [] if (rebooted.rebooted | default(false))
              else (restart_pending | intersect(restart_exclude) if restart_services | bool else restart_pending) }}
+
+    # After the reboot: the kernel that was running during the update is no longer protected (GitHub issue #46)
+    - name: Remove packages nothing needs any more (Debian family)
+      ansible.builtin.apt:
+        autoremove: true
+        purge: "{{ purge | bool }}"
+      when: autoremove | bool and ansible_facts.os_family == "Debian"
+
+    - name: Remove packages nothing needs any more (RHEL family)
+      ansible.builtin.dnf:
+        autoremove: true
+      when: autoremove | bool and ansible_facts.os_family == "RedHat"
+
+    - name: Configuration left by removed packages (purge=true)
+      ansible.builtin.command:
+        argv: [dpkg-query, -W, "-f=${db:Status-Abbrev}\t${Package}\n"]
+      register: hm_dpkg_status
+      changed_when: false
+      when: purge | bool and ansible_facts.os_family == "Debian"
+
+    - name: Purge it (purge=true)
+      ansible.builtin.command:
+        argv: "{{ ['dpkg', '--purge'] + leftovers }}"
+      vars:
+        leftovers: "{{ hm_dpkg_status.stdout_lines | select('match', '^rc') | map('split', '\t') | map('last') | list }}"
+      when: purge | bool and ansible_facts.os_family == "Debian" and leftovers | length > 0
 
   post_tasks:
     - name: Required services are active
