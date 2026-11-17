@@ -220,10 +220,10 @@
         "component": "ansible",
         "file_lacks": [
           "ansible/playbooks/patch-linux.yml",
-          "lxc_failed_units_ignore"
+          "snapshot_missing"
         ]
       },
-      "text": "patch-linux.yml compares failed units by name and doesn't count units that fail on every boot in LXC containers or are listed in failed_units_ignore (#51), and fails a host whose Docker/Podman containers stopped, after one containerd + Docker restart (#50).",
+      "text": "patch-linux.yml compares failed units by name and doesn't count units that fail on every boot in LXC containers or are listed in failed_units_ignore (#51), and fails a host whose Docker/Podman containers stopped, after one containerd + Docker restart (#50). With snapshot=true it checks that every target can be snapshotted before the first batch and refuses with the list, or patches those without a snapshot with snapshot_missing=skip (#49).",
       "action": "Replace ansible/playbooks/patch-linux.yml with {template}, carrying over any local edits (show the user the diff first)."
     },
     {

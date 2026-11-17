@@ -50,7 +50,11 @@ counts; the play's last task lists them. They are findings too: report them in t
    the host isn't rebooted anyway): no reboot needed, but each service restarts briefly.
    Proxmox guests: offer a pre-patch snapshot (`-e snapshot=true -e hm_scripts=$HM/scripts`): a disk-only
    snapshot `prepatch-<date>` of each guest right before its update (guest = inventory short name or host var
-   `proxmox_vmid`; needs snapshot-capable storage and the provisioning token).
+   `proxmox_vmid`; needs snapshot-capable storage and the provisioning token). Before anything else the run
+   checks every target (`pve_snapshot.py check <guests>`, read-only, also by hand) and refuses with the list
+   of hosts that can't be snapshotted: not Proxmox guests (e.g. LXD containers on a NAS), or a container with
+   a bind or device mount point, or a disk on storage without snapshots. Leave them out of the target, or with
+   the user's yes for exactly those hosts add `-e snapshot_missing=skip` (patched without a snapshot).
    Clean-up: after the reboot (or when there is none) the run autoremoves packages nothing needs, so the old
    kernel goes too (`-e autoremove=false` skips it). check-updates shows `autoremovable` and
    `config_leftovers`; offer `-e purge=true` only when the user wants the configuration of removed
@@ -75,7 +79,14 @@ counts; the play's last task lists them. They are findings too: report them in t
    the changes since are lost, and a VM is left stopped — start it afterwards).
 
 Snapshots by hand ("snapshot web01 before I change it"): `pve_snapshot.py create <guest…> [--name …]`;
-`list` is read-only.
+`list` and `check` are read-only.
+
+LXD/Incus containers (plain hosts, QNAP Container Station, …) have no helper yet: on the container host,
+`lxc storage show <pool>` first — `dir` storage copies the whole rootfs (check free space against `du` of
+it), ZFS/btrfs are copy-on-write; `disk` devices (bind-mounted data) are not in the snapshot. Then, with
+the user's yes, `lxc snapshot <ct> prepatch-<date>`; `lxc restore <ct> prepatch-<date>` rolls back,
+`lxc delete <ct>/prepatch-<date>` cleans up (the user's yes). A dist-upgrade: one release at a time, verify,
+snapshot again before the next.
 
 ## Patch Proxmox nodes
 

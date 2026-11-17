@@ -2,6 +2,7 @@
 """Proxmox guest snapshots around patching (VMs and LXC containers).
 
     pve_snapshot.py list <guest…>                                  # read-only token
+    pve_snapshot.py check <guest…> [--json]                        # read-only: can each one be snapshotted?
     pve_snapshot.py create <guest…> [--name prepatch-YYYYMMDD] [--description TEXT]
     pve_snapshot.py delete <guest…> --name NAME                    # needs the user's yes (the guard asks)
     pve_snapshot.py rollback <guest> --name NAME                   # needs the user's yes (the guard asks)
@@ -12,11 +13,16 @@ on Proxmox VE 8+), list the read-only one. Each write waits for its Proxmox task
 does. Snapshots are disk-only (no RAM state): fast, and enough to roll back a failed update.
 A VM snapshot needs snapshot-capable storage (ZFS, LVM-thin, Ceph, qcow2); raw on LVM or directory
 storage can't be snapshotted — the task error says so.
+check (before a patch run with snapshot=true) reports every guest, not only the first problem: ok, not a
+guest of the cluster (e.g. an LXD container on a NAS: snapshot it there), or no snapshot (Proxmox's snapshot
+feature check, with the reason when the config shows one: a bind or device mount point of a container).
+Exit 0 when all can be snapshotted, 1 when not.
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import re
 import sys
 import time
@@ -34,19 +40,51 @@ def default_name() -> str:
     return "prepatch-" + dt.date.today().strftime("%Y%m%d")
 
 
-def find_guests(pve: PVE, wanted: list[str]) -> list[dict]:
-    """Resolve VMIDs or names to cluster resources {vmid, name, node, type: qemu|lxc}."""
+def resolve(pve: PVE, wanted: list[str]) -> tuple[dict[str, dict], dict[str, str]]:
+    """VMIDs or names → ({wanted: cluster resource {vmid, name, node, type: qemu|lxc}}, {wanted: problem})."""
     res = [r for r in (pve.get("/cluster/resources", type="vm") or []) if r.get("type") in ("qemu", "lxc")]
-    out = []
+    found, problems = {}, {}
     for w in wanted:
         hits = [r for r in res if str(r.get("vmid")) == w or (r.get("name") or "").lower() == w.lower()]
         if not hits:
-            raise SystemExit(f"No VM or container {w!r} in the cluster.")
-        if len(hits) > 1:
-            raise SystemExit(f"{w!r} is ambiguous: VMIDs {', '.join(str(h['vmid']) for h in hits)}. Use the VMID.")
-        if hits[0].get("template"):
-            raise SystemExit(f"{w!r} is a template: templates can't be snapshotted.")
-        out.append(hits[0])
+            problems[w] = f"No VM or container {w!r} in the cluster."
+        elif len(hits) > 1:
+            problems[w] = f"{w!r} is ambiguous: VMIDs {', '.join(str(h['vmid']) for h in hits)}. Use the VMID."
+        elif hits[0].get("template"):
+            problems[w] = f"{w!r} is a template: templates can't be snapshotted."
+        else:
+            found[w] = hits[0]
+    return found, problems
+
+
+def find_guests(pve: PVE, wanted: list[str]) -> list[dict]:
+    """Resolve VMIDs or names to cluster resources; exits on the first one that isn't a snapshottable guest."""
+    found, problems = resolve(pve, wanted)
+    for w in wanted:
+        if w in problems:
+            raise SystemExit(problems[w])
+    return [found[w] for w in wanted]
+
+
+def blocking_mounts(conf: dict) -> list[str]:
+    """Container mount points Proxmox can't snapshot: bind mounts and device passthrough (a path, not a volume)."""
+    return [f"{k}: {v.split(',')[0]}" for k, v in sorted(conf.items())
+            if re.fullmatch(r"mp\d+", k) and isinstance(v, str) and v.split(",")[0].startswith("/")]
+
+
+def check(pve: PVE, wanted: list[str]) -> dict:
+    """{ok: [..], not_a_guest: {wanted: why}, no_snapshot: {wanted: why}} — read-only (VM.Audit)."""
+    found, problems = resolve(pve, wanted)
+    out = {"ok": [], "not_a_guest": problems, "no_snapshot": {}}
+    for w, g in found.items():
+        feat = pve.get(base(g) + "/feature", feature="snapshot") or {}
+        if feat.get("hasFeature"):
+            out["ok"].append(w)
+            continue
+        mounts = blocking_mounts(pve.get(base(g) + "/config") or {}) if g["type"] == "lxc" else []
+        out["no_snapshot"][w] = f"{label(g)}: " + (
+            "bind or device mount point " + "; ".join(mounts) if mounts
+            else "a disk is on storage without snapshots (raw on directory, LVM or NFS storage)")
     return out
 
 
@@ -76,10 +114,11 @@ def label(g: dict) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("action", choices=["list", "create", "delete", "rollback"])
+    ap.add_argument("action", choices=["list", "check", "create", "delete", "rollback"])
     ap.add_argument("guests", nargs="+")
     ap.add_argument("--name")
     ap.add_argument("--description", default="")
+    ap.add_argument("--json", action="store_true", help="check: print the result as JSON")
     a = ap.parse_args()
     name = a.name or (default_name() if a.action == "create" else None)
     if a.action in ("delete", "rollback") and not name:
@@ -93,12 +132,24 @@ def main() -> int:
         endpoint = hmlib.get(cfg, "proxmox.endpoint")
         if not endpoint:
             raise hmlib.ConfigError("proxmox.endpoint is empty in homelab.yaml.")
-        secret = hmlib.get(cfg, "proxmox.tokens.read_only", "proxmox-ro") if a.action == "list" \
+        secret = hmlib.get(cfg, "proxmox.tokens.read_only", "proxmox-ro") if a.action in ("list", "check") \
             else hmlib.get(cfg, "proxmox.tokens.provisioning", "proxmox-rw")
         pve = PVE(endpoint, hmlib.read_secret(cfg, secret), hmlib.proxmox_ssl_context(cfg))
     except hmlib.ConfigError as e:
         print(f"pve_snapshot: {e}", file=sys.stderr)
         return 3
+    if a.action == "check":
+        res = check(pve, a.guests)
+        if a.json:
+            print(json.dumps(res, indent=2))
+        else:
+            for w in res["ok"]:
+                print(f"{w}: ok")
+            for w, why in res["not_a_guest"].items():
+                print(f"{w}: not a Proxmox guest — {why}")
+            for w, why in res["no_snapshot"].items():
+                print(f"{w}: can't be snapshotted — {why}")
+        return 0 if not (res["not_a_guest"] or res["no_snapshot"]) else 1
     guests = find_guests(pve, a.guests)
 
     if a.action == "list":

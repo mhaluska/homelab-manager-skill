@@ -2,7 +2,7 @@
 #
 #   ansible-playbook playbooks/patch-linux.yml -e target=<group|host> [-e security_only=true]
 #       [-e reboot=never|if_required|always] [-e restart_services=true]
-#       [-e snapshot=true -e hm_scripts=$HM/scripts] [-e autoremove=false] [-e purge=true]
+#       [-e snapshot=true -e hm_scripts=$HM/scripts [-e snapshot_missing=skip]] [-e autoremove=false] [-e purge=true]
 #       [-e pre_hook=… -e post_hook=… -e health_check=…] [-e order=vip_holder_last -e vip=<ip>]
 #
 # Safe defaults: stop at the first failure, NO reboots. Batch size: -e patch_serial=<n|n%>, else
@@ -14,7 +14,9 @@
 # plain Debian, which has no /var/run/reboot-required), needs-restarting -r or the reboot-required flag.
 # Services still using replaced binaries or libraries are reported as restart_pending; restart_services=true
 # restarts them (except restart_exclude) when the host is not rebooted anyway.
-# snapshot=true: a disk-only Proxmox snapshot of each guest (pve_snapshot.py create, name snapshot_name,
+# snapshot=true: first checks that every target can be snapshotted (pve_snapshot.py check) and refuses
+# otherwise, before anything is snapshotted or patched; -e snapshot_missing=skip patches those without one.
+# Then a disk-only Proxmox snapshot of each guest (pve_snapshot.py create, name snapshot_name,
 # default prepatch-<date>) right before it is updated; the guest is the inventory short name or the host var
 # proxmox_vmid. Needs hm_scripts (the skill's scripts directory). Remove the snapshots after a successful run
 # with pve_snapshot.py delete (the user's yes): they keep growing.
@@ -51,6 +53,22 @@
         {%- set _ = out.extend(groups[c.ansible_group]) -%}
       {%- endfor -%}
       {{ out }}
+    # inventory host → guest for pve_snapshot.py (the host var proxmox_vmid, else the short name)
+    hm_snap_ids: >-
+      {%- set out = {} -%}
+      {%- for h in ansible_play_hosts_all -%}
+        {%- set _ = out.update({h: (hostvars[h].proxmox_vmid | default(hostvars[h].inventory_hostname_short)) | string}) -%}
+      {%- endfor -%}
+      {{ out }}
+    # inventory host → why it can't be snapshotted
+    hm_snap_bad: >-
+      {%- set r = hm_snap_check.stdout | from_json -%}
+      {%- set why = r.not_a_guest | combine(r.no_snapshot) -%}
+      {%- set out = {} -%}
+      {%- for h, id in hm_snap_ids.items() if id in why -%}
+        {%- set _ = out.update({h: why[id]}) -%}
+      {%- endfor -%}
+      {{ out }}
     hm_cluster_run: "{{ pre_hook is defined or post_hook is defined or health_check is defined or order is defined }}"
     # hosts that must be patched one at a time: cluster members, guarded hosts, or any host of a cluster run
     hm_one_at_a_time: >-
@@ -72,6 +90,43 @@
           patch_serial={{ patch_serial | default('') }} with cluster or guarded hosts ({{ hm_one_at_a_time | unique | join(', ') }}):
           patch them in their own run with serial 1.
       run_once: true
+
+    # Before any batch (GitHub issue #49): one guest that can't be snapshotted would otherwise stop the run
+    # after others already got their snapshot
+    - name: snapshot=true needs the skill's scripts
+      ansible.builtin.assert:
+        that: hm_scripts is defined and (snapshot_missing | default('fail')) in ['fail', 'skip']
+        fail_msg: "Pass -e hm_scripts=<skill dir>/scripts with snapshot=true (pve_snapshot.py); snapshot_missing is fail or skip."
+      run_once: true
+      when: snapshot | default(false) | bool
+
+    - name: snapshot=true — can every target be snapshotted? (pve_snapshot.py check, read-only)
+      ansible.builtin.command:
+        argv: "{{ ['python3', hm_scripts ~ '/pve_snapshot.py', 'check', '--json'] + hm_snap_ids.values() | unique }}"
+        chdir: "{{ playbook_dir }}/../.."
+      register: hm_snap_check
+      failed_when: hm_snap_check.rc not in [0, 1]
+      changed_when: false
+      check_mode: false
+      delegate_to: localhost
+      run_once: true
+      when: snapshot | default(false) | bool
+
+    - name: snapshot=true — refuse unless every target can be snapshotted (or snapshot_missing=skip)
+      ansible.builtin.assert:
+        that: hm_snap_bad | length == 0 or (snapshot_missing | default('fail')) == 'skip'
+        fail_msg: >-
+          Can't snapshot: {% for h, why in hm_snap_bad.items() %}{{ h }} ({{ why }}){{ '; ' if not loop.last }}{%
+          endfor %}. Nothing was snapshotted or patched. Leave them out of the target, or patch them without a
+          snapshot with -e snapshot_missing=skip (the user's yes). LXD/Incus containers on a NAS: snapshot them
+          there first (references/patching.md).
+      run_once: true
+      when: snapshot | default(false) | bool
+
+    - name: Hosts patched without a snapshot (snapshot_missing=skip)
+      ansible.builtin.set_fact:
+        hm_snapshot_skip: "{{ hm_snap_bad[inventory_hostname] | default('') }}"
+      when: snapshot | default(false) | bool
 
     - name: order=vip_holder_last needs the VIP
       ansible.builtin.assert:
@@ -134,13 +189,6 @@
         fail_msg: "reboot={{ reboot }}: use never, if_required or always."
       run_once: true
 
-    - name: snapshot=true needs the skill's scripts
-      ansible.builtin.assert:
-        that: hm_scripts is defined
-        fail_msg: "Pass -e hm_scripts=<skill dir>/scripts with snapshot=true (pve_snapshot.py)."
-      run_once: true
-      when: snapshot | bool
-
     - name: Refuse hosts that need their own procedure (patch_requires_approval, e.g. Proxmox nodes)
       ansible.builtin.assert:
         that: guarded | length == 0
@@ -178,7 +226,7 @@
       become: false
       changed_when: "'done' in snap.stdout"
       register: snap
-      when: snapshot | bool
+      when: snapshot | bool and hm_snapshot_skip | default('') | length == 0
       check_mode: false
 
     - name: Cluster pre-hook (drain, maintenance mode, …)
@@ -394,5 +442,6 @@
         msg: "{{ inventory_hostname }}: updated={{ (upd_rh.changed | default(false)) or (upd_deb.changed | default(false)) }},
               reboot_pending={{ needs_reboot and not (rebooted.rebooted | default(false)) }}
               {{ ('(' ~ reboot_reasons | join('; ') ~ ')') if needs_reboot and not (rebooted.rebooted | default(false)) else '' }},
-              restart_pending={{ restart_pending }}{{ ', containerd and docker restarted (containers were down)'
+              restart_pending={{ restart_pending }}{{ (', no snapshot: ' ~ hm_snapshot_skip)
+              if snapshot | bool and hm_snapshot_skip | default('') | length > 0 else '' }}{{ ', containerd and docker restarted (containers were down)'
               if hm_docker_restarted is changed else '' }}"

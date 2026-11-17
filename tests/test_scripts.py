@@ -1350,6 +1350,29 @@ class PveSnapshotTests(unittest.TestCase):  # issue 37
     def test_default_name_is_valid(self):
         self.assertRegex(self.s.default_name(), self.s.NAME_RE)
 
+    def test_check_reports_every_guest(self):  # issue 49
+        get = self.pve.get
+        configs = {"/nodes/pve2/lxc/901/config": {"rootfs": "local-zfs:subvol-901-disk-0",
+                                                   "mp0": "local-zfs:subvol-901-disk-1,mp=/data",
+                                                   "mp1": "/dev/zvol/tank/vol,mp=/srv/raw"}}
+
+        def with_feature(path, _method="GET", **params):
+            if path.endswith("/feature"):
+                self.assertEqual(params, {"feature": "snapshot"})
+                return {"hasFeature": 1 if "/qemu/101/" in path else 0}
+            if path in configs:
+                return configs[path]
+            return get(path, _method, **params)
+        self.pve.get = with_feature
+        res = self.s.check(self.pve, ["web01", "dns", "nas-lxd1", "tpl"])
+        self.assertEqual(res["ok"], ["web01"])
+        self.assertEqual(sorted(res["not_a_guest"]), ["nas-lxd1", "tpl"])
+        self.assertIn("mp1: /dev/zvol/tank/vol", res["no_snapshot"]["dns"])
+        self.assertNotIn("mp0", res["no_snapshot"]["dns"])
+        self.assertFalse([c for c in self.calls if c[0] != "GET"])  # read-only
+        with self.assertRaises(SystemExit):                       # the other actions still stop at the first
+            self.s.find_guests(self.pve, ["web01", "nas-lxd1"])
+
 
 class PveNodePlanTests(unittest.TestCase):  # issue 23
     def setUp(self):

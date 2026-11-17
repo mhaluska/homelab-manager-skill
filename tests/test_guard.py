@@ -354,6 +354,7 @@ class GuardConfigTests(unittest.TestCase):
         self.assertEqual(self.d("python3 /p/pve_snapshot.py rollback 101 --name prepatch-20261117"), "ask")
         self.assertIsNone(self.d("python3 /p/pve_snapshot.py create web01 db01"))
         self.assertIsNone(self.d("python3 /p/pve_snapshot.py list web01"))
+        self.assertIsNone(self.d("python3 /p/pve_snapshot.py check web01 db01 --json"))  # read-only (#49)
 
     def test_widening_scan_scope_asks(self):
         self.assertEqual(self.d("python3 /p/config_set.py 'network.authorized_ranges+=10.0.30.0/24'"), "ask")
