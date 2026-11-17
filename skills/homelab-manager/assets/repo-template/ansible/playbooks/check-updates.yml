@@ -6,11 +6,14 @@
   gather_facts: true
   become: true
   tasks:
+    # Packages dnf would update for security advisories: like check-update, it honours enabled module
+    # streams (updateinfo list would also count advisories for streams that aren't enabled, one line per
+    # package and advisory, so it could exceed `pending`).
     - name: RHEL family — security updates
-      ansible.builtin.command: dnf -q updateinfo list --security --available
+      ansible.builtin.command: dnf -q check-update --security
       register: rh_sec
       changed_when: false
-      failed_when: false
+      failed_when: rh_sec.rc not in [0, 100]
       when: ansible_facts.os_family == "RedHat"
 
     - name: RHEL family — all updates
@@ -56,7 +59,7 @@
                if ansible_facts.os_family == 'RedHat'
                else (deb_sim.stdout_lines | default([]) | select('match', '^Inst ') | list | length) }}
           security: >-
-            {{ (rh_sec.stdout_lines | default([]) | length)
+            {{ (rh_sec.stdout_lines | default([]) | select('match', '^\S+\.\S+\s') | list | length)
                if ansible_facts.os_family == 'RedHat'
                else (deb_sim.stdout_lines | default([]) | select('match', '^Inst .*[Ss]ecurity') | list | length) }}
           reboot_required: >-
