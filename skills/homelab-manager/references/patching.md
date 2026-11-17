@@ -11,7 +11,9 @@ result; check each host's `collected_at` before calling it current. Report a tab
 pending (with `reboot_reasons`), services to restart (`restart_pending`). Sort by security count.
 A reboot is due when a newer kernel than the running one is installed (plain Debian has no
 `/var/run/reboot-required`), `needs-restarting -r` says so (EL) or the flag file exists. `restart_pending` lists
-services whose processes still map deleted binaries or libraries: they run the old (maybe vulnerable) code. Unreachable hosts are findings too. Commit the JSON.
+services whose processes still map deleted binaries or libraries: they run the old (maybe vulnerable) code.
+A host that failed or was unreachable gets `error` (the failing step and reason) and `last_ok_at` instead of
+counts; the play's last task lists them. They are findings too: report them in the table. Commit the JSON.
 
 ## "Patch all Linux servers"
 
@@ -98,6 +100,6 @@ there's a tested role and explicit approval.
 A host fails mid-patch → the play stops; nothing else is touched. Report what failed, the
 host's state (package manager lock? broken dependency? service down?), and propose a fix.
 Never retry a cluster member's reboot loop more than once without the user.
-List failed, skipped and unreachable hosts in your report (and in `discovery/updates.json` for
-check-updates); the next run picks them up again. A playbook or hook of the skill that is itself
+List failed, skipped and unreachable hosts in your report (check-updates writes them to
+`discovery/updates.json` with `error`); the next run picks them up again. A playbook or hook of the skill that is itself
 broken is a skill problem for `skill_issues.md` (SKILL.md §6).

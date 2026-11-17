@@ -1,84 +1,126 @@
 # Read-only: which systems have pending (security) updates, need a reboot (with the reason), or run services
 # that still use replaced binaries or libraries (restart_pending; patch-linux.yml -e restart_services=true).
 # Writes discovery/updates.json, merged: hosts not checked this run keep their last result
-# (each host has its own collected_at).  Safe to run any time.
+# (each host has its own collected_at). A host that fails or can't be reached gets an entry with `error`
+# (and `last_ok_at`, when its last good result was), so a gap is visible instead of silently missing.
+# Safe to run any time.
 - name: Pending updates on Linux
   hosts: "{{ target | default('linux') }}"
-  gather_facts: true
+  gather_facts: false
   become: true
   tasks:
-    # Packages dnf would update for security advisories: like check-update, it honours enabled module
-    # streams (updateinfo list would also count advisories for streams that aren't enabled, one line per
-    # package and advisory, so it could exceed `pending`).
-    - name: RHEL family — security updates
-      ansible.builtin.command: dnf -q check-update --security
-      register: rh_sec
-      changed_when: false
-      failed_when: rh_sec.rc not in [0, 100]
-      when: ansible_facts.os_family == "RedHat"
-
-    - name: RHEL family — all updates
-      ansible.builtin.command: dnf -q check-update
-      register: rh_all
-      changed_when: false
-      failed_when: rh_all.rc not in [0, 100]
-      when: ansible_facts.os_family == "RedHat"
-
-    - name: Debian family — refresh package lists
-      ansible.builtin.apt:
-        update_cache: true
-        cache_valid_time: 3600
-      changed_when: false
-      when: ansible_facts.os_family == "Debian"
-
-    - name: Debian family — simulate upgrade
-      ansible.builtin.command: apt-get -s -o Debug::NoLocking=1 dist-upgrade
-      register: deb_sim
-      changed_when: false
-      when: ansible_facts.os_family == "Debian"
-
-    - name: Reboot required, services still running replaced code
-      ansible.builtin.include_tasks: tasks/restart-check.yml
-
-    - name: Summarise
+    - name: Mark as checked (runs locally, also for hosts that turn out unreachable)
       ansible.builtin.set_fact:
-        update_summary:
-          os: "{{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}"
-          kernel: "{{ ansible_facts.kernel }}"
-          pending: >-
-            {{ (rh_all.stdout_lines | default([]) | select('match', '^\S+\.\S+\s') | list | length)
-               if ansible_facts.os_family == 'RedHat'
-               else (deb_sim.stdout_lines | default([]) | select('match', '^Inst ') | list | length) }}
-          security: >-
-            {{ (rh_sec.stdout_lines | default([]) | select('match', '^\S+\.\S+\s') | list | length)
-               if ansible_facts.os_family == 'RedHat'
-               else (deb_sim.stdout_lines | default([]) | select('match', '^Inst .*[Ss]ecurity') | list | length) }}
-          reboot_required: "{{ needs_reboot }}"
-          reboot_reasons: "{{ reboot_reasons }}"
-          restart_pending: "{{ restart_pending }}"
+        hm_checked: true
+
+    - name: Facts
+      ansible.builtin.setup:
+      ignore_unreachable: true
+      ignore_errors: true
+      register: hm_reach
+
+    - name: Unreachable, or no facts (e.g. sudo)
+      ansible.builtin.set_fact:
+        update_error: >-
+          {{ 'unreachable' if hm_reach.unreachable | default(false) else 'facts' }}: {{
+             hm_reach.msg | default('failed') | trim | truncate(200) }}
+      when: hm_reach.unreachable | default(false) or hm_reach is failed
+
+    - name: Check
+      when: update_error is not defined
+      block:
+        # Packages dnf would update for security advisories: like check-update, it honours enabled module
+        # streams (updateinfo list would also count advisories for streams that aren't enabled, one line per
+        # package and advisory, so it could exceed `pending`).
+        - name: RHEL family — security updates
+          ansible.builtin.command: dnf -q check-update --security
+          register: rh_sec
+          changed_when: false
+          failed_when: rh_sec.rc not in [0, 100]
+          when: ansible_facts.os_family == "RedHat"
+
+        - name: RHEL family — all updates
+          ansible.builtin.command: dnf -q check-update
+          register: rh_all
+          changed_when: false
+          failed_when: rh_all.rc not in [0, 100]
+          when: ansible_facts.os_family == "RedHat"
+
+        # apt-get, not the apt module: that one installs python3-apt first, which fails on archived releases
+        - name: Debian family — refresh package lists
+          ansible.builtin.command: apt-get -q update
+          changed_when: false
+          when: ansible_facts.os_family == "Debian"
+
+        - name: Debian family — simulate upgrade
+          ansible.builtin.command: apt-get -s -o Debug::NoLocking=1 dist-upgrade
+          register: deb_sim
+          changed_when: false
+          when: ansible_facts.os_family == "Debian"
+
+        - name: Reboot required, services still running replaced code
+          ansible.builtin.include_tasks: tasks/restart-check.yml
+
+        - name: Summarise
+          ansible.builtin.set_fact:
+            update_summary:
+              os: "{{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}"
+              kernel: "{{ ansible_facts.kernel }}"
+              pending: >-
+                {{ (rh_all.stdout_lines | default([]) | select('match', '^\S+\.\S+\s') | list | length)
+                   if ansible_facts.os_family == 'RedHat'
+                   else (deb_sim.stdout_lines | default([]) | select('match', '^Inst ') | list | length) }}
+              security: >-
+                {{ (rh_sec.stdout_lines | default([]) | select('match', '^\S+\.\S+\s') | list | length)
+                   if ansible_facts.os_family == 'RedHat'
+                   else (deb_sim.stdout_lines | default([]) | select('match', '^Inst .*[Ss]ecurity') | list | length) }}
+              reboot_required: "{{ needs_reboot }}"
+              reboot_reasons: "{{ reboot_reasons }}"
+              restart_pending: "{{ restart_pending }}"
+
+      rescue:
+        - name: Record the failure
+          ansible.builtin.set_fact:
+            update_error: >-
+              {{ ansible_failed_task.name }}: {{ (ansible_failed_result.stderr | default('', true)
+              or ansible_failed_result.msg | default('failed')) | trim | truncate(200) }}
 
 - name: Pending updates on Windows (search only, installs nothing)
   hosts: "{{ windows_target | default('windows') }}"
   gather_facts: false
   tasks:
+    - name: Mark as checked
+      ansible.builtin.set_fact:
+        hm_checked: true
     - name: Search
       ansible.windows.win_updates:
         state: searched
         category_names: [SecurityUpdates, CriticalUpdates, UpdateRollups]
       register: win_upd
+      ignore_unreachable: true
+      ignore_errors: true
+    - name: Record a failure
+      ansible.builtin.set_fact:
+        update_error: >-
+          {{ 'unreachable: ' if win_upd.unreachable | default(false) else 'Search: ' }}{{
+             win_upd.msg | default('failed') | trim | truncate(200) }}
+      when: win_upd.unreachable | default(false) or win_upd.failed | default(false)
     - ansible.builtin.set_fact:
         update_summary:
           os: windows
           pending: "{{ win_upd.found_update_count | default(0) }}"
           security: "{{ win_upd.updates | default({}) | dict2items | selectattr('value.categories', 'contains', 'Security Updates') | list | length }}"
           reboot_required: "{{ win_upd.reboot_required | default(false) }}"
+      when: update_error is not defined
 
 - name: Write discovery/updates.json
   hosts: localhost
   gather_facts: false
   vars:
     updates_file: "{{ playbook_dir }}/../../discovery/updates.json"
-    reported: "{{ groups['all'] | map('extract', hostvars) | selectattr('update_summary', 'defined') | map(attribute='inventory_hostname') | list }}"
+    checked: "{{ groups['all'] | map('extract', hostvars) | selectattr('hm_checked', 'defined') | list }}"
+    reported: "{{ checked | selectattr('update_summary', 'defined') | rejectattr('update_error', 'defined') | map(attribute='inventory_hostname') | list }}"
+    failed: "{{ checked | map(attribute='inventory_hostname') | reject('in', reported) | list }}"
   tasks:
     - name: Read the previous results
       ansible.builtin.stat:
@@ -99,6 +141,13 @@
           {%- for name in reported -%}
             {%- set _ = hosts.update({name: hostvars[name].update_summary | combine({'collected_at': now_utc})}) -%}
           {%- endfor -%}
+          {%- for name in failed -%}
+            {%- set old = hosts.get(name, {}) -%}
+            {%- set _ = hosts.update({name: {'error': hostvars[name].update_error | default('failed (see the play output)'),
+                                             'collected_at': now_utc,
+                                             'last_ok_at': old.last_ok_at | default(none) if 'error' in old
+                                                           else old.collected_at | default(none)}}) -%}
+          {%- endfor -%}
           {{ {'collected_at': now_utc, 'hosts': hosts} }}
       vars:
         now_utc: "{{ now(utc=true).isoformat() }}"
@@ -108,3 +157,8 @@
         dest: "{{ updates_file }}"
         content: "{{ updates_merged | to_nice_json }}\n"
         mode: "0644"
+
+    - name: Hosts without a result
+      ansible.builtin.debug:
+        msg: "{% for h in failed %}{{ h }}: {{ hostvars[h].update_error | default('failed') }}{{ '; ' if not loop.last }}{% endfor %}"
+      when: failed | length > 0
