@@ -1,5 +1,8 @@
 locals {
   template_name = "tpl-${var.distro}${var.distro_version}-${var.build_date}"
+  # A site file (site-<name>.pkrvars.hcl) sets `site`; with_secrets.py sets proxmox_site from the token's site.
+  # Another site's token fails here ("Error in function call", regex) before anything is cloned.
+  site_note = var.site == "" ? "" : " Site ${regex("^${var.site}$", var.proxmox_site)}."
 }
 
 source "proxmox-clone" "linux" {
@@ -10,7 +13,7 @@ source "proxmox-clone" "linux" {
   vm_id                    = var.vm_id
   vm_name                  = local.template_name
   template_name            = local.template_name
-  template_description     = "Built by Packer from base VMID ${var.base_vm_id} on ${var.build_date}. homelab-infrastructure/packer/linux"
+  template_description     = "Built by Packer from base VMID ${var.base_vm_id} on ${var.build_date}. homelab-infrastructure/packer/linux${local.site_note}"
   tags                     = "template;${var.distro}"
 
   cores           = 2
