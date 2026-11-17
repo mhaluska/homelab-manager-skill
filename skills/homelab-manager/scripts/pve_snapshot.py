@@ -17,6 +17,8 @@ check (before a patch run with snapshot=true) reports every guest, not only the 
 guest of the cluster (e.g. an LXD container on a NAS: snapshot it there), or no snapshot (Proxmox's snapshot
 feature check, with the reason when the config shows one: a bind or device mount point of a container).
 Exit 0 when all can be snapshotted, 1 when not.
+--site NAME: a guest of another site's Proxmox (sites: in homelab.yaml), with that site's tokens; VMIDs and
+names are only unique within one site.
 """
 from __future__ import annotations
 
@@ -119,6 +121,7 @@ def main() -> int:
     ap.add_argument("--name")
     ap.add_argument("--description", default="")
     ap.add_argument("--json", action="store_true", help="check: print the result as JSON")
+    ap.add_argument("--site", help="the site whose Proxmox holds the guests (default: the default site)")
     a = ap.parse_args()
     name = a.name or (default_name() if a.action == "create" else None)
     if a.action in ("delete", "rollback") and not name:
@@ -129,12 +132,9 @@ def main() -> int:
         ap.error("rollback one guest at a time")
     try:
         cfg = hmlib.load_config()
-        endpoint = hmlib.get(cfg, "proxmox.endpoint")
-        if not endpoint:
-            raise hmlib.ConfigError("proxmox.endpoint is empty in homelab.yaml.")
-        secret = hmlib.get(cfg, "proxmox.tokens.read_only", "proxmox-ro") if a.action in ("list", "check") \
-            else hmlib.get(cfg, "proxmox.tokens.provisioning", "proxmox-rw")
-        pve = PVE(endpoint, hmlib.read_secret(cfg, secret), hmlib.proxmox_ssl_context(cfg))
+        px = hmlib.proxmox_site(cfg, a.site)
+        secret = hmlib.proxmox_token_name(px, "read_only" if a.action in ("list", "check") else "provisioning")
+        pve = PVE(px["endpoint"], hmlib.read_secret(cfg, secret), hmlib.proxmox_ssl_context(cfg, px))
     except hmlib.ConfigError as e:
         print(f"pve_snapshot: {e}", file=sys.stderr)
         return 3

@@ -5,7 +5,8 @@
     drift_report.py --stale        # is discovery/drift.md older than its inputs? exit 0 fresh, 1 stale, 2 missing
 
 Sources (all read-only):
-  live      discovery/proxmox.json   (proxmox_inventory.py)  and discovery/network.json (nmap_scan.py)
+  live      discovery/proxmox.json   (proxmox_inventory.py)  and discovery/network.json (nmap_scan.py);
+            other sites (sites: in homelab.yaml): discovery/proxmox-<site>.json, reported per site
   state     `tofu show -json` in tofu/environments/<env>  (run under with_secrets.py for the state backend)
             or a file passed with --tofu-json
   declared  ansible/inventory/managed via `ansible-inventory --list`
@@ -126,8 +127,8 @@ def load_tofu(args, root: Path, env: str):
     return json.loads(r.stdout or "{}"), f"tofu show -json ({d.relative_to(root)})"
 
 
-STALE_INPUTS = ["homelab.yaml", "ansible/inventory", "discovery/proxmox.json", "discovery/network.json",
-                "discovery/containers.json"]
+STALE_INPUTS = ["homelab.yaml", "ansible/inventory", "discovery/proxmox.json", "discovery/proxmox-*.json",
+                "discovery/network.json", "discovery/containers.json"]
 
 
 def container_ips(root: Path) -> dict[str, str]:
@@ -152,10 +153,17 @@ def newest_inputs(root: Path, than: float) -> list[str]:
     out = []
     for rel in STALE_INPUTS:
         p = root / rel
-        files = [f for f in p.rglob("*") if f.is_file()] if p.is_dir() else ([p] if p.is_file() else [])
+        files = (list(root.glob(rel)) if "*" in rel else
+                 [f for f in p.rglob("*") if f.is_file()] if p.is_dir() else ([p] if p.is_file() else []))
         if any(f.stat().st_mtime > than for f in files):
             out.append(rel)
     return out
+
+
+def site_suffix(cfg: dict, ip: str) -> str:
+    """' [site offsite]' when a site's `ranges` hold ip."""
+    st = hmlib.site_of_address(cfg, ip)
+    return f" [site {hmlib.site_title(st)}]" if st else ""
 
 
 def vlan_suffix(cfg: dict, ip: str) -> str:
@@ -220,15 +228,32 @@ def main():
               else "fresh: no input changed since the report")
         return 1 if newer else 0
 
-    px_file, net_file = root / "discovery" / "proxmox.json", root / "discovery" / "network.json"
-    px = json.loads(px_file.read_text()) if px_file.exists() else None
+    net_file = root / "discovery" / "network.json"
+    try:
+        all_sites = hmlib.sites(cfg)
+        snaps = hmlib.proxmox_snapshots(cfg)
+    except hmlib.ConfigError as e:
+        print(f"drift_report: {e}", file=sys.stderr)
+        return 3
+    multi = len(all_sites) > 1
+    for st, p in snaps:
+        for g in p.get("guests") or []:
+            g["_site"] = st["name"]
+    px = next((p for st, p in snaps if st["default"]), None)
+    others = [(st, p) for st, p in snaps if not st["default"]]
+    all_guests = [g for _, p in snaps for g in p.get("guests") or []]
+    gref = (lambda g: f"{g['_site']}/{g['vmid']}") if multi else (lambda g: str(g["vmid"]))
+    in_site = (lambda st: f" — site {hmlib.site_title(st)}") if multi else (lambda st: "")
     net = json.loads(net_file.read_text()) if net_file.exists() else None
     state, state_src = load_tofu(a, root, env)
     ans, ans_src = load_ansible(root)
 
     L = [f"# Drift report — {dt.datetime.now().strftime('%Y-%m-%d %H:%M')}", "",
          "| Source | Status |", "|---|---|",
-         f"| Proxmox snapshot | {px['collected_at'] if px else 'missing — run proxmox_inventory.py'} |",
+         f"| Proxmox snapshot{in_site(all_sites[0])} | {px['collected_at'] if px else 'missing — run proxmox_inventory.py'} |",
+         *[f"| Proxmox snapshot{in_site(st)} | " + (next((p['collected_at'] for x, p in others if x["name"] == st["name"]), None)
+           or f"missing — run proxmox_inventory.py --site {st['name']}") + " |"
+           for st in all_sites[1:] if st["proxmox"] and st["proxmox"].get("endpoint")],
          f"| Network scan | {net.get('updated_at') if net else 'missing — run nmap_scan.py'} |",
          f"| OpenTofu state | {state_src if state else 'unavailable: ' + state_src} |",
          f"| Ansible inventory | {ans_src} ({len(ans)} hosts) |", ""]
@@ -239,7 +264,7 @@ def main():
     if px and state is not None:
         unmanaged = [g for vid, g in live.items() if vid not in managed]
         missing = [m for vid, m in managed.items() if vid not in live]
-        L += ["## Proxmox ↔ OpenTofu", ""]
+        L += [f"## Proxmox ↔ OpenTofu{in_site(all_sites[0])}", ""]
         if unmanaged:
             issues += len(unmanaged)
             L += [f"**Not managed by OpenTofu ({len(unmanaged)})** — candidates for `tofu import` (needs approval):", ""]
@@ -270,27 +295,29 @@ def main():
         if not (unmanaged or missing or diffs):
             L += ["No differences.", ""]
 
-    if px and state is None:
-        # No state: fall back to the `tofu` tag every module sets. Weaker than state (a tag can be
-        # hand-edited), but still shows guests nobody manages.
-        untagged = [g for g in live.values() if "tofu" not in str(g.get("tags") or "").replace(",", ";").split(";")
+    # No state (or another site, whose OpenTofu isn't compared yet): fall back to the `tofu` tag every module
+    # sets. Weaker than state (a tag can be hand-edited), but still shows guests nobody manages.
+    by_tag = ([(all_sites[0], px, "state unavailable")] if px and state is None else []) \
+        + [(st, p, "no OpenTofu state compared for this site") for st, p in others]
+    for st, p, why in by_tag:
+        untagged = [g for g in p.get("guests") or [] if "tofu" not in str(g.get("tags") or "").replace(",", ";").split(";")
                     and not g.get("template")]  # Packer-built templates are untagged by design
-        L += ["## Proxmox ↔ OpenTofu (by `tofu` tag — state unavailable)", ""]
+        L += [f"## Proxmox ↔ OpenTofu{in_site(st)} (by `tofu` tag — {why})", ""]
         if untagged:
             issues += len(untagged)
             L += [f"**No `tofu` tag ({len(untagged)})** — probably not managed by OpenTofu; confirm with state when reachable:", ""]
-            L += [f"- {g['vmid']} {g['type']} `{g['name']}` on {g['node']} ({g['status']}{', template' if g['template'] else ''})"
+            L += [f"- {gref(g)} {g['type']} `{g['name']}` on {g['node']} ({g['status']}{', template' if g['template'] else ''})"
                   for g in untagged]
         else:
             L.append("Every guest carries the `tofu` tag.")
         L.append("")
 
-    if px:
-        L += ["## Backups", ""]
+    for st, p in snaps:
+        L += [f"## Backups{in_site(st)}", ""]
         found = []
-        if not [st for st in px.get("storage", []) if "backup" in str(st.get("content") or "").split(",")]:
+        if not [x for x in p.get("storage", []) if "backup" in str(x.get("content") or "").split(",")]:
             found.append("- No storage accepts `backup` content — vzdump has nowhere to write.")
-        jobs = px.get("backup_jobs")
+        jobs = p.get("backup_jobs")
         if jobs is None:
             L.append("Backup jobs not collected (older snapshot or token can't read /cluster/backup).")
         else:
@@ -308,12 +335,12 @@ def main():
                 else:
                     ids = {i for j in active if not j.get("all") for i in hmlib.id_list(j.get("vmid"))}
                     pools = {j["pool"] for j in active if j.get("pool")}
-                    for g in live.values():
+                    for g in p.get("guests") or []:
                         if g.get("template"):
                             continue
                         by_all = any(j.get("all") and g["vmid"] not in hmlib.id_list(j.get("exclude")) for j in active)
                         if not (by_all or g["vmid"] in ids or (g.get("pool") and g["pool"] in pools)):
-                            found.append(f"- {g['vmid']} `{g['name']}` is in no backup job.")
+                            found.append(f"- {gref(g)} `{g['name']}` is in no backup job.")
 
         if found:
             issues += len(found)
@@ -326,52 +353,66 @@ def main():
 
     if ans:
         L += ["## Ansible inventory", ""]
-        live_names = {(g["name"] or "").lower() for g in live.values()}
-        guest_ips = {ip for g in live.values() for ip in guest_addresses(g)[0]}
+        live_names = {(g["name"] or "").lower() for g in all_guests}
+        guest_ips = {ip for g in all_guests for ip in guest_addresses(g)[0]}
         net_ips = set((net or {}).get("hosts", {}).keys())
         ghosts = []
         for h, v in ans.items():
             ip = v.get("ansible_host")
             in_px = h.lower().split(".")[0] in live_names or (ip or "").lower() in guest_ips
             in_net = bool(({ip} | set(extra_ips(v))) & net_ips) if ip else bool(set(extra_ips(v)) & net_ips)
-            if px and net and not in_px and not in_net:
+            if snaps and net and not in_px and not in_net:
                 ghosts.append(f"- `{h}` ({ip or 'no ansible_host'}) — not a Proxmox guest and not seen on the network")
+        known_sites = {st["name"] for st in all_sites if st["name"]}
+        site_problems = []
+        for h, v in sorted(ans.items()):
+            hs = hmlib.host_sites(v.get("groups"))
+            if len(hs) > 1:
+                site_problems.append(f"- `{h}` is in several site groups ({', '.join('site_' + x for x in hs)}): keep one")
+            site_problems += [f"- `{h}` is in `site_{x}`, but homelab.yaml has no site {x!r}" for x in hs
+                              if x not in known_sites]
+        if site_problems:
+            issues += len(site_problems)
+            L += [f"**Site groups ({len(site_problems)})**:", "", *site_problems, ""]
         if ghosts:
             issues += len(ghosts)
             L += [f"**Inventory hosts not found anywhere ({len(ghosts)})**:", "", *ghosts, ""]
         else:
-            L += ["All inventory hosts accounted for." if (px and net) else "Needs both snapshots to check.", ""]
+            L += ["All inventory hosts accounted for." if (snaps and net) else "Needs both snapshots to check.", ""]
 
-    matched = match_guests(live.values(), net["hosts"]) if (px and net) else {}
-    if px and net:
+    matched = match_guests(all_guests, net["hosts"]) if (snaps and net) else {}
+    if snaps and net:
         L += ["## Proxmox guests ↔ network", ""]
         if matched:
             L += [f"{len(matched)} scanned address(es) belong to Proxmox guests:", ""]
-            L += [f"- {ip} → {g['vmid']} {g['type']} `{g['name']}` ({how})" + vlan_suffix(cfg, ip)
+            L += [f"- {ip} → {gref(g)} {g['type']} `{g['name']}` ({how})" + vlan_suffix(cfg, ip)
                   for ip, (g, how) in sorted(matched.items(), key=lambda x: ipaddress.ip_address(x[0]))]
         else:
             L.append("No scanned address matched a guest.")
-        if not any(g.get("config") for g in live.values()):
+        if not any(g.get("config") for g in all_guests):
             L += ["", "Snapshot has no guest configs: run `proxmox_inventory.py --details` to match by IP and MAC."]
-        agent = (px.get("guest_ip_sources") or {}).get("agent", "")
-        if agent.startswith("forbidden"):
-            L += ["", f"VM IPs from the guest agent were not read — {agent}."]
-        seen = {g["vmid"] for g, _ in matched.values()}
-        silent = [g for g in live.values() if g["status"] == "running" and not g.get("template") and g["vmid"] not in seen]
+        for st, p in snaps:
+            agent = (p.get("guest_ip_sources") or {}).get("agent", "")
+            if agent.startswith("forbidden"):
+                L += ["", f"VM IPs from the guest agent were not read{in_site(st)} — {agent}."]
+        seen = {(g["_site"], g["vmid"]) for g, _ in matched.values()}
+        silent = [g for g in all_guests if g["status"] == "running" and not g.get("template")
+                  and (g["_site"], g["vmid"]) not in seen]
         if silent:
             L += ["", f"Running guests not matched to any scanned address ({len(silent)}) — outside the scanned "
                   "ranges, firewalled, or no IP known:", ""]
-            L += [f"- {g['vmid']} {g['type']} `{g['name']}`" for g in silent]
+            L += [f"- {gref(g)} {g['type']} `{g['name']}`" for g in silent]
         L.append("")
 
     if net:
         known_ips = {v.get("ansible_host") for v in ans.values() if v.get("ansible_host")}
         secondary = {ip: h for h, v in ans.items() for ip in extra_ips(v)}
         known_ips |= set(matched) | set(secondary)
-        for node_nets in (px or {}).get("networks", {}).values():
-            for n in node_nets:
-                if n.get("cidr"):
-                    known_ips.add(str(ipaddress.ip_interface(n["cidr"]).ip))
+        for _, p in snaps:
+            for node_nets in (p.get("networks") or {}).values():
+                for n in node_nets:
+                    if n.get("cidr"):
+                        known_ips.add(str(ipaddress.ip_interface(n["cidr"]).ip))
         containers = container_ips(root)
         seen_containers = sorted((ip for ip in containers if ip in net["hosts"] and ip not in known_ips),
                                  key=ipaddress.ip_address)
@@ -383,7 +424,7 @@ def main():
             L += [f"{len(unknown)} device(s) — add to inventory, or list in `discovery.ignore_unmanaged`"
                   + (" (Proxmox guests are listed above, not here)" if matched else "") + ":", ""]
             L += [f"- {ip} {(h.get('hostnames') or [''])[0]} — {h.get('device_type_guess')} {h.get('vendor') or ''}".rstrip()
-                  + vlan_suffix(cfg, ip)
+                  + vlan_suffix(cfg, ip) + (site_suffix(cfg, ip) if multi else "")
                   + (" — **management controller (BMC)**: keep it off user networks" if
                      "bmc" in str(h.get("device_type_guess") or "").split("/") else "")
                   for ip, h in sorted(unknown)]

@@ -60,9 +60,9 @@ def get(cfg: dict, dotted: str, default=None):
 
 # --------------------------------------------------------------------------- TLS
 
-def proxmox_ca_file(cfg: dict) -> str | None:
-    """proxmox.ca_cert as a usable path: ~ expanded, relative paths taken from the repo root."""
-    ca = get(cfg, "proxmox.ca_cert")
+def proxmox_ca_file(cfg: dict, px: dict | None = None) -> str | None:
+    """ca_cert of a Proxmox block (default: proxmox.*) as a usable path: ~ expanded, relative to the repo root."""
+    ca = (px or {}).get("ca_cert") if px is not None else get(cfg, "proxmox.ca_cert")
     if not ca:
         return None
     p = Path(os.path.expanduser(str(ca)))
@@ -71,19 +71,141 @@ def proxmox_ca_file(cfg: dict) -> str | None:
     return str(p)
 
 
-def proxmox_ssl_context(cfg: dict):
-    """SSL context for the Proxmox API as homelab.yaml configures it.
+def proxmox_ssl_context(cfg: dict, px: dict | None = None):
+    """SSL context for a Proxmox API as homelab.yaml configures it (px: a site's block, default proxmox.*).
 
     Python (OpenSSL) does not read the macOS keychain: a CA trusted only there must be exported
     to a PEM file and set as proxmox.ca_cert (check_env.py detects this case).
     """
     import ssl
-    if get(cfg, "proxmox.verify_tls", True) is False:
+    verify = (px or {}).get("verify_tls", True) if px is not None else get(cfg, "proxmox.verify_tls", True)
+    if verify is False:
         return ssl._create_unverified_context()
-    ca = proxmox_ca_file(cfg)
+    ca = proxmox_ca_file(cfg, px)
     if ca and not Path(ca).is_file():
-        raise ConfigError(f"proxmox.ca_cert {ca!r} does not exist.")
+        where = (px or {}).get("_where", "proxmox") if px is not None else "proxmox"
+        raise ConfigError(f"{where}.ca_cert {ca!r} does not exist.")
     return ssl.create_default_context(cafile=ca)
+
+
+# --------------------------------------------------------------------------- sites
+
+# A site is a location (home, a rented server, family's house). `sites:` in homelab.yaml lists them, the default
+# first: its Proxmox is the top-level `proxmox:` block; any other site may have its own (`sites[].proxmox`, same
+# keys). Inventory hosts belong to a site through the Ansible group site_<name> (none: the default site).
+# Without `sites:` there is one unnamed default site.
+SITE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,30}$")
+SITE_GROUP_PREFIX = "site_"
+
+
+def sites(cfg: dict) -> list[dict]:
+    """[{name, label, default, proxmox (dict | None), ranges, _where}], the default site first; validates them."""
+    raw = cfg.get("sites") or []
+    if not isinstance(raw, list):
+        raise ConfigError("sites must be a list of {name, label, proxmox, ranges}.")
+    top = cfg.get("proxmox") if isinstance(cfg.get("proxmox"), dict) else {}
+    if not raw:
+        return [{"name": "", "label": "", "default": True, "proxmox": {**top, "_where": "proxmox"}, "ranges": []}]
+    out, seen = [], set()
+    for i, s in enumerate(raw):
+        if not isinstance(s, dict) or not s.get("name"):
+            raise ConfigError(f"sites[{i}] needs a name.")
+        name = str(s["name"])
+        if not SITE_NAME_RE.match(name):
+            raise ConfigError(f"site name {name!r}: lowercase letters, digits and _, starting with a letter "
+                              f"(it becomes the Ansible group {SITE_GROUP_PREFIX}{name}).")
+        if name in seen:
+            raise ConfigError(f"site {name!r} is listed twice.")
+        seen.add(name)
+        if i == 0 and s.get("proxmox"):
+            raise ConfigError(f"sites[0] ({name}) is the default site: its Proxmox is the top-level proxmox: block, "
+                              "not sites[0].proxmox.")
+        px = top if i == 0 else s.get("proxmox")
+        if px is not None and not isinstance(px, dict):
+            raise ConfigError(f"sites.{name}.proxmox must be a mapping.")
+        out.append({"name": name, "label": str(s.get("label") or ""), "default": i == 0,
+                    "proxmox": {**px, "_where": "proxmox" if i == 0 else f"sites[{name}].proxmox"} if px else None,
+                    "ranges": _networks(s.get("ranges"))})
+    return out
+
+
+def site(cfg: dict, name: str | None = None) -> dict:
+    """A site by name; None or '' is the default site."""
+    all_sites = sites(cfg)
+    if not name:
+        return all_sites[0]
+    for s in all_sites:
+        if s["name"] == name:
+            return s
+    known = ", ".join(s["name"] for s in all_sites if s["name"]) or "none (no sites: in homelab.yaml)"
+    raise ConfigError(f"no site {name!r} in homelab.yaml (sites: {known}).")
+
+
+def site_title(s: dict) -> str:
+    return (f"{s['name']} ({s['label']})" if s["label"] else s["name"]) or "default"
+
+
+def proxmox_site(cfg: dict, name: str | None = None) -> dict:
+    """The Proxmox block of a site, with `_site` (its name) and `_where` (its config path); endpoint required."""
+    s = site(cfg, name)
+    px = s["proxmox"]
+    if not px or not px.get("endpoint"):
+        where = px["_where"] if px else f"sites[{s['name']}].proxmox"
+        raise ConfigError(f"{where}.endpoint is empty in homelab.yaml"
+                          + (f" (site {s['name']!r} has no Proxmox)." if not s["default"] else "."))
+    return {**px, "_site": s["name"]}
+
+
+def proxmox_sites(cfg: dict) -> list[dict]:
+    """The Proxmox block of every site that has one with an endpoint."""
+    return [proxmox_site(cfg, s["name"]) for s in sites(cfg) if s["proxmox"] and s["proxmox"].get("endpoint")]
+
+
+def proxmox_token_name(px: dict, kind: str) -> str:
+    """Secret name of a site's read_only / provisioning token (defaults as in the template)."""
+    return ((px.get("tokens") or {}).get(kind)) or {"read_only": "proxmox-ro", "provisioning": "proxmox-rw"}[kind]
+
+
+def site_of_secret(cfg: dict, secret: str) -> dict | None:
+    """The Proxmox block of the site whose tokens name this secret (the default site first)."""
+    for s in sites(cfg):
+        px = s["proxmox"]
+        if px and secret in [proxmox_token_name(px, k) for k in ("read_only", "provisioning")]:
+            return {**px, "_site": s["name"]}
+    return None
+
+
+def proxmox_snapshot_file(root: str | os.PathLike, site_name: str | None = None, default: bool = True) -> Path:
+    """discovery/proxmox.json for the default site, discovery/proxmox-<name>.json for the others."""
+    d = Path(root) / "discovery"
+    return d / "proxmox.json" if default or not site_name else d / f"proxmox-{site_name}.json"
+
+
+def proxmox_snapshots(cfg: dict) -> list[tuple[dict, dict]]:
+    """[(site, snapshot)] for every site whose snapshot file exists, the default site first."""
+    out = []
+    for s in sites(cfg):
+        f = proxmox_snapshot_file(cfg["_root"], s["name"], s["default"])
+        if f.is_file():
+            try:
+                out.append((s, json.loads(f.read_text())))
+            except ValueError:
+                raise ConfigError(f"{f.name} is not valid JSON: run proxmox_inventory.py again.")
+    return out
+
+
+def host_sites(groups) -> list[str]:
+    """Site names of an inventory host from its site_<name> groups (normally zero or one)."""
+    return sorted(g[len(SITE_GROUP_PREFIX):] for g in groups or [] if str(g).startswith(SITE_GROUP_PREFIX))
+
+
+def site_of_address(cfg: dict, ip: str) -> dict | None:
+    """The site whose `ranges` hold this address."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    return next((s for s in sites(cfg) if any(addr in n for n in s["ranges"])), None)
 
 
 # --------------------------------------------------------------------------- scan scope

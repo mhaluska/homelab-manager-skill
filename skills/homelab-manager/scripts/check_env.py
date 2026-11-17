@@ -204,43 +204,54 @@ def _keychain_ca_fix(host: str, port: int, names: list[str]):
 
 
 def check_proxmox_tls(cfg):
-    endpoint = hmlib.get(cfg or {}, "proxmox.endpoint")
-    if not endpoint:
+    """The certificate of every site's Proxmox (sites: in homelab.yaml; one site without it)."""
+    if not cfg:
         return []
-    if hmlib.get(cfg, "proxmox.verify_tls", True) is False:
-        return [{"check": "proxmox:tls", "ok": None,
-                 "detail": "verify_tls: false — certificate not checked (prefer proxmox.ca_cert)"}]
+    try:
+        targets = hmlib.proxmox_sites(cfg)
+    except hmlib.ConfigError as e:
+        return [{"check": "sites", "ok": False, "detail": str(e)}]
+    return [r for px in targets for r in _check_tls(cfg, px)]
+
+
+def _check_tls(cfg, px):
+    check = "proxmox:tls" + (f":{px['_site']}" if px["_site"] and px["_where"] != "proxmox" else "")
+    where, endpoint = px["_where"], px["endpoint"]
+    if px.get("verify_tls", True) is False:
+        return [{"check": check, "ok": None,
+                 "detail": f"verify_tls: false — certificate not checked (prefer {where}.ca_cert)"}]
     u = urllib.parse.urlsplit(endpoint)
     host, port = u.hostname, u.port or (443 if u.scheme == "https" else 8006)
     if not host:
-        return [{"check": "proxmox:tls", "ok": False, "detail": f"proxmox.endpoint {endpoint!r} is not a URL"}]
+        return [{"check": check, "ok": False, "detail": f"{where}.endpoint {endpoint!r} is not a URL"}]
     try:
-        ctx = hmlib.proxmox_ssl_context(cfg)
+        ctx = hmlib.proxmox_ssl_context(cfg, px)
     except hmlib.ConfigError as e:
-        return [{"check": "proxmox:tls", "ok": False, "detail": str(e)}]
-    ca = hmlib.proxmox_ca_file(cfg)
+        return [{"check": check, "ok": False, "detail": str(e)}]
+    ca = hmlib.proxmox_ca_file(cfg, px)
     err = _handshake(host, port, ctx)
     if err is None:
-        return [{"check": "proxmox:tls", "ok": True,
+        return [{"check": check, "ok": True,
                  "detail": f"{host}:{port} certificate verified ({'ca_cert ' + ca if ca else 'default CA bundle'})"}]
     if not isinstance(err, ssl.SSLCertVerificationError):
-        return [{"check": "proxmox:tls", "ok": False, "detail": f"cannot connect to {host}:{port} ({err})"}]
+        return [{"check": check, "ok": False, "detail": f"cannot connect to {host}:{port} ({err})"}]
     if getattr(err, "verify_code", None) == 62:
-        return [{"check": "proxmox:tls", "ok": False,
+        return [{"check": check, "ok": False,
                  "detail": f"certificate does not match {host} ({err.verify_message}); use the name in the certificate"}]
     names = _chain_names(host, port)
     found = _keychain_ca_fix(host, port, names)
     if found:
         name, kc = found
         slug = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-").lower() or "ca"
-        return [{"check": "proxmox:tls", "ok": False,
+        return [{"check": check, "ok": False,
                  "detail": f"CA {name!r} is trusted in the macOS keychain ({kc}), but Python does not read the "
                            f"keychain. Export it and point ca_cert at it: mkdir -p ~/.config/homelab && "
                            f"security find-certificate -a -c \"{name}\" -p {kc} > ~/.config/homelab/{slug}.pem && "
-                           f"python3 $HM/scripts/config_set.py 'proxmox.ca_cert=~/.config/homelab/{slug}.pem'"}]
+                           + (f"python3 $HM/scripts/config_set.py 'proxmox.ca_cert=~/.config/homelab/{slug}.pem'"
+                              if where == "proxmox" else f"set {where}.ca_cert to ~/.config/homelab/{slug}.pem")}]
     issuer = f" (issuer {names[0]!r})" if names else ""
-    return [{"check": "proxmox:tls", "ok": False,
-             "detail": f"certificate not trusted{issuer}: {err.verify_message}. Set proxmox.ca_cert to the CA's PEM "
+    return [{"check": check, "ok": False,
+             "detail": f"certificate not trusted{issuer}: {err.verify_message}. Set {where}.ca_cert to the CA's PEM "
                        "(Proxmox's own CA: /etc/pve/pve-root-ca.pem on a node) rather than verify_tls: false"}]
 
 
@@ -274,24 +285,56 @@ def el8_without_interpreter(inventory: dict) -> list[str]:
     return sorted(out)
 
 
+def site_group_problems(inventory: dict, cfg: dict) -> list[str]:
+    """Hosts in several site_<name> groups, and site_<name> groups homelab.yaml has no site for."""
+    def members(group: str, seen: set) -> set:
+        g = inventory.get(group) or {}
+        out = set(g.get("hosts") or [])
+        for child in g.get("children") or []:
+            if child not in seen:
+                out |= members(child, seen | {child})
+        return out
+    try:
+        known = {s["name"] for s in hmlib.sites(cfg) if s["name"]}
+    except hmlib.ConfigError as e:
+        return [str(e)]
+    per_host: dict[str, list[str]] = {}
+    problems = []
+    for group in sorted(inventory):
+        if not group.startswith(hmlib.SITE_GROUP_PREFIX):
+            continue
+        name = group[len(hmlib.SITE_GROUP_PREFIX):]
+        if name not in known:
+            problems.append(f"group {group}: homelab.yaml has no site {name!r} (sites:)")
+        for h in members(group, {group}):
+            per_host.setdefault(h, []).append(group)
+    problems += [f"{h} is in several site groups ({', '.join(gs)})" for h, gs in sorted(per_host.items()) if len(gs) > 1]
+    return problems
+
+
 def check_ansible_targets(cfg):
     root = Path(cfg["_root"]) if cfg else None
     if not root or not shutil.which("ansible") or not (root / "ansible" / "inventory" / "managed").exists():
         return []
-    _, so, _ = run(["ansible", "--version"])
-    if ansible_core_version(so) < (2, 17):
-        return []
     rc, so, _ = run(["ansible-inventory", "-i", "inventory/managed", "--list"], timeout=60, cwd=root / "ansible")
     if rc != 0:
         return []
-    hosts = el8_without_interpreter(json.loads(so or "{}"))
-    if not hosts:
-        return []
-    return [{"check": "ansible:python", "ok": False,
-             "detail": f"{len(hosts)} EL8 host(s) without ansible_python_interpreter ({', '.join(hosts[:5])}"
-                       f"{', …' if len(hosts) > 5 else ''}): ansible-core 2.17+ can't use EL8's Python 3.6. "
-                       "Install python3.12 there and set ansible_python_interpreter: /usr/bin/python3.12 in the "
-                       "group's group_vars (references/ansible.md, Onboarding existing hosts)"}]
+    inventory = json.loads(so or "{}")
+    out = []
+    sites = site_group_problems(inventory, cfg)
+    if sites:
+        out.append({"check": "ansible:sites", "ok": False,
+                    "detail": "; ".join(sites[:5]) + ("; …" if len(sites) > 5 else "")
+                              + " — every host belongs to at most one site (references/proxmox.md, Several sites)"})
+    _, so, _ = run(["ansible", "--version"])
+    hosts = el8_without_interpreter(inventory) if ansible_core_version(so) >= (2, 17) else []
+    if hosts:
+        out.append({"check": "ansible:python", "ok": False,
+                    "detail": f"{len(hosts)} EL8 host(s) without ansible_python_interpreter ({', '.join(hosts[:5])}"
+                              f"{', …' if len(hosts) > 5 else ''}): ansible-core 2.17+ can't use EL8's Python 3.6. "
+                              "Install python3.12 there and set ansible_python_interpreter: /usr/bin/python3.12 in the "
+                              "group's group_vars (references/ansible.md, Onboarding existing hosts)"})
+    return out
 
 
 def git_sync_status(ahead: int | None, behind: int | None, upstream: str | None, auto_push: bool):

@@ -356,17 +356,23 @@ def site_terms(cfg) -> tuple[list[str], list[str]]:
     root = Path(cfg["_root"])
     domains = {d for d in [hmlib.get(cfg, "site.domain")] if d}
     hosts = set()
-    ep = hmlib.get(cfg, "proxmox.endpoint") or ""
-    m = re.match(r"^\w+://([^/:]+)", ep)
-    if m:
-        hosts.add(m.group(1))
+    endpoints = [hmlib.get(cfg, "proxmox.endpoint") or ""]
+    for st in cfg.get("sites") or []:   # every site: its name, label and Proxmox endpoint are site data
+        if isinstance(st, dict):
+            hosts.update(str(st[k]) for k in ("name", "label") if st.get(k))
+            endpoints.append(str((st.get("proxmox") or {}).get("endpoint") or ""))
+    for ep in endpoints:
+        m = re.match(r"^\w+://([^/:]+)", ep)
+        if m:
+            hosts.add(m.group(1))
     name = hmlib.get(cfg, "site.name")
     if name:
         hosts.add(name)
     hosts.update(str(v["name"]) for v in hmlib.vlans(cfg) if v.get("name"))  # VLAN names are site data too
-    for f in ("discovery/proxmox.json", "discovery/network.json"):
+    for f in [root / "discovery" / "proxmox.json", root / "discovery" / "network.json",
+              *sorted((root / "discovery").glob("proxmox-*.json"))]:
         try:
-            _names_in(json.loads((root / f).read_text()), hosts)
+            _names_in(json.loads(f.read_text()), hosts)
         except (OSError, ValueError):
             pass
     inv = sorted(glob.glob(str(root / "ansible" / "inventory" / "**" / "*.y*ml"), recursive=True))
@@ -400,10 +406,16 @@ TRUNKS = re.compile(r"(trunks=)([\d;-]+)")
 def proxmox_terms(root: Path) -> dict[str, set]:
     """Identifiers from discovery/proxmox.json that place a report at this site."""
     t = {"vmid": set(), "vlan": set(), "node": set(), "storage": set(), "pool": set(), "bridge": set()}
-    try:
-        px = json.loads((root / "discovery" / "proxmox.json").read_text())
-    except (OSError, ValueError):
-        return t
+    for f in [root / "discovery" / "proxmox.json", *sorted((root / "discovery").glob("proxmox-*.json"))]:
+        try:
+            _proxmox_terms(json.loads(f.read_text()), t)
+        except (OSError, ValueError):
+            pass
+    return t
+
+
+def _proxmox_terms(px: dict, t: dict) -> None:
+    """Add one snapshot's identifiers (every site has its own snapshot) to t."""
     for g in px.get("guests") or []:
         if str(g.get("vmid") or "").isdigit():
             t["vmid"].add(str(g["vmid"]))

@@ -3,6 +3,7 @@
 
     config_set.py 'site.domain=home.arpa' 'proxmox.verify_tls=false'
     config_set.py 'network.authorized_ranges+=10.0.10.0/24'    # append to a list (skipped if present)
+    config_set.py 'sites+={name: offsite, label: Rented server, proxmox: {endpoint: https://…:8006}}'
     config_set.py 'network.excluded_hosts-=10.0.10.1'          # remove from a list
     config_set.py 'defaults.ssh_public_keys=["ssh-ed25519 AAAA… me@mac"]'
     config_set.py --delete discovery.ignore_unmanaged
@@ -307,6 +308,11 @@ def edit_file(path: Path, ops: list[tuple], dry_run: bool = False) -> str:
     """Apply ops to a YAML file; verify with yq; return a unified diff ('' = no change)."""
     old = path.read_text()
     new, want = apply_ops(old, yq_json(old), ops)
+    if any(op[1].split(".")[0] == "sites" for op in ops):
+        try:   # names become Ansible groups (site_<name>): refuse a bad one before writing
+            hmlib.sites(want)
+        except hmlib.ConfigError as e:
+            raise EditError(f"{e} Nothing was written.") from None
     got = yq_json(new)
     if _norm(got) != _norm(want):
         raise EditError("the edited file doesn't match the intended change; nothing was written. "

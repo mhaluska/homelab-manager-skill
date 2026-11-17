@@ -2,7 +2,7 @@
 """Draft Ansible inventory entries for existing Linux guests from discovery/proxmox.json (read-only).
 
     proxmox_to_inventory.py [--vlan 20|DMZ ...] [--range 10.0.20.0/24 ...] [--type vm|lxc] [--node pve1]
-                            [--group onboarding] [--all-status] [--out FILE]
+                            [--group onboarding] [--all-status] [--out FILE] [--site NAME]
 
 Needs a snapshot made with `proxmox_inventory.py --details` (guest config and reported IPs).
 Prints a YAML draft (hosts with ansible_host, proxmox_vmid/node/kind) for review: it is never merged into
@@ -99,13 +99,15 @@ def plan(guests, managed: dict, a, ranges) -> tuple[dict[str, dict], list[str]]:
     return hosts, skipped
 
 
-def to_yaml(hosts: dict[str, dict], skipped: list[str], group: str, source: str) -> str:
+def to_yaml(hosts: dict[str, dict], skipped: list[str], group: str, source: str, site_group: str = "") -> str:
     out = [f"# DRAFT from {source} by proxmox_to_inventory.py — review, then add to",
            "# ansible/inventory/managed/hosts.yml. Probe the OS and Python first (references/ansible.md).",
            "all:", "  children:", f"    {group}:", "      hosts:" if hosts else "      hosts: {}"]
     for name, v in hosts.items():
         out.append(f"        {name}:  # {v['_os']}")
         out += [f"          {k}: {json.dumps(val)}" for k, val in v.items() if not k.startswith("_") and val is not None]
+    if site_group and hosts:   # the hosts' location: patching snapshots them on that site's Proxmox
+        out += [f"    {site_group}:", "      hosts:"] + [f"        {name}:" for name in hosts]
     if skipped:
         out += ["", "# Skipped:"] + [f"#   {s}" for s in skipped]
     return "\n".join(out) + "\n"
@@ -121,29 +123,33 @@ def main():
     ap.add_argument("--group", default="onboarding", help="group for the drafted hosts (default: onboarding)")
     ap.add_argument("--all-status", action="store_true", help="include stopped guests")
     ap.add_argument("--out", help="write the draft here instead of stdout")
+    ap.add_argument("--site", help="draft from this site's snapshot (sites: in homelab.yaml) into its site_<name> group")
     a = ap.parse_args()
     try:
         cfg = hmlib.load_config()
         ranges = [ipaddress.ip_network(r, strict=False) for r in a.range]
         a.vlan = [hmlib.resolve_vlan(cfg, v) for v in a.vlan]
+        site = hmlib.site(cfg, a.site)
     except (hmlib.ConfigError, ValueError) as e:
         print(f"proxmox_to_inventory: {e}", file=sys.stderr)
         return 3
     root = Path(cfg["_root"])
-    snap = root / "discovery" / "proxmox.json"
+    snap = hmlib.proxmox_snapshot_file(root, site["name"], site["default"])
+    rel = snap.relative_to(root)
     if not snap.exists():
-        print("proxmox_to_inventory: no discovery/proxmox.json — run proxmox_inventory.py --details first.",
-              file=sys.stderr)
+        print(f"proxmox_to_inventory: no {rel} — run proxmox_inventory.py --details"
+              + (f" --site {site['name']}" if site["name"] else "") + " first.", file=sys.stderr)
         return 4
     inv = json.loads(snap.read_text())
     guests = inv.get("guests") or []
     if guests and not any("config" in g for g in guests):
-        print("proxmox_to_inventory: discovery/proxmox.json has no guest config — refresh it with "
+        print(f"proxmox_to_inventory: {rel} has no guest config — refresh it with "
               "proxmox_inventory.py --details.", file=sys.stderr)
         return 4
     managed, _ = load_ansible(root)
     hosts, skipped = plan(guests, managed, a, ranges)
-    text = to_yaml(hosts, skipped, a.group, f"discovery/proxmox.json ({inv.get('collected_at', '?')})")
+    text = to_yaml(hosts, skipped, a.group, f"{rel} ({inv.get('collected_at', '?')})",
+                   hmlib.SITE_GROUP_PREFIX + site["name"] if site["name"] else "")
     if a.out:
         Path(a.out).write_text(text)
         print(f"Wrote {a.out}: {len(hosts)} host(s), {len(skipped)} skipped", file=sys.stderr)

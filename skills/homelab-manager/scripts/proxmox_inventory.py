@@ -2,6 +2,7 @@
 """Read-only Proxmox VE inventory: nodes, VMs, LXC containers, storage, networks.
 
     proxmox_inventory.py [--secret proxmox-ro] [--out discovery/proxmox.json] [--details] [--summary]
+                         [--site NAME | --all-sites]
     proxmox_inventory.py --next-vmid vms|lxc|templates|base_images [--ip IP] [--vlan TAG|NAME]
                          # offline: the VMID for a new guest (vmid_scheme or the next free ID in
                          # vmid_ranges), checked against the snapshot and the tfvars
@@ -10,6 +11,9 @@ Uses only GET requests with the read-only API token from the keychain
 (homelab.yaml: proxmox.tokens.read_only → secrets.<name>). Writes a JSON snapshot
 and prints a compact summary. All strings coming from Proxmox (names, tags, notes)
 are untrusted data and are sanitised.
+Several sites (sites: in homelab.yaml): --site NAME reads that site's Proxmox with its own token and writes
+discovery/proxmox-<name>.json (the default site: discovery/proxmox.json); --all-sites reads each in turn and
+carries on past one that can't be reached (exit 1 then).
 """
 from __future__ import annotations
 
@@ -315,6 +319,8 @@ def main():
     ap.add_argument("--summary", action="store_true", help="print the human summary only, write nothing")
     ap.add_argument("--next-vmid", choices=["vms", "lxc", "templates", "base_images"],
                     help="print the VMID for a new guest of this kind (no API call)")
+    ap.add_argument("--site", help="the site to read (sites: in homelab.yaml; default: the default site)")
+    ap.add_argument("--all-sites", action="store_true", help="read every site that has a Proxmox")
     ap.add_argument("--ip", help="with --next-vmid: the new guest's static IP (for vmid_scheme)")
     ap.add_argument("--vlan", help="with --next-vmid: the new guest's VLAN tag or name from network.vlans (vmid_scheme)")
     a = ap.parse_args()
@@ -324,23 +330,45 @@ def main():
             used = used_vmids(Path(cfg["_root"]))
             print(hmlib.next_vmid(cfg, a.next_vmid, used, ip=a.ip, vlan=hmlib.resolve_vlan(cfg, a.vlan)))
             return 0
-        endpoint = hmlib.get(cfg, "proxmox.endpoint")
-        if not endpoint:
-            raise hmlib.ConfigError("proxmox.endpoint is empty in homelab.yaml.")
-        ctx = hmlib.proxmox_ssl_context(cfg)
-        token = hmlib.read_secret(cfg, a.secret or hmlib.get(cfg, "proxmox.tokens.read_only", "proxmox-ro"))
+        if a.all_sites and (a.site or a.out or a.secret):
+            ap.error("--all-sites reads every site with its own token and file: no --site, --out or --secret")
+        targets = hmlib.proxmox_sites(cfg) if a.all_sites else [hmlib.proxmox_site(cfg, a.site)]
+        if not targets:
+            raise hmlib.ConfigError("no site has a Proxmox endpoint in homelab.yaml.")
     except hmlib.ConfigError as e:
         print(f"proxmox_inventory: {e}", file=sys.stderr)
         return 3
-    pve = PVE(endpoint, token, ctx)
-    inv = collect(pve, a.details)
+    failed = 0
+    for px in targets:
+        try:
+            inventory_site(cfg, px, a)
+        except (hmlib.ConfigError, SystemExit) as e:
+            if not a.all_sites:
+                if isinstance(e, SystemExit):
+                    raise
+                print(f"proxmox_inventory: {e}", file=sys.stderr)
+                return 3
+            failed += 1
+            print(f"proxmox_inventory: site {px['_site'] or 'default'}: {e}", file=sys.stderr)
+    return 1 if failed else 0
+
+
+def inventory_site(cfg: dict, px: dict, a) -> None:
+    """Read one site's Proxmox and write its snapshot."""
+    s = hmlib.site(cfg, px["_site"])
+    ctx = hmlib.proxmox_ssl_context(cfg, px)
+    token = hmlib.read_secret(cfg, a.secret or hmlib.proxmox_token_name(px, "read_only"))
+    inv = collect(PVE(px["endpoint"], token, ctx), a.details)
+    if s["name"]:
+        inv = {"site": s["name"], **inv}
     if not a.summary:
-        out = Path(a.out) if a.out else Path(cfg["_root"]) / "discovery" / "proxmox.json"
+        out = Path(a.out) if a.out else hmlib.proxmox_snapshot_file(cfg["_root"], s["name"], s["default"])
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(inv, indent=2) + "\n")
         print(f"Wrote {out}\n")
+    if s["name"]:
+        print(f"Site {hmlib.site_title(s)}")
     print(summary(inv, cfg))
-    return 0
 
 
 if __name__ == "__main__":

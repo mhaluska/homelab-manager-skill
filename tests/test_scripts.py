@@ -1492,6 +1492,121 @@ class LxdSnapshotTests(unittest.TestCase):  # issue 44
         self.assertTrue(self.calls[-1][1].startswith("sudo -n /opt/incus query "))
 
 
+class SitesTests(unittest.TestCase):  # issue 52
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import hmlib
+        self.h = hmlib
+        self.cfg = {"_root": "/nonexistent",
+                    "proxmox": {"endpoint": "https://pve1.example:8006", "tokens": {"read_only": "proxmox-ro"}},
+                    "sites": [{"name": "home"},
+                              {"name": "offsite", "label": "Rented server", "ranges": ["192.0.2.0/24"],
+                               "proxmox": {"endpoint": "https://pve-off.example:8006", "verify_tls": False,
+                                           "tokens": {"read_only": "off-ro", "provisioning": "off-rw"}}},
+                              {"name": "parents"}]}
+
+    def test_sites(self):
+        h = self.h
+        self.assertEqual([s["name"] for s in h.sites(self.cfg)], ["home", "offsite", "parents"])
+        self.assertEqual(h.site(self.cfg)["name"], "home")
+        self.assertEqual(h.proxmox_site(self.cfg)["endpoint"], "https://pve1.example:8006")
+        self.assertEqual(h.proxmox_site(self.cfg, "home")["_where"], "proxmox")
+        off = h.proxmox_site(self.cfg, "offsite")
+        self.assertEqual((off["endpoint"], off["_site"]), ("https://pve-off.example:8006", "offsite"))
+        self.assertEqual(h.proxmox_token_name(off, "provisioning"), "off-rw")
+        with self.assertRaises(h.ConfigError):
+            h.proxmox_site(self.cfg, "parents")                    # no Proxmox there
+        with self.assertRaises(h.ConfigError):
+            h.site(self.cfg, "nope")
+        self.assertEqual([p["_site"] for p in h.proxmox_sites(self.cfg)], ["home", "offsite"])
+        self.assertEqual(h.site_of_secret(self.cfg, "off-ro")["_site"], "offsite")
+        self.assertEqual(h.site_of_secret(self.cfg, "proxmox-rw")["_site"], "home")   # template default name
+        self.assertEqual(h.site_of_address(self.cfg, "192.0.2.7")["name"], "offsite")
+        self.assertIsNone(h.site_of_address(self.cfg, "10.0.0.1"))
+        self.assertEqual(h.host_sites(["linux", "site_offsite"]), ["offsite"])
+        self.assertEqual(h.proxmox_snapshot_file("/r", "offsite", False).name, "proxmox-offsite.json")
+        self.assertEqual(h.proxmox_snapshot_file("/r", "home", True).name, "proxmox.json")
+        single = h.sites({"proxmox": {"endpoint": "x"}})                  # no sites: one unnamed default
+        self.assertEqual((len(single), single[0]["name"], single[0]["default"]), (1, "", True))
+
+    def test_invalid_sites(self):
+        h = self.h
+        for bad in ([{"name": "Off-Site"}], [{"name": "a"}, {"name": "a"}], [{"label": "x"}],
+                    [{"name": "home", "proxmox": {"endpoint": "x"}}], "home", [{"name": "x", "ranges": ["nope"]}]):
+            with self.assertRaises(h.ConfigError, msg=bad):
+                h.sites({"sites": bad})
+
+    def test_with_secrets_uses_the_site_of_the_token(self):
+        import with_secrets
+        cfg = {**self.cfg, "secrets": {n: {"service": "x", "kind": "proxmox_token"} for n in ("proxmox-ro", "off-ro")}}
+        orig = self.h.read_secret
+        self.h.read_secret = lambda c, n: "homelab@pve!ro=s3cret"
+        try:
+            home, _ = with_secrets.env_for(cfg, "proxmox-ro")
+            off, _ = with_secrets.env_for(cfg, "off-ro")
+        finally:
+            self.h.read_secret = orig
+        self.assertEqual(home["PROXMOX_VE_ENDPOINT"], "https://pve1.example:8006/")
+        self.assertNotIn("PROXMOX_VE_INSECURE", home)
+        self.assertEqual(off["PROXMOX_URL"], "https://pve-off.example:8006/api2/json")
+        self.assertEqual(off["PROXMOX_VE_INSECURE"], "true")
+
+    def test_site_group_problems(self):
+        import check_env
+        inv = {"all": {"children": ["site_home", "site_offsite", "site_moon", "linux"]},
+               "site_home": {"hosts": ["web01", "dup"]}, "site_offsite": {"children": ["offsite_dc"]},
+               "offsite_dc": {"hosts": ["backup01", "dup"]}, "site_moon": {"hosts": ["rover"]},
+               "linux": {"hosts": ["web01", "backup01"]}}
+        problems = check_env.site_group_problems(inv, self.cfg)
+        self.assertIn("group site_moon: homelab.yaml has no site 'moon' (sites:)", problems)
+        self.assertIn("dup is in several site groups (site_home, site_offsite)", problems)
+        self.assertEqual(len(problems), 2)
+
+    def test_draft_goes_into_the_site_group(self):
+        import proxmox_to_inventory
+        text = proxmox_to_inventory.to_yaml({"backup01": {"ansible_host": "192.0.2.2", "_os": "debian"}}, [],
+                                            "onboarding", "discovery/proxmox-offsite.json", "site_offsite")
+        self.assertIn("    site_offsite:\n      hosts:\n        backup01:", text)
+
+    def test_drift_and_redaction_cover_every_site(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        run("init_repo.py", d, "--components", "proxmox,ansible,discovery", cwd=d)
+        r = run("config_set.py", "proxmox.endpoint=https://pve1.example:8006", "sites+={name: home}",
+                "sites+={name: offsite, label: Rented server, ranges: [192.0.2.0/24], "
+                "proxmox: {endpoint: 'https://pve-off.example:8006'}}", cwd=d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        guest = lambda vmid, name, tags: {"vmid": vmid, "name": name, "type": "vm", "node": "n1", "status": "running",
+                                          "template": False, "tags": tags}
+        snap = lambda guests: {"collected_at": "2026-01-01T00:00:00+00:00", "version": "9", "cluster": None,
+                               "nodes": [], "networks": {}, "storage": [], "guests": guests, "backup_jobs": []}
+        Path(d, "discovery/proxmox.json").write_text(json.dumps(snap([guest(100, "dns01", "tofu")])))
+        Path(d, "discovery/proxmox-offsite.json").write_text(json.dumps(
+            {"site": "offsite", **snap([guest(100, "offbackup", "")])}))
+        Path(d, "ansible/inventory/managed/hosts.yml").write_text(
+            "all:\n  children:\n    site_home:\n      hosts:\n        dns01: {ansible_host: 10.0.10.5}\n"
+            "    site_offsite:\n      hosts:\n        dns01:\n    site_moon:\n      hosts:\n        rover: {ansible_host: 10.9.9.9}\n")
+        host = {"mac": None, "hostnames": [], "device_type_guess": "server", "vendor": None}
+        Path(d, "discovery/network.json").write_text(json.dumps({"updated_at": "x", "hosts": {"192.0.2.9": host}}))
+        r = run("drift_report.py", "--no-tofu", cwd=d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = r.stdout
+        self.assertIn("| Proxmox snapshot — site offsite (Rented server) | 2026-01-01", out)
+        self.assertIn("## Proxmox ↔ OpenTofu — site offsite (Rented server) (by `tofu` tag", out)
+        self.assertIn("offsite/100 vm `offbackup`", out)                     # same VMID, kept apart
+        self.assertNotIn("home/100 vm `dns01` on", out)                       # tagged: managed
+        self.assertIn("## Backups — site offsite (Rented server)", out)
+        self.assertIn("`dns01` is in several site groups", out)
+        self.assertIn("`rover` is in `site_moon`, but homelab.yaml has no site 'moon'", out)
+        self.assertIn("192.0.2.9  — server [site offsite (Rented server)]", out)
+        import issues
+        cfg = self.h.load_config(d)
+        domains, hosts = issues.site_terms(cfg)
+        self.assertIn("pve-off.example", hosts)
+        self.assertIn("Rented server", hosts)
+        self.assertIn("offbackup", hosts)
+
+
 class PveNodePlanTests(unittest.TestCase):  # issue 23
     def setUp(self):
         sys.path.insert(0, str(SCRIPTS))
