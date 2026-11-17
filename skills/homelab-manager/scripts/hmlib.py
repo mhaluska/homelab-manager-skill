@@ -93,9 +93,11 @@ def proxmox_ssl_context(cfg: dict, px: dict | None = None):
 # A site is a location (home, a rented server, family's house). `sites:` in homelab.yaml lists them, the default
 # first: its Proxmox is the top-level `proxmox:` block; any other site may have its own (`sites[].proxmox`, same
 # keys). Inventory hosts belong to a site through the Ansible group site_<name> (none: the default site).
-# Without `sites:` there is one unnamed default site.
+# Without `sites:` there is one unnamed default site. A site other than the default may also have its own
+# vmid_ranges, vmid_scheme and templates (build network); its OpenTofu environment is tofu/environments/<name>.
 SITE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,30}$")
 SITE_GROUP_PREFIX = "site_"
+SITE_SETTINGS = ("vmid_ranges", "vmid_scheme", "templates")
 
 
 def sites(cfg: dict) -> list[dict]:
@@ -105,7 +107,9 @@ def sites(cfg: dict) -> list[dict]:
         raise ConfigError("sites must be a list of {name, label, proxmox, ranges}.")
     top = cfg.get("proxmox") if isinstance(cfg.get("proxmox"), dict) else {}
     if not raw:
-        return [{"name": "", "label": "", "default": True, "proxmox": {**top, "_where": "proxmox"}, "ranges": []}]
+        _check_vlan_sites(cfg, [])
+        return [{"name": "", "label": "", "default": True, "proxmox": {**top, "_where": "proxmox"}, "ranges": [],
+                 "settings": {}}]
     out, seen = [], set()
     for i, s in enumerate(raw):
         if not isinstance(s, dict) or not s.get("name"):
@@ -123,10 +127,54 @@ def sites(cfg: dict) -> list[dict]:
         px = top if i == 0 else s.get("proxmox")
         if px is not None and not isinstance(px, dict):
             raise ConfigError(f"sites.{name}.proxmox must be a mapping.")
+        settings = {k: s[k] for k in SITE_SETTINGS if s.get(k) not in (None, "", {}, [])}
+        if i == 0 and settings:
+            raise ConfigError(f"sites[0] ({name}) is the default site: its {', '.join(settings)} are the top-level "
+                              "keys, not sites[0].")
+        if i > 0 and name == default_env(cfg):
+            raise ConfigError(f"site name {name!r} is the default site's OpenTofu environment "
+                              "(opentofu.environment): choose another name.")
+        for k in ("vmid_ranges", "templates"):
+            if k in settings and not isinstance(settings[k], dict):
+                raise ConfigError(f"sites.{name}.{k} must be a mapping like the top-level {k}.")
         out.append({"name": name, "label": str(s.get("label") or ""), "default": i == 0,
                     "proxmox": {**px, "_where": "proxmox" if i == 0 else f"sites[{name}].proxmox"} if px else None,
-                    "ranges": _networks(s.get("ranges"))})
+                    "ranges": _networks(s.get("ranges")), "settings": settings})
+    _check_vlan_sites(cfg, [s["name"] for s in out])
     return out
+
+
+def _check_vlan_sites(cfg: dict, names: list[str]):
+    for v in get(cfg, "network.vlans", []) or []:
+        st = v.get("site") if isinstance(v, dict) else None
+        if st not in (None, "") and st not in names:
+            raise ConfigError(f"network.vlans: VLAN {v.get('id')} has site {st!r}, which is not in sites: "
+                              f"({', '.join(names) or 'none'}).")
+
+
+def site_config(cfg: dict, name: str | None = None) -> dict:
+    """cfg as seen from one site: its own vmid_ranges / vmid_scheme / templates in place of the top-level ones."""
+    s = site(cfg, name)
+    out = dict(cfg)
+    for k, v in s["settings"].items():
+        out[k] = {**cfg[k], **v} if k == "templates" and isinstance(cfg.get(k), dict) else v
+    return out
+
+
+def default_env(cfg: dict) -> str:
+    return str(get(cfg, "opentofu.environment", "homelab") or "homelab")
+
+
+def tofu_env(cfg: dict, name: str | None = None) -> str:
+    """The OpenTofu environment of a site: opentofu.environment for the default site, the site name otherwise."""
+    s = site(cfg, name)
+    return default_env(cfg) if s["default"] else s["name"]
+
+
+def site_of_env(cfg: dict, env: str | None) -> dict:
+    """The site an OpenTofu environment belongs to: the site of that name, else the default site."""
+    all_sites = sites(cfg)
+    return next((s for s in all_sites[1:] if s["name"] == env), all_sites[0])
 
 
 def site(cfg: dict, name: str | None = None) -> dict:
@@ -497,23 +545,25 @@ def english_problems(text: str, min_words: int = 12) -> list[str]:
 
 # --------------------------------------------------------------------------- VLAN names
 
-def vlans(cfg: dict) -> list[dict]:
-    """network.vlans entries with an integer id: [{id, name, cidr, gw}, …]."""
+def vlans(cfg: dict, site_name: str | None = None) -> list[dict]:
+    """network.vlans entries with an integer id: [{id, name, cidr, gw, site}, …]. With site_name ('' = the
+    unnamed default site), only that site's VLANs and those without a site (the same at every site)."""
     out = []
     for v in get(cfg, "network.vlans", []) or []:
         if isinstance(v, dict) and str(v.get("id", "")).strip().isdigit():
-            out.append({**v, "id": int(v["id"])})
+            if site_name is None or v.get("site") in (None, "", site_name):
+                out.append({**v, "id": int(v["id"])})
     return out
 
 
-def resolve_vlan(cfg: dict, value) -> int | None:
+def resolve_vlan(cfg: dict, value, site_name: str | None = None) -> int | None:
     """A VLAN ID from an ID or a name in network.vlans (case-insensitive); None for an empty value."""
     if value in (None, ""):
         return None
     s = str(value).strip()
     if s.isdigit():
         return int(s)
-    table = vlans(cfg)
+    table = vlans(cfg, site_name)
     hits = [v["id"] for v in table if str(v.get("name") or "").lower() == s.lower()]
     if len(hits) == 1:
         return hits[0]
@@ -522,9 +572,9 @@ def resolve_vlan(cfg: dict, value) -> int | None:
                       f"(known: {known}). Add it there or pass the VLAN ID.")
 
 
-def vlan_label(cfg: dict, vlan_id=None, ip: str | None = None) -> str:
+def vlan_label(cfg: dict, vlan_id=None, ip: str | None = None, site_name: str | None = None) -> str:
     """'VLAN 20 DMZ' for an ID, or the VLAN whose cidr holds `ip`; '' when unknown."""
-    table = vlans(cfg)
+    table = vlans(cfg, site_name)
     hit = None
     if vlan_id not in (None, ""):
         hit = next((v for v in table if v["id"] == int(vlan_id)), None) or {"id": int(vlan_id)}

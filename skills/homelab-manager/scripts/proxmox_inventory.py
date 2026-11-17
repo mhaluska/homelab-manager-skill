@@ -3,9 +3,10 @@
 
     proxmox_inventory.py [--secret proxmox-ro] [--out discovery/proxmox.json] [--details] [--summary]
                          [--site NAME | --all-sites]
-    proxmox_inventory.py --next-vmid vms|lxc|templates|base_images [--ip IP] [--vlan TAG|NAME]
+    proxmox_inventory.py --next-vmid vms|lxc|templates|base_images [--ip IP] [--vlan TAG|NAME] [--site S]
                          # offline: the VMID for a new guest (vmid_scheme or the next free ID in
-                         # vmid_ranges), checked against the snapshot and the tfvars
+                         # vmid_ranges, the site's own when it has them), checked against that site's
+                         # snapshot and OpenTofu environment
 
 Uses only GET requests with the read-only API token from the keychain
 (homelab.yaml: proxmox.tokens.read_only → secrets.<name>). Writes a JSON snapshot
@@ -267,18 +268,27 @@ def collect(pve: PVE, details: bool) -> dict:
             **({"guest_ip_sources": ip_sources} if details else {}), **({"warnings": warnings} if warnings else {})}
 
 
-def used_vmids(root: Path) -> dict[int, str]:
-    """{vmid: who} from discovery/proxmox.json and every vm_id / template_vm_id in the tfvars."""
+def used_vmids(cfg: dict, site_name: str | None = None) -> dict[int, str]:
+    """{vmid: who} at one site: its Proxmox snapshot and every vm_id / template_vm_id in its OpenTofu environment
+    (the default site: every environment that isn't another site's). VMIDs repeat across sites."""
+    root = Path(cfg["_root"])
+    s = hmlib.site(cfg, site_name)
     used = {}
     try:
-        for g in json.loads((root / "discovery" / "proxmox.json").read_text()).get("guests") or []:
+        snap = hmlib.proxmox_snapshot_file(root, s["name"], s["default"])
+        for g in json.loads(snap.read_text()).get("guests") or []:
             if isinstance(g.get("vmid"), int):
                 used[g["vmid"]] = f"{g.get('type')} {g.get('name')} (Proxmox)"
     except (OSError, ValueError):
         pass
-    for f in sorted((root / "tofu").glob("**/*.tfvars")):
-        for m in re.finditer(r"^\s*vm_id\s*=\s*(\d+)", f.read_text(errors="replace"), re.M):
-            used.setdefault(int(m.group(1)), f"{f.relative_to(root)}")
+    envs = root / "tofu" / "environments"
+    other = {x["name"] for x in hmlib.sites(cfg) if not x["default"]}
+    dirs = [envs / s["name"]] if not s["default"] else \
+        [d for d in sorted(envs.glob("*")) if d.is_dir() and d.name not in other]
+    for d in dirs:
+        for f in sorted(d.glob("**/*.tfvars")):
+            for m in re.finditer(r"^\s*vm_id\s*=\s*(\d+)", f.read_text(errors="replace"), re.M):
+                used.setdefault(int(m.group(1)), f"{f.relative_to(root)}")
     return used
 
 
@@ -300,7 +310,7 @@ def summary(inv: dict, cfg: dict | None = None) -> str:
         pct = (s["used_gib"] / s["size_gib"] * 100) if s["size_gib"] else 0
         lines.append(f"  {s['storage']:<16} {s['node']:<10} {s['type'] or '':<8} {'shared' if s['shared'] else 'local':<6} "
                      f"{s['used_gib']}/{s['size_gib']} GiB ({pct:.0f}%)  [{s['content']}]")
-    fit = hmlib.vmid_fit(cfg, inv["guests"]) if cfg else None
+    fit = hmlib.vmid_fit(hmlib.site_config(cfg, inv.get("site")), inv["guests"]) if cfg else None
     if fit:
         lines.append(f"\nVMIDs: {fit}")
     agent = (inv.get("guest_ip_sources") or {}).get("agent", "")
@@ -327,8 +337,9 @@ def main():
     try:
         cfg = hmlib.load_config()
         if a.next_vmid:
-            used = used_vmids(Path(cfg["_root"]))
-            print(hmlib.next_vmid(cfg, a.next_vmid, used, ip=a.ip, vlan=hmlib.resolve_vlan(cfg, a.vlan)))
+            s = hmlib.site(cfg, a.site)
+            print(hmlib.next_vmid(hmlib.site_config(cfg, a.site), a.next_vmid, used_vmids(cfg, a.site), ip=a.ip,
+                                  vlan=hmlib.resolve_vlan(cfg, a.vlan, s["name"])))
             return 0
         if a.all_sites and (a.site or a.out or a.secret):
             ap.error("--all-sites reads every site with its own token and file: no --site, --out or --secret")

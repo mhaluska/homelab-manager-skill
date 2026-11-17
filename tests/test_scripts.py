@@ -1536,6 +1536,58 @@ class SitesTests(unittest.TestCase):  # issue 52
             with self.assertRaises(h.ConfigError, msg=bad):
                 h.sites({"sites": bad})
 
+    def test_site_settings_env_and_vlans(self):
+        h = self.h
+        cfg = {**self.cfg, "vmid_ranges": {"vms": [100, 899], "templates": [9050, 9999]}, "vmid_scheme": "",
+               "templates": {"keep_versions": 3, "build_network": {"ip": "10.0.10.250/24"}},
+               "network": {"vlans": [{"id": 20, "name": "DMZ"}, {"id": 30, "name": "Backup", "site": "offsite"},
+                                     {"id": 31, "name": "Backup", "site": "home"}]}}
+        cfg["sites"] = [cfg["sites"][0], {**cfg["sites"][1], "vmid_ranges": {"vms": [2000, 2099]},
+                                          "templates": {"build_network": {"ip": "192.0.2.250/24"}}}, cfg["sites"][2]]
+        off = h.site_config(cfg, "offsite")
+        self.assertEqual(off["vmid_ranges"], {"vms": [2000, 2099]})
+        self.assertEqual(off["templates"], {"keep_versions": 3, "build_network": {"ip": "192.0.2.250/24"}})
+        self.assertEqual(h.site_config(cfg, "parents")["vmid_ranges"], cfg["vmid_ranges"])   # no own: top-level
+        self.assertEqual(h.next_vmid(off, "vms", {2000: "x"}), 2001)
+        self.assertEqual((h.tofu_env(cfg), h.tofu_env(cfg, "home"), h.tofu_env(cfg, "offsite")),
+                         ("homelab", "homelab", "offsite"))
+        self.assertEqual(h.site_of_env(cfg, "offsite")["name"], "offsite")
+        self.assertEqual(h.site_of_env(cfg, "homelab")["name"], "home")
+        self.assertEqual(h.resolve_vlan(cfg, "backup", "offsite"), 30)
+        self.assertEqual(h.resolve_vlan(cfg, "backup", "home"), 31)
+        self.assertEqual(h.resolve_vlan(cfg, "dmz", "offsite"), 20)                   # no site: every site
+        with self.assertRaises(h.ConfigError):
+            h.resolve_vlan(cfg, "backup")                                              # ambiguous without a site
+        self.assertEqual(h.vlan_label(cfg, 30, site_name="offsite"), "VLAN 30 Backup")
+        for bad in ({"sites": [{"name": "home"}, {"name": "homelab"}]},                # = the default environment
+                    {"sites": [{"name": "home", "vmid_ranges": {"vms": [1, 2]}}]},      # default: top-level keys
+                    {"sites": [{"name": "home"}, {"name": "off", "vmid_ranges": [1, 2]}]},
+                    {"sites": [{"name": "home"}], "network": {"vlans": [{"id": 5, "site": "moon"}]}},
+                    {"network": {"vlans": [{"id": 5, "site": "home"}]}}):
+            with self.assertRaises(h.ConfigError, msg=bad):
+                h.sites(bad)
+
+    def test_next_vmid_per_site(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        run("init_repo.py", d, "--components", "proxmox", cwd=d)
+        r = run("config_set.py", "sites+={name: home}",
+                "sites+={name: offsite, proxmox: {endpoint: 'https://pve-off.example:8006'}}", cwd=d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        snap = lambda ids: json.dumps({"guests": [{"vmid": i, "type": "vm", "name": f"g{i}"} for i in ids]})
+        Path(d, "discovery/proxmox.json").write_text(snap([100, 101]))
+        Path(d, "discovery/proxmox-offsite.json").write_text(snap([100]))
+        Path(d, "tofu/environments/homelab/homelab.auto.tfvars").write_text("vms = {\n  a = {\n    vm_id = 102\n  }\n}\n")
+        Path(d, "tofu/environments/offsite").mkdir()
+        Path(d, "tofu/environments/offsite/homelab.auto.tfvars").write_text("vms = {\n  b = {\n    vm_id = 101\n  }\n}\n")
+        r = run("proxmox_inventory.py", "--next-vmid", "vms", cwd=d)
+        self.assertEqual(r.stdout.strip(), "103", r.stderr)                 # not held back by the other site
+        r = run("proxmox_inventory.py", "--next-vmid", "vms", "--site", "offsite", cwd=d)
+        self.assertEqual(r.stdout.strip(), "102", r.stderr)
+        r = run("config_set.py", "network.vlans+={id: 5, site: moon}", cwd=d)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("Nothing was written", r.stderr)
+
     def test_with_secrets_uses_the_site_of_the_token(self):
         import with_secrets
         cfg = {**self.cfg, "secrets": {n: {"service": "x", "kind": "proxmox_token"} for n in ("proxmox-ro", "off-ro")}}

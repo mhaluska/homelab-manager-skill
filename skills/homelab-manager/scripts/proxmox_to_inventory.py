@@ -128,8 +128,8 @@ def main():
     try:
         cfg = hmlib.load_config()
         ranges = [ipaddress.ip_network(r, strict=False) for r in a.range]
-        a.vlan = [hmlib.resolve_vlan(cfg, v) for v in a.vlan]
         site = hmlib.site(cfg, a.site)
+        a.vlan = [hmlib.resolve_vlan(cfg, v, site["name"]) for v in a.vlan]
     except (hmlib.ConfigError, ValueError) as e:
         print(f"proxmox_to_inventory: {e}", file=sys.stderr)
         return 3
