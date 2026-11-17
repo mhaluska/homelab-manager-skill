@@ -209,6 +209,39 @@ def proxmox_sites(cfg: dict) -> list[dict]:
     return [proxmox_site(cfg, s["name"]) for s in sites(cfg) if s["proxmox"] and s["proxmox"].get("endpoint")]
 
 
+# Storage a guest gets on a node (GitHub issue #54): proxmox.nodes.<node> replaces default_storage and
+# lxc_storage on that node (lxc_storage falls back to the node's default_storage, never to a site-wide pool the
+# node may not have); image_storage: the node's, else the site's. Mirrors defaults.node_datastores in OpenTofu.
+STORAGE_ROLES = (("default_storage", "images", "VM disks"), ("lxc_storage", "rootdir", "LXC root filesystems"),
+                 ("image_storage", None, "cloud images"))
+
+
+def node_storages(px: dict) -> dict[str, dict]:
+    """proxmox.nodes of one site's Proxmox block, validated: {node: {default_storage, lxc_storage, image_storage}}."""
+    raw = px.get("nodes") or {}
+    where = f"{px.get('_where') or 'proxmox'}.nodes"
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where} must be a mapping like {{pve3: {{default_storage: local-lvm}}}}.")
+    for node, e in raw.items():
+        if not isinstance(e, dict) or not e.get("default_storage"):
+            raise ConfigError(f"{where}.{node} needs default_storage (it replaces the site's on that node).")
+        extra = set(e) - {k for k, _, _ in STORAGE_ROLES}
+        if extra:
+            raise ConfigError(f"{where}.{node}: unknown key(s) {', '.join(sorted(extra))} "
+                              f"(default_storage, lxc_storage, image_storage).")
+    return raw
+
+
+def node_storage(px: dict, node: str) -> dict[str, str]:
+    """{default_storage, lxc_storage, image_storage} for guests on this node ('' = not configured)."""
+    n = node_storages(px).get(node)
+    base = n if n else px
+    default = str(base.get("default_storage") or "")
+    return {"default_storage": default,
+            "lxc_storage": str(base.get("lxc_storage") or default),
+            "image_storage": str((n or {}).get("image_storage") or px.get("image_storage") or default)}
+
+
 def proxmox_token_name(px: dict, kind: str) -> str:
     """Secret name of a site's read_only / provisioning token (defaults as in the template)."""
     return ((px.get("tokens") or {}).get(kind)) or {"read_only": "proxmox-ro", "provisioning": "proxmox-rw"}[kind]

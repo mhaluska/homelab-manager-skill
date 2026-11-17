@@ -224,6 +224,39 @@ def extra_ips(v: dict) -> list[str]:
     return out
 
 
+def storage_findings(px: dict, snap: dict) -> list[str] | None:
+    """Configured storage (default/lxc/image, per node with proxmox.nodes) missing on a node or lacking the
+    content it is used for (GitHub issue #54). None: nothing configured or nothing to compare with."""
+    where = px.get("_where") or "proxmox"
+    try:
+        per_node = hmlib.node_storages(px)
+    except hmlib.ConfigError as e:
+        return [f"- {e}"]
+    if not (px.get("default_storage") or per_node) or not snap.get("storage"):
+        return None
+    store = {(s.get("node"), s.get("storage")): s for s in snap["storage"]}
+    names = ([n["node"] for n in snap.get("nodes") or [] if n.get("status") in (None, "online")]
+             or sorted({s.get("node") for s in snap["storage"] if s.get("node")}))
+    found = [f"- `{where}.nodes.{n}`: no such node in the snapshot." for n in per_node if n not in names
+             and n not in {x.get("node") for x in snap.get("nodes") or []}]
+    for node in names:
+        use, missing = hmlib.node_storage(px, node), set()
+        for key, need, label in hmlib.STORAGE_ROLES:
+            name = use[key]
+            s = store.get((node, name))
+            if not name:
+                continue
+            if s is None:
+                if name not in missing:
+                    missing.add(name)
+                    found.append(f"- {node}: {key} `{name}` ({label}) is not on this node"
+                                 + ("." if node in per_node else f" — set `{where}.nodes.{node}` to its own storage."))
+            elif need and s.get("content") is not None and need not in str(s["content"]).split(","):
+                found.append(f"- {node}: {key} `{name}` ({label}) doesn't take `{need}` content "
+                             f"({s['content'] or 'none'}).")
+    return found
+
+
 def load_ansible(root: Path):
     inv = root / "ansible" / "inventory" / "managed"
     if not inv.exists():
@@ -367,6 +400,18 @@ def main():
                 L += ["", "To add them to a job: references/proxmox.md, \"Backup jobs\"."]
         elif jobs is not None:
             L.append("Every guest is in an enabled backup job.")
+        L.append("")
+
+    for st, p in snaps:
+        found = storage_findings(st["proxmox"] or {}, p)
+        if found is None:
+            continue
+        L += [f"## Storage{in_site(st)}", ""]
+        if found:
+            issues += len(found)
+            L += [*found, "", "Storage per node: references/proxmox.md, \"Storage per node\"."]
+        else:
+            L.append("Each node has the configured storage, with the content it needs.")
         L.append("")
 
     if ans:

@@ -792,6 +792,39 @@ class DriftTests(unittest.TestCase):
         self.assertIn("Can't read the guest list of job(s) `daily`", out)
         self.assertNotIn("is in no backup job", out)
 
+    def _storage(self, yq_expr):  # issue 54: a cluster without shared storage, one node on LVM
+        p = Path(self.d, "discovery/proxmox.json")
+        snap = json.loads(p.read_text())
+        snap["nodes"] = [{"node": n, "status": "online"} for n in ("pve1", "pve2", "pve3")]
+        snap["storage"] = [{"storage": "local", "node": n, "content": "iso,vztmpl,import,backup"} for n in ("pve1", "pve2", "pve3")] \
+            + [{"storage": "local-zfs", "node": n, "content": "images,rootdir"} for n in ("pve1", "pve2")] \
+            + [{"storage": "tank-vm", "node": "pve1", "content": "images"},
+               {"storage": "local-lvm", "node": "pve3", "content": "images,rootdir"}]
+        p.write_text(json.dumps(snap))
+        subprocess.run(["yq", "-i", yq_expr, str(Path(self.d, "homelab.yaml"))], check=True)
+        r = run("drift_report.py", "--no-tofu", cwd=self.d)
+        return r.stdout.split("## Storage")[1].split("\n## ")[0] if "## Storage" in r.stdout else r.stdout + r.stderr
+
+    def test_storage_missing_on_a_node(self):
+        out = self._storage('.proxmox.default_storage = "local-zfs" | .proxmox.image_storage = "local"')
+        self.assertIn("pve3: default_storage `local-zfs` (VM disks) is not on this node — set `proxmox.nodes.pve3`", out)
+        self.assertEqual(out.count("local-zfs"), 1)          # lxc_storage = the same storage: reported once
+        self.assertNotIn("pve1", out)
+
+    def test_storage_per_node_and_content(self):
+        out = self._storage('.proxmox.default_storage = "local-zfs" | .proxmox.lxc_storage = "tank-vm"'
+                            ' | .proxmox.nodes = {"pve3": {"default_storage": "local-lvm"}}')
+        self.assertNotIn("pve3", out)                        # its own storage, LXC falls back to it
+        self.assertIn("pve1: lxc_storage `tank-vm` (LXC root filesystems) doesn't take `rootdir` content (images)", out)
+        self.assertIn("pve2: lxc_storage `tank-vm` (LXC root filesystems) is not on this node", out)
+        out = self._storage('.proxmox.lxc_storage = "" | .proxmox.nodes.pve9 = {"default_storage": "x"}')
+        self.assertIn("`proxmox.nodes.pve9`: no such node", out)
+        self.assertIn("Each node has", self._storage('del(.proxmox.nodes.pve9)'))
+
+    def test_storage_per_node_needs_default_storage(self):
+        out = self._storage('.proxmox.default_storage = "local-zfs" | .proxmox.nodes = {"pve3": {"lxc_storage": "local-lvm"}}')
+        self.assertIn("proxmox.nodes.pve3 needs default_storage", out)
+
 
 class DriftExtraIpsTests(unittest.TestCase):
     """#31: hm_extra_ips makes a host's other addresses known; --stale says when drift.md is out of date."""
