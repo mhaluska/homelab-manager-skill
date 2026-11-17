@@ -312,11 +312,21 @@ GENERIC = {"homelab", "localhost", "local", "proxmox", "pve", "main", "default",
            "admin", "user", "users", "staff", "runner", "ubuntu", "debian", "rocky"}
 
 
+NAME_KEYS = ("name", "hostname", "node", "fqdn", "cluster")
+# subtrees whose strings are what a host runs, not what it is called: nmap OS guesses (`os: [{name: …}]`),
+# port banners, ssh_probe's OS/product. Redacting them garbles the technical evidence (GitHub issue #30).
+NOT_NAMES = ("os", "ports", "product", "os_name")
+
+
 def _names_in(obj, out: set):
     if isinstance(obj, dict):
         for k, v in obj.items():
-            if k in ("name", "hostname", "node", "fqdn", "cluster") and isinstance(v, str):
+            if k in NOT_NAMES:
+                continue
+            if k in NAME_KEYS and isinstance(v, str):
                 out.add(v)
+            elif k == "hostnames" and isinstance(v, list):  # network.json: reverse-DNS names of a host
+                out.update(n for n in v if isinstance(n, str) and n)
             else:
                 _names_in(v, out)
     elif isinstance(obj, list):

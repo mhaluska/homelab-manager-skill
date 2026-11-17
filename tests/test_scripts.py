@@ -374,6 +374,26 @@ class ReportTests(unittest.TestCase):
         self.assertIn("UPDATE #9", self.issues("report", "--dry-run", "--match", "SKILL-001=9").stdout)
 
 
+    def test_os_guesses_not_redacted_hostnames_are(self):  # GitHub issue #30
+        net = {"hosts": {"10.0.10.7": {
+            "ip": "10.0.10.7", "hostnames": ["pikachu.lab.example"],
+            "os": [{"name": "MikroTik RouterOS 7.10 (Linux 5.6.3)", "accuracy": 95},
+                   {"name": "Linux 4.15 - 5.19", "accuracy": 90}],
+            "ports": [{"port": 22, "service": "ssh", "product": "OpenSSH", "version": "10.0p2 Debian 7"}],
+            "ssh_probe": {"hostname": "bulbasaur", "os_name": "Debian GNU/Linux 13", "product": "Proxmox VE"}}}}
+        Path(self.d, "discovery").mkdir(exist_ok=True)
+        Path(self.d, "discovery/network.json").write_text(json.dumps(net))
+        self.issues("add", "--title", "OS guess wrong", "--kind", "script", "--body",
+                    "Guesses MikroTik RouterOS 7.10 (Linux 5.6.3) and Linux 4.15 - 5.19 on Debian GNU/Linux 13 "
+                    "with OpenSSH; Proxmox VE; host pikachu.lab.example aka bulbasaur.")
+        out = self.issues("report", "--dry-run").stdout
+        for kept in ("MikroTik RouterOS 7.10 (Linux 5.6.3)", "Linux 4.15 - 5.19", "Debian GNU/Linux 13",
+                     "OpenSSH", "Proxmox VE"):
+            self.assertIn(kept, out, kept)
+        for leak in ("pikachu", "bulbasaur", "lab.example"):
+            self.assertNotIn(leak, out, leak)
+
+
 class StateBackendTests(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
