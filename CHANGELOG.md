@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.20.0 — 2026-11-17
+- Sites ([#52](https://github.com/mhaluska/homelab-manager-skill/issues/52), part 1): new optional `sites:` in homelab.yaml for more than one location (a rented server,
+  family's house), the default site first; each other site may have its own `proxmox` block with its own tokens,
+  a `label` and its network `ranges`. Inventory hosts belong to a site through the Ansible group `site_<name>`
+  (none: the default site), so plays can target a site (`-e target='site_offsite:&linux'`).
+  - `proxmox_inventory.py --site N` / `--all-sites` → `discovery/proxmox-<site>.json`;
+    `proxmox_to_inventory.py --site N` drafts into `site_<name>`.
+  - `pve_snapshot.py --site N`; `patch-linux.yml -e snapshot=true` checks and snapshots each guest on its own
+    site. `with_secrets.py` connects to the site whose tokens name the secret.
+  - The drift report covers every site (`<site>/<vmid>`, as VMIDs repeat), labels devices by site ranges and
+    flags hosts in several site groups or in a group with no site; `check_env.py` checks TLS per site.
+  - `config_set.py` refuses invalid site names; `issues.py` redacts every site's names, endpoints and data.
+  - Not yet: OpenTofu, Packer, VMID allocation and node patching for other sites (part 2).
+- Upgrade note for `patch-linux.yml`: `init_repo.py --sync-managed`.
+
 ## 0.19.0 — 2026-11-17
 - LXD/Incus snapshots ([#44](https://github.com/mhaluska/homelab-manager-skill/issues/44)): new `lxd_snapshot.py list|check|create|delete|restore <host…>` for containers
   on a plain LXD/Incus host or a QNAP NAS (Container Station). Host vars: `lxd_host` (and optional `lxd_instance`,
