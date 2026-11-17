@@ -6,6 +6,16 @@
   ahead; a failed push is reported. Setup asks for it when the repo has a remote; existing repos are offered it
   by the upgrade advisor. `check_env.py` reports commits not pushed to the upstream (a failure with auto_push)
   and commits on the upstream missing locally.
+- Probe discovered hosts over SSH ([#25](https://github.com/mhaluska/homelab-manager-skill/issues/25)): new
+  read-only `ssh_probe.py [targets] [--user U] [--draft] [--include-managed]` logs in to the hosts
+  `discovery/network.json` knows with SSH open (or a given address; targets must be authorized) and reads
+  hostname, OS, product (Proxmox, OPNsense, pfSense, TrueNAS), virtualisation and every Python it finds. It
+  runs what Ansible's `raw` would, over plain `ssh -T` with agent keys only, a hard timeout per host, a
+  throwaway known_hosts (nothing added to `~/.ssh/known_hosts`) and the probe on stdin to `sh -s`, so csh
+  root shells work. It shows the Python the installed ansible-core can use (and the `ansible_python_interpreter`
+  to set when the default `python3` is too old, e.g. EL8), suggests an OS group (`el8`, `debian`,
+  `proxmox_nodes`, `appliances` …), merges the result into `network.json` and `--draft` prints an inventory
+  draft. `device_type_guess` now also uses what the host reported.
 
 ## 0.13.0 — 2026-11-17
 - Fix ([#24](https://github.com/mhaluska/homelab-manager-skill/issues/24)): `issues.py add` with the key of an

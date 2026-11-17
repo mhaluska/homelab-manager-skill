@@ -1596,3 +1596,123 @@ class GitUpstreamTests(unittest.TestCase):  # issue 27
         r = self.check(True)[0]
         self.assertIs(r["ok"], False)
         self.assertIn("no upstream", r["detail"])
+
+
+FAKE_SSH = r'''#!/usr/bin/env python3
+import json, os, sys
+host = sys.argv[-3]
+with open(os.environ["FAKE_SSH_LOG"], "a") as f:
+    f.write(json.dumps(sys.argv[1:]) + "\n")
+script = sys.stdin.read()
+assert "hm_probe=1" in script and sys.argv[-2:] == ["sh", "-s"]
+replies = {
+    "10.0.20.11": "hm_probe=1\nhostname=db01.example.test\nkernel=Linux 4.18.0\nos_id=rocky\nos_version=8.10\n"
+                  "os_like=rhel centos fedora\nos_name=Rocky Linux 8.10 (Green Obsidian)\nvirt=kvm\n"
+                  "python_default=/usr/bin/python3 Python 3.6.8\npython=/usr/bin/python3 Python 3.6.8\n"
+                  "python=/usr/bin/python3.12 Python 3.12.5\npython=/usr/libexec/platform-python Python 3.6.8\n",
+    "10.0.20.20": "hm_probe=1\nhostname=pve2\nkernel=Linux 6.8.12-4-pve\nos_id=debian\nos_version=12\n"
+                  "os_name=Debian GNU/Linux 12 (bookworm)\nproduct=pve-manager/8.3.1/fb48e850ef9dde27 (running kernel: 6.8)\n"
+                  "virt=none\npython_default=/usr/bin/python3 Python 3.11.2\n",
+}
+if host == "10.0.20.12":
+    sys.stderr.write("admin@10.0.20.12: Permission denied (publickey).\n")
+    sys.exit(255)
+if host == "10.0.20.15":
+    sys.stdout.write("bad command name sh (line 1 column 1)\n")
+    sys.exit(1)
+sys.stdout.write(replies[host])
+'''
+
+
+class SshProbeTests(unittest.TestCase):  # issue 25
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d)
+        run("init_repo.py", str(self.d), "--components", "ansible,discovery", cwd=self.d)
+        run("config_set.py", "network.authorized_ranges+=10.0.20.0/24", "network.excluded_hosts+=10.0.20.99",
+            "defaults.admin_user=admin", cwd=self.d)
+        ssh = lambda: [{"port": 22, "proto": "tcp", "service": "ssh", "product": "OpenSSH", "version": None}]
+        hosts = {
+            "10.0.20.11": {"ip": "10.0.20.11", "ports": ssh(), "os": [], "hostnames": [], "last_profile": "services"},
+            "10.0.20.12": {"ip": "10.0.20.12", "ports": ssh(), "os": [], "hostnames": [], "last_profile": "services"},
+            "10.0.20.13": {"ip": "10.0.20.13", "ports": [{"port": 80, "proto": "tcp"}], "last_profile": "services"},
+            "10.0.20.14": {"ip": "10.0.20.14", "ports": [], "last_profile": "ping"},
+            "10.0.20.15": {"ip": "10.0.20.15", "ports": ssh(), "os": [], "hostnames": [], "last_profile": "services"},
+            "10.0.20.17": {"ip": "10.0.20.17", "ports": ssh(), "last_profile": "services"},
+            "10.0.20.99": {"ip": "10.0.20.99", "ports": ssh(), "last_profile": "services"},
+            "10.0.30.5": {"ip": "10.0.30.5", "ports": ssh(), "last_profile": "services"},
+        }
+        (self.d / "discovery/network.json").write_text(json.dumps({"hosts": hosts}))
+        (self.d / "ansible/inventory/managed/hosts.yml").write_text(
+            "all:\n  children:\n    linux:\n      hosts:\n        known:\n          ansible_host: 10.0.20.17\n")
+        bin_ = self.d / "bin"
+        bin_.mkdir()
+        (bin_ / "ssh").write_text(FAKE_SSH)
+        (bin_ / "ssh").chmod(0o755)
+        self.log = self.d / "ssh.log"
+        self.env = {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "FAKE_SSH_LOG": str(self.log)}
+
+    def probe(self, *args):
+        return subprocess.run([sys.executable, str(SCRIPTS / "ssh_probe.py"), *args], cwd=self.d, env=self.env,
+                              capture_output=True, text=True)
+
+    def test_probes_ssh_hosts_in_range_and_merges(self):
+        r = self.probe("10.0.20.0/24", "10.0.20.20")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("skip 10.0.20.13: no SSH seen on 22/tcp", r.stderr)
+        self.assertIn("skip 10.0.20.14: only ping-scanned", r.stderr)
+        self.assertIn("skip 10.0.20.17: already in the managed inventory", r.stderr)
+        self.assertIn("skip 10.0.20.99: in network.excluded_hosts", r.stderr)
+        self.assertNotIn("10.0.30.5", r.stderr + r.stdout)                          # not in the targets
+        self.assertRegex(r.stdout, r"10\.0\.20\.11 +db01\.example\.test +Rocky Linux 8\.10.*3\.12\.5 \(python3 is 3\.6\.8\) +el8")
+        self.assertIn("10.0.20.11 → /usr/bin/python3.12", r.stdout)
+        self.assertIn("10.0.20.12       —                        auth failed", r.stdout)
+        self.assertIn("10.0.20.15       —                        logged in, but `sh` did not run", r.stdout)
+        self.assertRegex(r.stdout, r"10\.0\.20\.20 +pve2 +pve-manager.*proxmox_nodes")
+        calls = [json.loads(l) for l in self.log.read_text().splitlines()]
+        self.assertEqual(sorted(c[-3] for c in calls), ["10.0.20.11", "10.0.20.12", "10.0.20.15", "10.0.20.20"])
+        for c in calls:
+            self.assertIn("-T", c)
+            self.assertIn("BatchMode=yes", c)
+            self.assertIn("StrictHostKeyChecking=accept-new", c)
+            kh = next(o for o in c if o.startswith("UserKnownHostsFile="))
+            self.assertNotIn(".ssh", kh)                                            # throwaway known_hosts
+            self.assertEqual(c[c.index("-l") + 1], "admin")                          # defaults.admin_user
+        net = json.loads((self.d / "discovery/network.json").read_text())["hosts"]
+        self.assertEqual(net["10.0.20.20"]["device_type_guess"], "hypervisor")      # new host, from the probe
+        self.assertEqual(net["10.0.20.11"]["ssh_probe"]["os_id"], "rocky")
+        self.assertFalse(net["10.0.20.12"]["ssh_probe"]["ok"])
+        self.assertNotIn("ssh_probe", net["10.0.20.13"])
+
+    def test_draft_and_no_write(self):
+        before = (self.d / "discovery/network.json").read_text()
+        r = self.probe("10.0.20.11", "10.0.20.20", "--draft", "--no-write", "--user", "ops")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.d / "discovery/network.json").read_text(), before)
+        self.assertIn('    el8:\n      hosts:\n        db01:  # Rocky Linux 8.10 (Green Obsidian)\n'
+                      '          ansible_host: "10.0.20.11"\n          ansible_user: "ops"\n'
+                      '          ansible_python_interpreter: "/usr/bin/python3.12"', r.stdout)
+        self.assertIn("    proxmox_nodes:", r.stdout)
+        data = json.loads(subprocess.run(["yq", "-o=json", "."], input=r.stdout, capture_output=True, text=True).stdout)
+        self.assertEqual(sorted(data["all"]["children"]), ["el8", "proxmox_nodes"])
+
+    def test_scope(self):
+        r = self.probe("10.0.30.0/24")
+        self.assertEqual(r.returncode, 4)
+        self.assertIn("outside the authorized ranges", r.stderr)
+        self.assertFalse(self.log.exists())
+
+    def test_python_rules(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import ssh_probe as p
+        self.assertEqual(p.min_target_python((2, 16)), (3, 6))
+        self.assertEqual(p.min_target_python((2, 17)), (3, 7))
+        self.assertEqual(p.min_target_python((2, 21)), (3, 8))
+        old = {"python_default": {"path": "/usr/bin/python3", "version": "3.6.8"},
+               "pythons": [{"path": "/usr/bin/python3", "version": "3.6.8"}]}
+        self.assertEqual(p.python_advice(old, (3, 8)), ("3.6.8 — too old, needs 3.8+", None))
+        self.assertEqual(p.python_advice(old, (3, 6)), ("3.6.8 ok", None))
+        self.assertEqual(p.suggest_group({"os_id": "almalinux", "os_version": "9.4"}), "el9")
+        self.assertEqual(p.suggest_group({"kernel": "FreeBSD 14.1-RELEASE", "os_freebsd": "14.1",
+                                          "product": "pfSense 2.7.2"}), "appliances")
+        self.assertEqual(p.suggest_group({"kernel": "FreeBSD 14.1-RELEASE", "os_freebsd": "14.1"}), "freebsd")

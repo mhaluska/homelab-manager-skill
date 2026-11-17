@@ -230,6 +230,7 @@ Scripts (all in `$HM/scripts/`):
 | `drift_report.py [--tofu-json F]` | Proxmox ↔ OpenTofu ↔ Ansible ↔ network | `discovery/drift.md` |
 | `tofu_to_inventory.py` | OpenTofu output → Ansible inventory | `ansible/inventory/managed/tofu_hosts.yml` |
 | `proxmox_to_inventory.py [--vlan N] [--range CIDR] [--type vm\|lxc]` | draft inventory entries for existing Linux guests (review before use) | — (stdout) |
+| `ssh_probe.py [targets] [--user U] [--draft]` | read-only SSH probe of discovered hosts: hostname, OS, usable Python, OS group | `discovery/network.json` |
 | `upgrade_notes.py [--all] [--json]` | opt-in changes newer releases suggest for this repo (shown by `--sync-managed`) | — |
 | `config_set.py 'path=value' 'list+=item' [--delete path] [--dry-run]` | edit homelab.yaml keeping comments and layout | `homelab.yaml` |
 | `issues.py add\|list\|show\|report\|resolve\|fixed` | note problems with / ideas for this skill; report them (sanitised) to the plugin repo | `skill_issues.md` |
