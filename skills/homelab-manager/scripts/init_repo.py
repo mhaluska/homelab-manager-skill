@@ -161,11 +161,6 @@ def unedited_templates(target: Path) -> list[tuple[str, str, list[str]]]:
     return out
 
 
-def _note_file(n: dict) -> str | None:
-    w = n.get("when") or {}
-    return (w.get("file_lacks") or w.get("file_has") or [None])[0]
-
-
 def upgrades(target: Path) -> list[tuple[str, callable]]:
     """Changes that bring a repo set up by an older plugin version in line with this one: [(description, apply)]."""
     out = []
@@ -384,7 +379,7 @@ def suggestions(target: Path) -> tuple[list[dict], list[tuple[dict, str]]]:
         return [], []
     import issues  # noqa: E402
     replaced = {r for r, _, _ in unedited_templates(target)}
-    notes = [n for n in upgrade_notes.pending(target) if _note_file(n) not in replaced]
+    notes = upgrade_notes.pending(target, replaced=replaced)
     try:
         fixed = issues.fixed_by_release(issues.load(issues.issues_path(issues.hmlib.load_config(target))))
     except issues.hmlib.ConfigError:
@@ -393,11 +388,13 @@ def suggestions(target: Path) -> tuple[list[dict], list[tuple[dict, str]]]:
 
 
 def covered_notes(target: Path) -> list[dict]:
-    """Pending notes that replacing an unedited file with the template settles (call before applying)."""
+    """Pending notes that replacing unedited files with the template settles (call before applying). A note
+    about several files that still has an edited one left stays a suggestion naming only those (GitHub #76)."""
     if not (target / "homelab.yaml").exists():
         return []
     replaced = {r for r, _, _ in unedited_templates(target)}
-    return [n for n in upgrade_notes.pending(target) if _note_file(n) in replaced]
+    left = {n["id"] for n in upgrade_notes.pending(target, replaced=replaced)}
+    return [n for n in upgrade_notes.pending(target) if n["id"] not in left]
 
 
 def record_reviewed(target: Path):

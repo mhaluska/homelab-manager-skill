@@ -5,17 +5,21 @@
     "init_repo.py --sync-managed [--dry-run] lists the ones that apply to the repo and are newer than its",
     "upgrades.reviewed version (homelab.yaml), as 'suggested, needs your yes'. Maintainers: add a note for",
     "every release that adds something an existing repo has to adopt by hand.",
-    "Fields: version, id, kind (config | template | regenerate | manual), text, action, when, after_replace.",
+    "Fields: version, id, kind (config | template | regenerate | manual), text, edited, action, when, after_replace.",
+    "text says what the release changed; edited (optional) says why the repo's copy was not replaced: it is shown",
+    "only while the note is a suggestion, not when --sync-managed replacing the file settles it (GitHub #76).",
     "A template note whose file (file_lacks/file_has) has no local edits is settled by --sync-managed replacing the",
     "file with the template (template-history.json); after_replace is what is left to do then (optional).",
     "when (all must hold): component (enabled), config_empty (dotted key unset/empty), config_set (dotted key set),",
-    "file_lacks [path, text] (file exists and lacks text), file_has [path, text] (file exists and has text),",
+    "file_lacks [path, text] or a list of them (any of the files exists and lacks its text),",
+    "file_has [path, text] or a list of them (each file exists and has its text),",
     "file_missing path (a file a release added is not in the repo; {template} is its template),",
     "vmids_outside_ranges (snapshot VMIDs don't fit), agent_ips_unread (discovery/proxmox.json says the guest",
     "agent IPs were not read: guest_ip_sources.agent present and not ok), default_site_implicit (two or more sites",
     "and the default one has no ranges, VLANs without a site or no site_<default> group), multi_site (two or more",
     "sites).",
-    "Placeholders in action and after_replace: {HM} skill dir, {template} template file of file_lacks, {detail} computed hint,",
+    "Placeholders in text, edited, action and after_replace: {HM} skill dir, {template} template file of the first",
+    "file_lacks file still lacking its text, {files} all those files, {detail} computed hint,",
     "{site} the default site's name (default_site_implicit)."
   ],
   "notes": [
@@ -416,7 +420,8 @@
           "nothing needs adding to it"
         ]
       },
-      "text": "discovery/README.md now lists every file the scripts and playbooks write there, per site and across sites, with the naming rule (#73). This repo's copy is an older one with local edits, so --sync-managed did not replace it.",
+      "text": "discovery/README.md now lists every file the scripts and playbooks write there, per site and across sites, with the naming rule (#73).",
+      "edited": "This repo's copy is an older one with local edits, so --sync-managed did not replace it.",
       "action": "Replace discovery/README.md with {template}. Show the user the diff first: entries added by hand are covered by the new list (or are hand-recorded `<name>-containers.json` files); keep only a note the template has no equivalent for."
     },
     {
@@ -449,7 +454,8 @@
           "pve-patch.json"
         ]
       },
-      "text": "pve_node_plan.py writes every plan into discovery/pve-patch.json (under its site, then node) instead of pve-patch-[<site>-]<node>.json (#75). This repo's patch-proxmox-node.yml has local edits, so --sync-managed did not replace it, and it still looks for the old per-node files.",
+      "text": "pve_node_plan.py writes every plan into discovery/pve-patch.json (under its site, then node) instead of pve-patch-[<site>-]<node>.json (#75).",
+      "edited": "This repo's patch-proxmox-node.yml has local edits, so --sync-managed did not replace it, and it still looks for the old per-node files.",
       "action": "Replace ansible/playbooks/patch-proxmox-node.yml with {template}, carrying over any local edits (show the user the diff first), and run `ansible-playbook --syntax-check` on it."
     },
     {
@@ -463,7 +469,8 @@
           "unifi_site"
         ]
       },
-      "text": "unifi-info.yml keeps each homelab site's controller data in discovery/unifi.json under that site (#75); the UniFi site list moved to unifi_sites. This repo's copy has local edits.",
+      "text": "unifi-info.yml keeps each homelab site's controller data in discovery/unifi.json under that site (#75); the UniFi site list moved to unifi_sites.",
+      "edited": "This repo's copy has local edits.",
       "action": "Replace ansible/playbooks/unifi-info.yml with {template}, carrying over any local edits (show the user the diff first)."
     },
     {
@@ -473,12 +480,14 @@
       "when": {
         "component": "ansible",
         "file_lacks": [
-          "ansible/playbooks/check-updates.yml",
-          "GitHub #75"
+          ["ansible/playbooks/check-updates.yml", "GitHub #75"],
+          ["ansible/playbooks/docker-containers.yml", "GitHub #75"],
+          ["ansible/playbooks/bmc-info.yml", "GitHub #75"]
         ]
       },
-      "text": "updates.json, containers.json and bmc.json give each host its site (from its site_<name> group, #75). This repo's check-updates.yml has local edits; docker-containers.yml and bmc-info.yml may too.",
-      "action": "In ansible/playbooks/check-updates.yml, docker-containers.yml and bmc-info.yml, add the loop marked `GitHub #75` from the same playbooks in {HM}/assets/repo-template/ansible/playbooks/ to the write step (show the user the diff first)."
+      "text": "updates.json, containers.json and bmc.json give each host its site (from its site_<name> group, #75).",
+      "edited": "These playbooks have local edits, so --sync-managed did not replace them: {files}.",
+      "action": "In {files}, add the loop marked `GitHub #75` from the same playbooks in {HM}/assets/repo-template/ansible/playbooks/ to the write step (show the user the diff first)."
     },
     {
       "version": "0.29.0",
@@ -490,7 +499,8 @@
           "never a site in its name"
         ]
       },
-      "text": "discovery/ has one file per kind with every site inside (#75); this repo's discovery/README.md is an older copy with local edits.",
+      "text": "discovery/ has one file per kind with every site inside (#75).",
+      "edited": "This repo's discovery/README.md is an older copy with local edits.",
       "action": "Replace discovery/README.md with {template} (show the user the diff first; keep only a note the template has no equivalent for)."
     }
   ]

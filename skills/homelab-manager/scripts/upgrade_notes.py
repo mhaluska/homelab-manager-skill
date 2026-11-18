@@ -64,8 +64,19 @@ def _enabled(cfg: dict, comp: str) -> bool:
     return True if not isinstance(comps, dict) else comps.get(comp) is True  # no section = older repo: all
 
 
-def _check(note: dict, cfg: dict, root: Path) -> tuple[bool, dict]:
-    """(applies, placeholders) for one note."""
+def _pairs(v) -> list[list[str]]:
+    """file_lacks / file_has: one [path, text] pair or a list of them."""
+    return [v] if v and isinstance(v[0], str) else list(v or [])
+
+
+def note_files(note: dict) -> set[str]:
+    """Repo files a note's file_lacks / file_has conditions look at."""
+    w = note.get("when") or {}
+    return {rel for k in ("file_lacks", "file_has") for rel, _ in _pairs(w.get(k))}
+
+
+def _check(note: dict, cfg: dict, root: Path, replaced: frozenset = frozenset()) -> tuple[bool, dict]:
+    """(applies, placeholders) for one note. Files in `replaced` count as replaced with the template already."""
     w, ph = note.get("when") or {}, {"HM": str(HERE.parent)}
     if w.get("component") and not _enabled(cfg, w["component"]):
         return False, ph
@@ -73,18 +84,18 @@ def _check(note: dict, cfg: dict, root: Path) -> tuple[bool, dict]:
         return False, ph
     if w.get("config_set") and hmlib.config_value(cfg, w["config_set"]) in (None, "", [], {}):
         return False, ph
-    if w.get("file_lacks"):
-        rel, text = w["file_lacks"]
-        f = root / rel
-        if not f.is_file() or text in f.read_text(errors="replace"):
+    if w.get("file_lacks"):   # any of the files exists and lacks its text
+        lacking = [rel for rel, text in _pairs(w["file_lacks"]) if rel not in replaced and (root / rel).is_file()
+                   and text not in (root / rel).read_text(errors="replace")]
+        if not lacking:
             return False, ph
-        ph["template"] = str(TEMPLATE / rel)
-    if w.get("file_has"):
-        rel, text = w["file_has"]
-        f = root / rel
-        if not f.is_file() or text not in f.read_text(errors="replace"):
-            return False, ph
-        ph["template"] = str(TEMPLATE / rel)
+        ph["template"], ph["files"] = str(TEMPLATE / lacking[0]), ", ".join(lacking)
+    if w.get("file_has"):     # every file exists and has its text
+        for rel, text in _pairs(w["file_has"]):
+            f = root / rel
+            if rel in replaced or not f.is_file() or text not in f.read_text(errors="replace"):
+                return False, ph
+        ph["template"] = str(TEMPLATE / _pairs(w["file_has"])[0][0])
     if w.get("file_missing"):
         rel = w["file_missing"]
         if (root / rel).exists():
@@ -123,8 +134,9 @@ def _check(note: dict, cfg: dict, root: Path) -> tuple[bool, dict]:
     return True, ph
 
 
-def pending(root: Path, everything: bool = False) -> list[dict]:
-    """Notes that apply to the repo at `root`, from releases after its reviewed version up to the installed one."""
+def pending(root: Path, everything: bool = False, replaced=frozenset()) -> list[dict]:
+    """Notes that apply to the repo at `root`, from releases after its reviewed version up to the installed one.
+    `replaced`: repo files --sync-managed replaces with the template in this run (they count as current)."""
     cfg = hmlib.load_config(root)
     since = (0, 0, 0) if everything else vtuple(reviewed_version(cfg))
     upto = vtuple(installed_version())
@@ -133,10 +145,10 @@ def pending(root: Path, everything: bool = False) -> list[dict]:
     for n in all_notes():
         if not since < vtuple(n["version"]) <= upto or n["id"] in done:
             continue
-        ok, ph = _check(n, cfg, Path(root))
+        ok, ph = _check(n, cfg, Path(root), frozenset(replaced))
         if ok:
             n = dict(n)
-            for field in ("action", "after_replace"):
+            for field in ("text", "edited", "action", "after_replace"):
                 if field in n:
                     for k, v in ph.items():
                         n[field] = n[field].replace("{" + k + "}", v)
@@ -145,7 +157,8 @@ def pending(root: Path, everything: bool = False) -> list[dict]:
 
 
 def describe(n: dict) -> str:
-    return (f"[{n['version']} · {KIND_LABEL.get(n['kind'], n['kind'])} · {n['id']}] {n['text']}\n"
+    text = n["text"] + (" " + n["edited"] if n.get("edited") else "")
+    return (f"[{n['version']} · {KIND_LABEL.get(n['kind'], n['kind'])} · {n['id']}] {text}\n"
             f"    → {n['action']}")
 
 

@@ -1249,8 +1249,10 @@ class UpgradeNotesTests(unittest.TestCase):
             if "after_replace" in n:      # only a note a file replacement can settle has a leftover step
                 self.assertTrue({"file_lacks", "file_has"} & set(n["when"]), n["id"])
             if "file_lacks" in n["when"] and n["kind"] == "template":
-                self.assertIn(n["when"]["file_lacks"][1],
-                              (SCRIPTS.parent / "assets/repo-template" / n["when"]["file_lacks"][0]).read_text())
+                for rel, text in upgrade_notes._pairs(n["when"]["file_lacks"]):   # the template settles it
+                    self.assertIn(text, (SCRIPTS.parent / "assets/repo-template" / rel).read_text(), n["id"])
+            # why the repo's copy wasn't replaced goes to `edited`, which a covered note doesn't show (GitHub #76)
+            self.assertNotIn("local edits", n["text"], n["id"])
 
 
 class TemplateHistoryTests(unittest.TestCase):  # GitHub issue #68
@@ -1321,6 +1323,29 @@ class UneditedTemplateTests(unittest.TestCase):  # GitHub issue #68
         self.assertIn("add ansible/playbooks/tasks/restart-check.yml (it uses them)", out)
         self.assertTrue((self.d / "ansible/playbooks/tasks/restart-check.yml").exists())
         self.assertFalse((self.d / "ansible/playbooks/patch-proxmox-node.yml").exists())
+
+    def test_covered_note_drops_edited_text_and_multi_file_note_names_the_rest(self):  # GitHub issue #76
+        run("config_set.py", "upgrades.reviewed=0.28.1", cwd=self.d)
+        pb = "ansible/playbooks/"
+        for f in ("check-updates.yml", "patch-proxmox-node.yml", "docker-containers.yml", "bmc-info.yml"):
+            self.old("v0.28.1", pb + f)
+        for f in ("docker-containers.yml", "bmc-info.yml"):
+            (self.d / pb / f).write_text((self.d / pb / f).read_text() + "# local edit\n")
+        out = self.sync("--dry-run").stdout
+        self.assertIn(f"would replace {pb}check-updates.yml", out)
+        self.assertIn(f"would replace {pb}patch-proxmox-node.yml", out)
+        covered, _, suggested = out.partition("Suggested by newer releases")
+        self.assertIn("[0.29.0 · pve-patch-one-file] pve_node_plan.py writes every plan", covered)
+        self.assertNotIn("has local edits", covered)
+        self.assertNotIn("pve-patch-one-file", suggested)
+        self.assertIn("host-files-site-tag", suggested)
+        self.assertIn(f"did not replace them: {pb}docker-containers.yml, {pb}bmc-info.yml.", suggested)
+        self.assertIn(f"In {pb}docker-containers.yml, {pb}bmc-info.yml, add", suggested)
+        self.assertNotIn("check-updates.yml", suggested)
+        out = self.sync().stdout
+        self.assertIn("host-files-site-tag", out.partition("Suggested by newer releases")[2])
+        self.assertIn("host-files-site-tag", [n["id"] for n in json.loads(run("upgrade_notes.py", "--json",
+                                                                                   cwd=self.d).stdout)])
 
     def test_after_replace_step_is_shown_and_docs_with_proxmox_steps_are_kept(self):
         run("config_set.py", "upgrades.reviewed=0.21.0", cwd=self.d)
