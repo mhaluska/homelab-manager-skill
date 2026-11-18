@@ -4,15 +4,19 @@
     overview.py [--out FILE|-] [--check] [--no-ansible]
 
 Renders what the repository already holds and contacts nothing (GitHub issue #87): homelab.yaml (sites,
-network.vlans, clusters), discovery/proxmox.json (nodes, storage, guests, backup jobs), network.json (scanned
-addresses), unifi.json, routeros.json, bmc.json, containers.json, qnap-containers.json, updates.json, the managed
+network.vlans, clusters), discovery/proxmox.json (nodes, storage, guests, backup jobs, last backups, subscriptions,
+certificates), network.json (scanned addresses, services, TLS certificates), unifi.json, routeros.json (devices,
+NAT rules, CHR licences), bmc.json, containers.json, qnap-containers.json, updates.json, the managed
 Ansible inventory (`ansible-inventory --list`; --no-ansible skips it), discovery/drift.md and the newest
 docs/security-audit-*.md. Network devices start from the inventory (routeros, unifi, bmc, qnap, appliances groups)
 and are enriched from the discovery files; "Other scanned addresses" holds only addresses nothing in the repo names.
+Per site also: start order after an outage, what stops when a node, gateway, storage server or NAS goes down, port
+forwards and how to reach each host; then expirations (GitHub issue #89).
 Writes OVERVIEW.md in the repository root (--out - prints it).
 
-The output is deterministic (sorted, no "generated now" time; each source shows when it was collected), so a diff
-shows only real changes: regenerate it after every verified change and commit it with that change.
+The output is deterministic (sorted, no "generated now" time; each source shows when it was collected; backup ages
+and expiries are judged against the newest data, not today), so a diff shows only real changes: regenerate it after
+every verified change and commit it with that change.
 --check renders without writing: exit 0 when OVERVIEW.md is current, 1 when stale, 2 when missing.
 Strings from discovery (guest names, tags, banners) are untrusted: escaped for Markdown tables and Mermaid labels.
 overview.redact: true in homelab.yaml (a repo that is shared or public) masks IPv4 addresses, MACs, the domain and
@@ -21,6 +25,7 @@ the Proxmox endpoint hosts.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import html
 import ipaddress
 import json
@@ -30,6 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hmlib  # noqa: E402
+import pve_node_plan as plan  # noqa: E402
 from drift_report import load_ansible  # noqa: E402
 
 STORAGE_WARN_PCT = 80
@@ -37,6 +43,8 @@ MEM_WARN_PCT = 85
 MAP_COLUMNS = 5     # VLANs per column in a site map
 STALE_DAYS = 7      # update data this much older than the newest check is marked stale
 FOLD_ROWS = 15      # a longer Guests, Containers or Other scanned addresses table is collapsed (GitHub issue #113)
+EXPIRY_WARN_DAYS = 30   # an expiry this close to the newest data is a warning (GitHub issue #89)
+BACKUP_MAX_AGE_DAYS = 7   # default overview.backup_max_age_days: an older last backup is a warning (GitHub issue #89)
 SOURCES = [  # (discovery file, what writes it)
     ("proxmox.json", "proxmox_inventory.py --details"), ("network.json", "nmap_scan.py"),
     ("unifi.json", "unifi-info.yml"), ("routeros.json", "routeros_audit.py"), ("bmc.json", "bmc-info.yml"),
@@ -52,13 +60,13 @@ CHECK_UPDATES_GROUPS = ("linux", "windows", "qnap", "proxmox_nodes")
 
 # --------------------------------------------------------------------------- escaping
 
-def cell(value) -> str:
+def cell(value, limit: int = 120) -> str:
     """A Markdown table cell from untrusted text: one line, no HTML, no table or link syntax. A list is every item,
     each escaped and length-limited on its own, joined uncut (GitHub issue #115: never a name cut in half)."""
     if isinstance(value, (list, tuple, set)):
         items = [cell(v) for v in value if v not in (None, "")]
         return ", ".join(i for i in items if i != "–") or "–"
-    s = hmlib.clean("" if value is None else value, 120) or ""
+    s = hmlib.clean("" if value is None else value, limit) or ""
     s = re.sub(r"\s+", " ", s).strip()
     for a, b in (("\\", "\\\\"), ("|", "\\|"), ("<", "&lt;"), (">", "&gt;"), ("[", "\\["), ("]", "\\]"),
                  ("`", "\\`"), ("*", "\\*"), ("_", "\\_")):
@@ -551,6 +559,121 @@ def device_rows(cfg: dict, st: dict, docs: dict, managed: dict, net: dict, unifi
     return rows
 
 
+# --------------------------------------------------------------------------- GitHub issue #89 helpers
+
+def day(s) -> "dt.date | None":
+    try:
+        return dt.date.fromisoformat(str(s or "")[:10])
+    except ValueError:
+        return None
+
+
+def last_backup(g: dict) -> str:
+    """"2026-11-18", "failed 2026-11-18, last OK 2026-11-10", "–" (no backup in the task logs read)."""
+    lb, err = g.get("last_backup") or {}, g.get("backup_error") or {}
+    text = stamp(lb.get("at")) if lb else ""
+    if err and (not lb or str(err.get("at") or "") > str(lb.get("at") or "")):
+        return f"failed {stamp(err.get('at'))}" + (f", last OK {text}" if text else "")
+    return text
+
+
+def backup_failed(g: dict) -> bool:
+    lb, err = g.get("last_backup") or {}, g.get("backup_error") or {}
+    return bool(err) and (not lb or str(err.get("at") or "") > str(lb.get("at") or ""))
+
+
+def max_backup_age(cfg: dict) -> int:
+    v = hmlib.get(cfg, "overview.backup_max_age_days", BACKUP_MAX_AGE_DAYS)
+    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else BACKUP_MAX_AGE_DAYS
+
+
+def startup_up(g: dict) -> str:
+    m = re.search(r"(?:^|,)up=(\d+)", str((g.get("config") or {}).get("startup") or ""))
+    return f"{m.group(1)} s" if m else ""
+
+
+def short(name) -> str:
+    return str(name or "").split(".")[0].lower()
+
+
+def roles(cfg: dict, st: dict, px: dict, guests: list[dict], vl: list[dict], known: Known, managed: dict) -> dict:
+    """What a host does for others (GitHub issue #89), by short name: gateway of VLANs (network.vlans[].gw), server of
+    Proxmox storages (the storage's server), cluster member (clusters[].ansible_group), critical host. Only what the
+    repository records; nothing is guessed from names."""
+    out: dict = {}
+    for v in vl:
+        gw = v.get("gw")
+        name = short(known.name(gw) if is_ip(gw) and known.addr.get(gw, ("", ""))[1] != "gateway" else
+                     ("" if is_ip(gw) else gw))
+        if name:
+            out.setdefault(name, {}).setdefault("gateway", []).append(v["id"])
+    for srv, sts in storage_servers(px, known).items():
+        out.setdefault(srv, {})["storage"] = sts
+    groups: dict = {}
+    for h, v in managed.items():
+        for g in groups_of(v):
+            groups.setdefault(g, set()).add(short(h))
+    for c in hmlib.get(cfg, "clusters", []) or []:
+        if isinstance(c, dict):
+            members = sorted(groups.get(c.get("ansible_group"), set()))
+            for m in members:
+                out.setdefault(m, {})["cluster"] = (str(c.get("name")), len(members), c.get("vip"))
+    for h, v in managed.items():
+        if v.get("patch_requires_approval"):
+            out.setdefault(short(h), {})["critical"] = True
+    return out
+
+
+def storage_servers(px: dict, known: Known) -> dict:
+    """{server short name or address: [storage, …]} of a site's network storages (NFS, CIFS, PBS)."""
+    out: dict = {}
+    for s in px.get("storage") or []:
+        srv = str(s.get("server") or "")
+        if not srv:
+            continue
+        names = {short(n) for n, _ in known.addr.values()}
+        name = short(known.name(srv)) if is_ip(srv) and known.name(srv) else (
+            short(srv) if not is_ip(srv) and short(srv) in names else srv)
+        if s.get("storage") not in out.setdefault(name, []):
+            out[name].append(s.get("storage"))
+    return out
+
+
+def role_text(r: dict) -> list[str]:
+    out = []
+    if r.get("gateway"):
+        out.append("gateway of VLAN " + ", ".join(map(str, sorted(r["gateway"]))))
+    if r.get("storage"):
+        out.append("serves storage " + ", ".join(r["storage"]))
+    if r.get("cluster"):
+        out.append(f"{r['cluster'][0]} cluster member")
+    if r.get("critical"):
+        out.append("critical")
+    return out
+
+
+def guests_on(guests: list[dict], vlan_ids) -> list[dict]:
+    ids = set(vlan_ids)
+    return [g for g in guests if ids & {t for t, _ in g.get("_links") or []}]
+
+
+WEB_PORTS = (80, 443, 8006, 8007, 8080, 8443, 9443)   # web UIs even when nmap names the service otherwise
+
+
+def tls_url(ip: str, p: dict) -> str | None:
+    """A web UI link for an open port nmap identified as HTTP (TLS when nmap saw a tunnel or a certificate)."""
+    svc = str(p.get("service") or "").lower()
+    if p.get("proto") not in (None, "tcp") or not ("http" in svc or svc == "webdav" or p.get("tls")
+                                                   or p.get("port") in WEB_PORTS):
+        return None
+    tls = p.get("tunnel") == "ssl" or bool(p.get("tls")) or svc in ("https", "ssl/http") or p.get("port") in (
+        443, 8006, 8007, 8443, 9443)
+    port = int(p.get("port") or 0)
+    host = f"[{ip}]" if ":" in ip else ip
+    default = 443 if tls else 80
+    return f"{'https' if tls else 'http'}://{host}" + ("" if port == default else f":{port}")
+
+
 # --------------------------------------------------------------------------- sections
 
 def sources(root: Path, docs: dict) -> list[str]:
@@ -641,6 +764,201 @@ def sites_map(rows: list[tuple[dict, int, int, int]]) -> list[str]:
     return lines + ["```"]
 
 
+def start_order(px: dict, guests_by: dict, role: dict) -> list[str]:
+    """Recovery after a power outage (GitHub issue #89): the cluster's quorum, then per node the autostart guests in
+    the order Proxmox starts them (startup order, guests without one after, each by VMID; HA-managed guests are
+    started by the HA manager), and the running guests nothing starts again."""
+    rows, manual = [], []
+    for n in sorted(px.get("nodes") or [], key=lambda n: n.get("node") or ""):
+        gs = guests_by.get(n.get("node"), [])
+        auto = sorted((g for g in gs if plan.onboot(g) or g.get("hastate")),
+                      key=lambda g: (plan.startup_order(g), g["vmid"]))
+        for i, g in enumerate(auto, 1):
+            o = plan.startup_order(g)
+            rows.append([n.get("node"), i, g["vmid"], g.get("name"), o if o < 10**6 else "–", startup_up(g),
+                         ["HA"] * bool(g.get("hastate")) + role_text(role.get(short(g.get("name")), {}))])
+        manual += [g for g in gs if g.get("status") == "running" and not plan.onboot(g) and not g.get("hastate")]
+    if not rows and not manual:
+        return []
+    cl = px.get("cluster")
+    count = len(px.get("nodes") or [])
+    out = [("After a power outage each node starts by itself and then its autostart guests in this order; nodes start "
+            "in parallel." if count > 1 else "After a power outage the node starts by itself and then its autostart "
+            "guests in this order.")
+           + (f" The cluster starts guests only when it has quorum: {count // 2 + 1} of {count} nodes up."
+              if cl and count > 1 else ""), ""]
+    if rows:
+        out += fold(table(["Node", "#", "VMID", "Guest", "Order", "Up delay", "Role"], rows), len(rows), "autostart guest")
+    if manual:
+        out += ["", "Running now without autostart (start by hand after an outage): "
+                + ", ".join(f"{g['vmid']} {cell(g.get('name'))}" + (f" ({cell(', '.join(role_text(role[short(g.get('name'))])))})"
+                                                                    if role_text(role.get(short(g.get("name")), {})) else "")
+                            for g in sorted(manual, key=lambda g: g["vmid"])) + "."]
+    return out + [""]
+
+
+def impact(cfg: dict, st: dict, px: dict, guests: list[dict], guests_by: dict, vl: list[dict], role: dict,
+           docs: dict, managed: dict) -> list[str]:
+    """What stops when one thing goes down (GitHub issue #89), only from recorded data: a Proxmox node (its guests and
+    what they do for others), a gateway that isn't a guest here (its VLANs), a storage server (its storages and the
+    guests with disks or ISOs there), a NAS (its containers and what they do)."""
+    by_name = {short(g.get("name")): g for g in guests}
+    vlan_name = {v["id"]: v.get("name") for v in vl}
+    disks: dict = {}
+    for g in guests:
+        for _, sto in plan.volumes(g.get("config") or {}):
+            disks.setdefault(sto, set()).add(g["vmid"])
+
+    def effects(r: dict) -> list[str]:
+        out = []
+        if r.get("gateway"):
+            n = len(guests_on(guests, r["gateway"]))
+            out.append("routing lost for VLAN " + ", ".join(f"{v} {vlan_name.get(v) or ''}".strip() for v in
+                                                           sorted(r["gateway"])) + f" ({plural(n, 'guest')} there)")
+        if r.get("storage"):
+            hit = set().union(*(disks.get(x, set()) for x in r["storage"]))
+            out.append("storage " + ", ".join(r["storage"]) + " unavailable"
+                       + (f": {plural(len(hit), 'guest')} with disks or ISOs there can't start" if hit else ""))
+        if r.get("cluster"):
+            name, total, vip = r["cluster"]
+            out.append(f"{name} cluster has one member less of {total}" + (" (its VIP moves)" if vip else ""))
+        return out
+
+    rows = []
+    nodes = sorted(px.get("nodes") or [], key=lambda n: n.get("node") or "")
+    for n in nodes:
+        gs = guests_by.get(n.get("node"), [])
+        running = [g for g in gs if g.get("status") == "running"]
+        ha = [g for g in running if g.get("hastate")]
+        eff = [f"{plural(len(running), 'running guest')} stop" + (f" ({len(ha)} restarted elsewhere by HA)" if ha else "")]
+        if px.get("cluster") and len(nodes) > 1:
+            eff.append("the cluster keeps quorum" if len(nodes) - 1 >= len(nodes) // 2 + 1 else
+                       "the cluster loses quorum: guests on the other nodes keep running but can't be started or changed")
+        for g in sorted(gs, key=lambda g: g["vmid"]):
+            for e in effects(role.get(short(g.get("name")), {})):
+                eff.append(f"{g.get('name')}: {e}")
+        rows.append([f"Proxmox node {n.get('node')}", eff])
+    qnap = docs["qnap-containers.json"]
+    nas = {}
+    for n, cs in nas_containers(qnap).items():
+        d = (qnap.get("hosts") or {}).get(n) or {} if isinstance(qnap.get("hosts"), dict) else {}
+        s = (hmlib.target_site(cfg, managed, n) or {}).get("name") if not d.get("site") else d["site"]
+        if (s or "") == st["name"] or (not s and st["default"]):
+            nas[short(n)] = cs
+    for name in sorted(set(role) | set(nas)):
+        r = role.get(name, {})
+        if name in by_name or not (r.get("gateway") or r.get("storage") or name in nas):
+            continue
+        eff = effects(r)
+        if name in nas:
+            cs = nas[name]
+            eff.append(f"{plural(len(cs), 'container')} on it stop")
+            for c in cs:
+                eff += [f"{c.get('name')}: {e}" for e in effects(role.get(short(c.get("name")), {}))]
+        rows.append([name, eff])
+    if not rows:
+        return []
+    return ["What stops when one of these goes down, from the guests, `network.vlans` gateways, storage servers, NAS "
+            "containers and clusters this repository records.", ""] + [
+        f"- **{cell(w)}**: " + "; ".join(cell(e, 600) for e in eff) + "." for w, eff in rows] + [""]
+
+
+NOT_PUBLIC = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10",
+                                                 "127.0.0.0/8", "169.254.0.0/16", "0.0.0.0/8", "224.0.0.0/3")]
+
+
+def is_public(ip: str) -> bool:
+    """An IPv4 address outside the private, CGNAT, loopback, link-local and multicast ranges."""
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return a.version == 4 and not any(a in n for n in NOT_PUBLIC)
+
+
+NAT_NOT_MATCH = {"chain", "action", "to-addresses", "to-ports", "comment", "log", "log-prefix", "_flags", "disabled",
+                 "protocol", "dst-port", "src-address", "src-address-list", "bytes", "packets"}
+
+
+def nat_rules(d: dict) -> list[dict]:
+    return [r for r in d.get("nat") or [] if r.get("chain") == "dstnat" and r.get("action") in ("dst-nat", "netmap")
+            and "X" not in str(r.get("_flags") or "") and r.get("disabled") not in ("yes", "true")]
+
+
+def port_forwards(cfg: dict, st: dict, docs: dict, known: Known) -> list[str]:
+    """Port forwards (GitHub issue #89): enabled RouterOS dst-nat rules and the routers' public addresses."""
+    rows, public, unread = [], [], []
+    for host, d in sorted((docs["routeros.json"].get("devices") or {}).items()):
+        s = hmlib.site_of_address(cfg, host)
+        if not ((s or {}).get("name", "") == st["name"] or (s is None and st["default"])):
+            continue
+        name = (d.get("identity") or {}).get("name") or host
+        if "nat" not in d:
+            unread.append(name)
+        for r in nat_rules(d):
+            to = str(r.get("to-addresses") or "")
+            match = [f"{k} {v}" for k, v in sorted(r.items()) if k not in NAT_NOT_MATCH and v not in (None, "")]
+            src = [f"{k.replace('src-', '')} {r[k]}" for k in ("src-address", "src-address-list") if r.get(k)]
+            what = " ".join(x for x in (r.get("protocol"), r.get("dst-port")) if x)
+            rows.append([name, what or "all traffic", match or "any",
+                         src or "any", to + (f":{r['to-ports']}" if r.get("to-ports") else "")
+                         + (f" ({known.name(to)})" if known.name(to) else ""), r.get("comment")])
+        for a in d.get("addresses") or []:
+            ip = str(a.get("address") or "").split("/")[0]
+            if is_public(ip) and "X" not in str(a.get("_flags") or ""):
+                public.append(f"{name} {a.get('address')} on {a.get('interface') or '?'}")
+    if not (rows or public or unread):
+        return []
+    out = ["Enabled RouterOS dst-nat rules (`routeros_audit.py`). Forwards on other gateways (OPNsense, pfSense) and "
+           "tunnels (Cloudflare, WireGuard) are not listed.", ""]
+    if public:
+        out += ["Public addresses on RouterOS interfaces: " + ", ".join(cell(x) for x in public) + ".", ""]
+    if rows:
+        out += fold(table(["Router", "Protocol / port", "Matches", "Sources", "Forwards to", "Comment"], rows),
+                    len(rows), "port forward") + [""]
+    if unread:
+        out += [f"NAT rules not read yet on {', '.join(cell(x) for x in unread)}: run `routeros_audit.py` again.", ""]
+    return out
+
+
+def access(cfg: dict, st: dict, net: dict, managed: dict, known: Known) -> list[str]:
+    """How to reach each known host (GitHub issue #89): SSH (the inventory's user and port), web UIs nmap found as
+    links, and its other services."""
+    scanned = net.get("hosts") or {}
+    rows: dict = {}
+    for host, v in managed.items():
+        addr = str(hmlib.literal(v.get("ansible_host")) or "")
+        s = hmlib.target_site(cfg, managed, host)
+        if addr and is_ip(addr) and ((s or {}).get("name", "") == st["name"] or (s is None and st["default"])):
+            rows[(host, addr)] = v
+    for ip in scanned:
+        name = known.name(ip)
+        if name and not any(k[1] == ip for k in rows):
+            rows[(name, ip)] = managed.get(name) or {}
+    out = []
+    for (name, ip), v in sorted(rows.items(), key=lambda x: (x[0][0].lower(), x[0][1])):
+        ports = (scanned.get(ip) or {}).get("ports") or []
+        user = hmlib.literal(v.get("ansible_user"))
+        port = hmlib.literal(v.get("ansible_port"))
+        ssh_ports = [p.get("port") for p in ports if p.get("service") == "ssh"]
+        ssh = ""
+        if v or ssh_ports:
+            sp = port or (ssh_ports[0] if ssh_ports and 22 not in ssh_ports else None)
+            ssh = f"ssh {user + '@' if user else ''}{ip}" + (f" -p {sp}" if sp and str(sp) != "22" else "")
+        web = [u for p in ports if (u := tls_url(ip, p))]
+        if "proxmox_nodes" in groups_of(v) and not any(p.get("port") == 8006 for p in ports):
+            web.append(tls_url(ip, {"port": 8006}))   # the node's web UI, whether or not a scan covered its port
+        other = [f"{p.get('service') or '?'}/{p.get('port')}" for p in ports
+                 if p.get("service") != "ssh" and not tls_url(ip, p)]
+        if ssh or web or other:
+            out.append([name, ip, ssh, web, other])
+    if not out:
+        return []
+    return ["How to reach each host this repository names: SSH as Ansible connects, web UIs and other services nmap "
+            "found open (`nmap_scan.py --profile services`).", ""] + fold(
+        table(["Host", "Address", "SSH", "Web UI", "Other services"], out), len(out), "host") + [""]
+
+
 def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, all_guests: Guests,
                  multi: bool = False) -> tuple[list[str], dict]:
     root = Path(cfg["_root"])
@@ -659,7 +977,9 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
         guests_by.setdefault(g.get("node"), []).append(g)
     devices = device_rows(cfg, st, docs, managed, net, unifi, all_guests)
     stats = {"nodes": len(px.get("nodes") or []), "guests": len(guests), "vlans": len(vl), "warnings": [],
-             "memory": 0, "storage": 0, "backup": 0}
+             "memory": 0, "storage": 0, "backup": 0, "backup_old": 0}
+    role = roles(cfg, st, px, guests, vl, known, managed)
+    backups_read = str((px.get("guest_ip_sources") or {}).get("backups") or "")
 
     out = [f"## Site: {cell(title)}", ""]
 
@@ -736,11 +1056,13 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
                          f"{p}%" + (" ⚠" if p >= STORAGE_WARN_PCT else ""), s.get("content")])
         out += sub("Storage") + table(["Storage", "Node", "Type", "Used", "Full", "Content"], rows) + [""]
 
+        with_backups = backups_read.startswith("ok")   # GitHub issue #89: newest backup from the vzdump task logs
         rows = [[g["vmid"], g.get("name"), g.get("type"), g.get("node"), g.get("status"), g.get("cpus"),
                  g.get("mem_gib"), g.get("disk_gib"), g["_vlan"], g["_ip"], onboot(g), "yes" if g.get("hastate") else "",
-                 g.get("tags")] for g in sorted(guests, key=lambda g: g["vmid"])]
+                 *([last_backup(g)] if with_backups else []), g.get("tags")] for g in sorted(guests, key=lambda g: g["vmid"])]
         out += sub("Guests") + (fold(table(["VMID", "Name", "Type", "Node", "Status", "vCPU", "RAM GiB", "Disk GiB", "VLAN",
-                                            "IP", "Autostart", "HA", "Tags"], rows), len(rows), "guest")
+                                            "IP", "Autostart", "HA", *(["Last backup"] if with_backups else []), "Tags"],
+                                           rows), len(rows), "guest")
                                 if rows else ["No guests."])
         if templates:
             out += ["", f"Templates: {len(templates)} (" + ", ".join(cell(t.get("name")) for t in
@@ -766,13 +1088,26 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
                 out += ["", f"In no enabled backup job ({len(missing)} of {len(guests)}): "
                         + ", ".join(f"{g['vmid']} {cell(g.get('name'))}" for g in sorted(missing, key=lambda g: g["vmid"]))
                         + "."]
+            out += backup_ages(cfg, px, guests, missing, backups_read, title, stats)
             out.append("")
+        if any("config" in g for g in guests):   # startup settings come with --details
+            out += sub("Start order") + (start_order(px, guests_by, role)
+                                         or ["No guest starts by itself after an outage.", ""])
+    imp = impact(cfg, st, px, guests, guests_by, vl, role, docs, managed)
+    if imp:
+        out += sub("If it goes down") + imp
 
     # devices
     if devices:
         out += sub("Network devices") + table(
             ["Kind", "Name", "Model", "Address", "Firmware", "State", "Last seen"],
             [[d["kind"], d["name"], d["model"], d["address"], d["firmware"], d["state"], d["seen"]] for d in devices]) + [""]
+    fwd = port_forwards(cfg, st, docs, known)
+    if fwd:
+        out += sub("Port forwards") + fwd
+    reach = access(cfg, st, net, managed, known)
+    if reach:
+        out += sub("Access") + reach
     ignored = {ip for ip, _ in scanned if ip not in guest_ips and not known.name(ip)
                and hmlib.ignored_address(cfg, ip, st["name"])}   # discovery.ignore_unmanaged (GitHub issue #106)
     other = [(ip, h) for ip, h in scanned if ip not in guest_ips and not known.name(ip) and ip not in ignored]
@@ -798,6 +1133,38 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
         out += ["", "</details>", ""]
     out += ["[↑ Contents](#contents)", ""]
     return out, stats
+
+
+def backup_ages(cfg: dict, px: dict, guests: list[dict], missing: list[dict], read: str, title: str,
+                stats: dict) -> list[str]:
+    """Last successful backup of the guests in a job (GitHub issue #89), judged against the snapshot's own time so
+    the page stays the same until the data changes: none within overview.backup_max_age_days, or a newer failure."""
+    if not read:
+        return []
+    if not read.startswith("ok"):
+        return ["", f"Last backups {cell(read)}: the read-only token needs Sys.Audit (PVEAuditor) for the task logs."]
+    ref, limit = day(px.get("collected_at")), max_backup_age(cfg)
+    skip = {g["vmid"] for g in missing}
+    injob = [g for g in guests if g["vmid"] not in skip]
+    old = [g for g in injob if not (g.get("last_backup") and ref and day(g["last_backup"].get("at"))
+                                    and (ref - day(g["last_backup"]["at"])).days <= limit)]
+    failed = [g for g in guests if backup_failed(g)]
+    out = ["", f"Last successful backup (vzdump task logs, as of {ref or '?'}): {len(injob) - len(old)} of "
+               f"{plural(len(injob), 'guest')} in a job within {limit} days."]
+    if old:
+        out.append(f"No successful backup within {limit} days: " + ", ".join(
+            f"{g['vmid']} {cell(g.get('name'))} ({stamp((g.get('last_backup') or {}).get('at')) or 'none in the task logs'})"
+            for g in sorted(old, key=lambda g: g["vmid"])) + ".")
+    if failed:
+        out.append("Newest backup failed: " + ", ".join(
+            f"{g['vmid']} {cell(g.get('name'))} ({cell((g.get('backup_error') or {}).get('error'))})"
+            for g in sorted(failed, key=lambda g: g["vmid"])) + ".")
+    bad = {g["vmid"] for g in old + failed}
+    if bad:
+        stats["backup_old"] += len(bad)
+        stats["warnings"].append(f"{title}: {plural(len(bad), 'guest')} without a successful backup within {limit} days"
+                                 " or whose newest backup failed")
+    return out
 
 
 def compose(c: dict) -> str:
@@ -854,6 +1221,62 @@ def management(cfg: dict, managed: dict, note: str) -> list[str]:
                      [[c.get("name"), c.get("ansible_group"), c.get("order"), c.get("reboot"), c.get("vip")]
                       for c in sorted(cl, key=lambda c: str(c.get("name")))]) + [""]
     return out
+
+
+SUB_LEVELS = {"c": "Community", "b": "Basic", "s": "Standard", "p": "Premium"}
+
+
+def expirations(cfg: dict, root: Path, docs: dict, managed: dict, known: Known, counts: dict) -> list[str]:
+    """What expires (GitHub issue #89): CHR licences (routeros.json), Proxmox VE subscriptions and node web
+    certificates (proxmox.json), TLS certificates nmap read (network.json). Judged against the newest of these
+    sources, not today, so the page changes only with the data; domains are not looked up (whois)."""
+    rows, refs = [], []
+    for host, d in sorted((docs["routeros.json"].get("devices") or {}).items()):
+        lic = d.get("license") or {}
+        if lic.get("deadline-at"):
+            refs.append(stamp(d.get("collected_at")))
+            rows.append([stamp(lic["deadline-at"]), f"CHR licence {lic.get('level') or ''}".strip(),
+                         known_name(docs["routeros.json"]["devices"], host),
+                         f"renews automatically {stamp(lic.get('next-renewal-at'))} when it reaches MikroTik"
+                         if lic.get("next-renewal-at") else ""])
+    certs: dict = {}
+    for st, px in hmlib.proxmox_snapshots(cfg):
+        refs.append(stamp(px.get("collected_at")))
+        for n in px.get("nodes") or []:
+            sub = n.get("subscription") or {}
+            if sub.get("next_due") or sub.get("status") not in (None, "active", "notfound", "new"):
+                level = SUB_LEVELS.get(str(sub.get("level") or ""), sub.get("level") or "")
+                rows.append([stamp(sub.get("next_due")) or "–", f"Proxmox VE subscription {level}".strip(),
+                             n.get("node"), "" if sub.get("status") == "active" else f"status {sub.get('status')}"])
+            c = n.get("certificate") or {}
+            if c.get("not_after"):
+                certs.setdefault((stamp(c["not_after"]), c.get("subject") or "", c.get("issuer") or ""), []).append(
+                    f"{n.get('node')}:8006")
+    for part in hmlib_parts(docs["network.json"]):
+        for ip, h in sorted((part.get("hosts") or {}).items()):
+            for p in h.get("ports") or []:
+                t = p.get("tls") or {}
+                if t.get("not_after"):
+                    refs.append(stamp(h.get("last_seen")))
+                    certs.setdefault((stamp(t["not_after"]), t.get("subject") or "", t.get("issuer") or ""), []).append(
+                        f"{known.name(ip) or ip}:{p.get('port')}")
+    for (when, subject, issuer), where in certs.items():
+        rows.append([when, f"TLS certificate {subject}" + (f" (issuer {issuer})" if issuer and issuer != subject else
+                                                           " (self-signed)" if issuer else ""),
+                     sorted(set(where)), ""])
+    if not rows:
+        return []
+    ref = day(max((r for r in refs if r), default=""))
+    soon = 0
+    for r in rows:
+        d = day(r[0])
+        if ref and d and (d - ref).days <= EXPIRY_WARN_DAYS:
+            soon += 1
+            r[3] = ("expired" if d < ref else f"⚠ within {EXPIRY_WARN_DAYS} days") + (f"; {r[3]}" if r[3] else "")
+    counts["expiring"] = counts.get("expiring", 0) + soon
+    rows.sort(key=lambda r: (r[0] == "–", r[0], str(r[1])))
+    return ["## Expirations", "", f"Soonest first, judged against the newest data ({ref or '?'}). Domain registrations "
+            "are not checked.", ""] + fold(table(["Expires", "What", "Where", "Note"], rows), len(rows), "expiration") + [""]
 
 
 def drift_summary(root: Path) -> str:
@@ -986,8 +1409,13 @@ def glance_warnings(docs: dict, managed: dict, counts: dict) -> list[str]:
         nodes = [h for h in sec if "proxmox_nodes" in groups_of(managed.get(h) or {})]
         out.append(f"security updates on {plural(len(sec), 'host')}"
                    + (f" ({plural(len(nodes), 'Proxmox node')})" if nodes else ""))
+    if counts.get("expiring"):
+        out.append(f"{counts['expiring']} expir{'y' if counts['expiring'] == 1 else 'ies'} within {EXPIRY_WARN_DAYS} days"
+                   " (see [Expirations](#expirations))")
     if counts.get("backup"):
         out.append(f"{plural(counts['backup'], 'guest')} in no enabled backup job")
+    if counts.get("backup_old"):
+        out.append(f"{plural(counts['backup_old'], 'guest')} without a recent successful backup")
     if counts.get("storage"):
         out.append(f"{plural(counts['storage'], 'storage')} {STORAGE_WARN_PCT} % full or more")
     if counts.get("memory"):
@@ -1017,14 +1445,15 @@ def render(cfg: dict, managed: dict, note: str) -> str:
     known = build_known(cfg, docs, managed, snaps)
     all_guests = Guests(snaps)
     body, rows, warnings = [], [], []
-    totals = {"nodes": 0, "guests": 0, "memory": 0, "storage": 0, "backup": 0}
+    totals = {"nodes": 0, "guests": 0, "memory": 0, "storage": 0, "backup": 0, "backup_old": 0}
     for st in st_list:
         sec, stats = site_section(cfg, st, docs, managed, known, all_guests, len(st_list) > 1)
         body += sec
         rows.append((st, stats["nodes"], stats["guests"], stats["vlans"]))
         warnings += stats["warnings"]
-        for k in ("nodes", "guests", "memory", "storage", "backup"):
+        for k in ("nodes", "guests", "memory", "storage", "backup", "backup_old"):
             totals[k] += stats[k]
+    exp = expirations(cfg, root, docs, managed, known, totals)
     glance = [plural(len(st_list), "site"), plural(totals["nodes"], "Proxmox node"), plural(totals["guests"], "guest")]
     if managed:
         glance.append(plural(len(managed), "Ansible host"))
@@ -1036,6 +1465,7 @@ def render(cfg: dict, managed: dict, note: str) -> str:
     if len(st_list) > 1:
         out += ["## Sites", ""] + sites_map(rows) + [""]
     out += body + containers(cfg, docs, managed) + management(cfg, managed, note) + health(cfg, root, docs, managed, warnings)
+    out += exp
     out += sources(root, docs) + [""]
     text = "\n".join(out)
     text = re.sub(r"\n{3,}", "\n\n", text)
