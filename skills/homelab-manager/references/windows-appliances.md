@@ -109,7 +109,8 @@ python3 $HM/scripts/routeros_audit.py 10.0.10.1 10.0.10.2 [--user audit]
 python3 $HM/scripts/routeros_audit.py --group routeros     # hosts, users and ports from the inventory
 ```
 It prints a Markdown report (save it as `docs/security-audit-<date>.md` when the user wants one) and keeps
-the data in `discovery/routeros.json`. Fixing a finding is a change: `/system routerboard upgrade` and a
+the data in `discovery/routeros.json`, including the NAT rules (OVERVIEW.md lists the port forwards). Fixing a
+finding is a change: `/system routerboard upgrade` and a
 RouterOS upgrade need a reboot (approval), disabling a service can cut off whoever uses it — ask first.
 Use a dedicated user in group `read` for audits. Free flash is judged by device class: on 16 MiB flash (hAP, small
 CRS) a few MiB free is normal on RouterOS 7, so only less than `routeros_audit.min_free_flash` (homelab.yaml, default

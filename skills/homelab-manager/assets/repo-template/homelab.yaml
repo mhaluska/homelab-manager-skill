@@ -99,6 +99,7 @@ opentofu:
 
 overview:                    # OVERVIEW.md (overview.py), regenerated after every change
   redact: false              # true for a shared or public repo: mask IPs, MACs, domain and Proxmox hosts
+  backup_max_age_days: 7     # a guest in a backup job without a successful backup this recent is a warning
 
 ansible:
   default_linux_group: linux

@@ -29,6 +29,10 @@ python3 $HM/scripts/proxmox_inventory.py --summary  # print only, write nothing
 ```
 Uses the read-only token. For "show VMs and their resource usage", run it and give the
 user the table (trimmed to what they asked: e.g. only running VMs, top 5 by memory).
+Every run also records each node's subscription (status, level, next due date) and web UI certificate, and the
+server of each network storage (NFS, CIFS, PBS); `--details` also records each guest's newest successful backup and a
+newer failure (`last_backup`, `backup_error`) from the nodes' vzdump task logs: the read-only token can't list backup
+volumes (that needs VM.Backup), but reads task logs with Sys.Audit (PVEAuditor). OVERVIEW.md uses all of these.
 `cpu_usage` is a fraction of allocated vCPUs at that instant, not an average.
 
 If it fails: 401 → wrong token or secret; 403 → the script reads the token's effective rights and
@@ -54,8 +58,10 @@ python3 $HM/scripts/nmap_scan.py 10.0.10.0/24 --profile os --only-live  # OS-sca
   authorized, say so and offer to add it to `homelab.yaml` **if they confirm they own it**.
 - "My management subnet": resolve the name from `homelab.yaml` comments/ranges or ask which
   CIDR; never infer it from the Mac's own IP and scan.
-- Start with `ping`, then `services` on the live hosts. `-T3`, no NSE scripts by default:
-  some appliances (printers, BMCs, cheap IoT) crash under aggressive scans.
+- Start with `ping`, then `services` on the live hosts. `-T3`, and no NSE scripts except `ssl-cert` (`services`
+  and `os`: it reads the certificate of a port nmap identified as TLS, the handshake version detection does anyway;
+  subject, issuer, names and expiry go into the port's `tls`): some appliances (printers, BMCs, cheap IoT) crash
+  under aggressive scans.
 - `os` needs `sudo -n`; if sudo wants a password, tell the user rather than working around it.
   Root nmap uses ARP and could pick a local VM bridge (`bridgeNNN`) whose router answers for every
   address, so `os` scans from the interface `route get` gives (`--interface` overrides) and skips ARP
@@ -203,12 +209,29 @@ nmap's best guess with its match %; on a tie a vendor/product match beats a gene
 critical host plus any host with something pending (stale data marked), inventory hosts without update data, BMC
 health with its cause (accepted per host: `bmc_health_accept`), RouterOS findings and updates, capacity and
 backup warnings, a one-line drift summary; and when each source was collected. With several sites, a sites diagram first.
+Recovery and dependencies per site (GitHub issue #89), only from what the repo records, nothing guessed from names:
+- **Last backup**: a Guests column and, under Backups, the guests in a job with no successful backup within
+  `overview.backup_max_age_days` (default 7) or whose newest backup failed, from `proxmox_inventory.py --details`.
+- **Start order**: each node's autostart guests in the order Proxmox starts them (`startup` order, then VMID;
+  HA-managed ones by the HA manager), the cluster's quorum, the running guests nothing starts again, and what each
+  guest does for others (gateway of VLANs, storage server, cluster member, critical).
+- **If it goes down**: per Proxmox node its running guests and what they serve; per gateway (`network.vlans[].gw`)
+  that is no guest there its VLANs; per storage server its Proxmox storages and the guests with disks or ISOs there;
+  per NAS its containers (qnap-containers.json) and what they serve.
+- **Port forwards**: enabled RouterOS dst-nat rules with every matcher and the target's name, and the public
+  addresses on RouterOS interfaces. Other gateways (OPNsense, pfSense) and tunnels are not covered: say so.
+- **Access**: per known host the SSH command as Ansible connects, web UI links (HTTP ports nmap found, a Proxmox
+  node's 8006) and its other services.
+
+Then **Expirations** for the whole homelab: CHR licences, Proxmox VE subscriptions, node web certificates and the TLS
+certificates nmap read, soonest first. Ages and expiries are judged against the newest data, not today, so the page
+changes only with the data; within 30 days is a warning. Domain registrations are not looked up.
 A Contents list after At a glance links every section and each site's sub-sections (named "Guests (home)" with
 several sites, so anchors are unique on GitHub and GitLab); each site ends with "↑ Contents"; Guests, Containers
 and Other scanned addresses tables longer than 15 rows are collapsed with their row count.
 At a glance names every warning category Health shows, most severe first: BMCs not OK (an accepted cause doesn't
 count), RouterOS findings of medium severity and above, failed update checks, hosts with security updates, guests in
-no backup job, full storage, node memory.
+no backup job, guests without a recent successful backup, expiries within 30 days, full storage, node memory.
 - Regenerate it after every verified change (operating loop step 9) and commit it with that change. The output is
   deterministic (no "generated at" time), so the diff shows what changed. `--check` exits 1 when it is stale; so
   does `drift_report.py --stale` when the repo has an OVERVIEW.md.
