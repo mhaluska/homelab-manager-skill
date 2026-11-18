@@ -1,36 +1,98 @@
-# Read-only BMC inventory over Redfish: system, health, power, thermals, PSUs, BMC and firmware versions.
+# Read-only BMC inventory over Redfish: system, health, power, thermals, PSUs, fans, BMC and BIOS versions.
 #   python3 $HM/scripts/with_secrets.py bmc -- ansible-playbook playbooks/bmc-info.yml [-e target=<bmc host>]
+# A BMC with its own account: host var bmc_secret_env (group_vars/bmc.yml), and name its secret too
+#   (`with_secrets.py bmc bmc-ilo -- …`).
 # Writes discovery/bmc.json, merged: BMCs not checked this run keep their last result (each has collected_at).
 # Nothing here changes a BMC. Power actions (community.general.redfish_command) are reboots: approval only.
+#
+# Vendor quirks handled here (GitHub #32, #74):
+# - one redfish_info call per category: a BMC that refuses one (iLO 4 has no UpdateService, Supermicro X10
+#   wants a DCMS licence for it) still reports the rest; the refusal lands in `errors`.
+# - firmware from Manager FirmwareVersion and System BiosVersion, so a missing UpdateService loses nothing.
+# - chassis data unreadable (Supermicro X10: invalid UTF-8 in Chassis/1 from a corrupt FRU serial) → Thermal
+#   and Power are read directly with uri.
+# - power draw: PowerMetrics.AverageConsumedWatts before PowerConsumedWatts (nonsense on some Supermicro).
 - name: BMC inventory (Redfish, read-only)
   hosts: "{{ target | default('bmc') }}"
   gather_facts: false
+  vars:
+    bmc_address: "{{ ansible_host | default(inventory_hostname) }}"
+    bmc_categories:
+      - {category: Systems, command: [GetSystemInventory, GetHealthReport]}
+      - {category: Chassis, command: [GetChassisInventory, GetChassisPower, GetChassisThermals, GetPsuInventory,
+                                      GetFanInventory, GetHealthReport]}
+      - {category: Manager, command: [GetManagerInventory]}
+      - {category: Update, command: [GetFirmwareInventory]}
   tasks:
-    - name: Credentials are in the environment (run under with_secrets.py bmc)
+    - name: Credentials are in the environment (run under with_secrets.py)
       ansible.builtin.assert:
         that: bmc_user | length > 0 and bmc_password | length > 0
-        fail_msg: "BMC_USER/BMC_PASSWORD are empty: run under `with_secrets.py bmc --` (secrets.bmc in homelab.yaml)."
-      run_once: true
+        fail_msg: >-
+          {{ bmc_secret_env }}_USER/_PASSWORD are empty: run under `with_secrets.py <secret> --`
+          with the secret whose env is {{ bmc_secret_env }} (secrets in homelab.yaml).
+        quiet: true
 
     - name: Redfish service root (no login needed)
       ansible.builtin.uri:
-        url: "https://{{ ansible_host | default(inventory_hostname) }}/redfish/v1/"
+        url: "https://{{ bmc_address }}/redfish/v1/"
         validate_certs: "{{ bmc_validate_certs | bool }}"
         return_content: true
       register: bmc_root
 
-    - name: Inventory and health
+    - name: Inventory and health, one category per call
       community.general.redfish_info:
-        baseuri: "{{ ansible_host | default(inventory_hostname) }}"
+        baseuri: "{{ bmc_address }}"
         username: "{{ bmc_user }}"
         password: "{{ bmc_password }}"
         validate_certs: "{{ bmc_validate_certs | bool }}"
-        category: [Systems, Chassis, Manager, Update]
-        command: [GetSystemInventory, GetHealthReport, GetChassisInventory, GetChassisPower, GetChassisThermals,
-                  GetPsuInventory, GetManagerInventory, GetFirmwareInventory]
+        category: "{{ item.category }}"
+        command: "{{ item.command }}"
         timeout: 30
-      register: bmc_info
-      no_log: true   # the module echoes its parameters, password included
+      loop: "{{ bmc_categories }}"
+      loop_control:
+        label: "{{ item.category }}"
+      register: bmc_rfi
+      ignore_errors: true   # a category the BMC refuses is reported in errors, the others still count
+
+    - name: Sort the answers by category
+      ansible.builtin.set_fact:
+        bmc_rf: "{{ dict(bmc_ok | map(attribute='item.category') | zip(bmc_ok | map(attribute='redfish_facts'))) }}"
+        bmc_errors: "{{ dict(bmc_bad | map(attribute='item.category') | zip(bmc_bad | map(attribute='msg', default='failed'))) }}"
+      vars:
+        bmc_ok: "{{ bmc_rfi.results | selectattr('redfish_facts', 'defined') | list }}"
+        bmc_bad: "{{ bmc_rfi.results | selectattr('redfish_facts', 'undefined') | list }}"
+
+    - name: Chassis data unreadable → read Thermal and Power directly
+      when: >-
+        not (bmc_rf.Chassis.thermals.ret | default(false)) or not (bmc_rf.Chassis.chassis_power.ret | default(false))
+      block:
+        - name: Chassis collection
+          ansible.builtin.uri:
+            url: "https://{{ bmc_address }}/redfish/v1/Chassis"
+            url_username: "{{ bmc_user }}"
+            url_password: "{{ bmc_password }}"
+            force_basic_auth: true
+            validate_certs: "{{ bmc_validate_certs | bool }}"
+            return_content: true
+          register: bmc_chassis
+
+        - name: Thermal and Power of each chassis
+          ansible.builtin.uri:
+            url: "https://{{ bmc_address }}{{ item.0['@odata.id'] | regex_replace('/$', '') }}/{{ item.1 }}"
+            url_username: "{{ bmc_user }}"
+            url_password: "{{ bmc_password }}"
+            force_basic_auth: true
+            validate_certs: "{{ bmc_validate_certs | bool }}"
+            return_content: true
+            status_code: [200, 404]
+          loop: "{{ bmc_chassis.json.Members | default([]) | product(['Thermal', 'Power']) | list }}"
+          loop_control:
+            label: "{{ item.0['@odata.id'] }}/{{ item.1 }}"
+          register: bmc_direct
+      rescue:
+        - name: Direct read failed too
+          ansible.builtin.set_fact:
+            bmc_errors: "{{ bmc_errors | combine({'Chassis (direct)': ansible_failed_result.msg | default('failed')}) }}"
 
     - name: Summarise
       ansible.builtin.set_fact:
@@ -38,11 +100,68 @@
           redfish: "{{ bmc_root.json.RedfishVersion | default('?') }}"
           vendor: "{{ bmc_root.json.Vendor | default(bmc_root.json.Oem | default({}) | list | first | default('?')) }}"
           product: "{{ bmc_root.json.Product | default('?') }}"
-          facts: "{{ bmc_info.redfish_facts | default({}) }}"
+          model: "{{ [sys.Manufacturer | default(''), sys.Model | default('')] | select | join(' ') or '?' }}"
+          serial: "{{ sys.SerialNumber | default(none) }}"
+          power_state: "{{ sys.PowerState | default('?') }}"
+          health: "{{ sys.Status.HealthRollup | default(sys.Status.Health | default('?')) }}"
+          bios: "{{ sys.BiosVersion | default(none) }}"
+          bmc_firmware: "{{ mgr.FirmwareVersion | default(none) }}"
+          cpus: "{{ sys.ProcessorSummary.Count | default(none) }}"
+          cpu_model: "{{ sys.ProcessorSummary.Model | default(none) }}"
+          memory_gib: "{{ sys.MemorySummary.TotalSystemMemoryGiB | default(none) }}"
+          power_watts: "{{ pwr.PowerMetrics.AverageConsumedWatts | default(pwr.PowerConsumedWatts | default(none), true) }}"
+          hottest: "{{ (temps | selectattr('ReadingCelsius', 'defined') | selectattr('ReadingCelsius', 'number') | sort(attribute='ReadingCelsius') | last | default({}))
+                       | dict2items | selectattr('key', 'in', ['Name', 'ReadingCelsius', 'UpperThresholdCritical'])
+                       | items2dict }}"
+          temperatures: "{{ temps | length }}"
+          psus: "{{ psus | map('dict2items') | map('selectattr', 'key', 'in', ['Name', 'Model', 'PowerCapacityWatts', 'Status'])
+                    | map('items2dict') | list }}"
+          fans: "{{ fans | length }}"
+          not_ok: >-
+            {%- set out = [] -%}
+            {%- for c in [{'Name': 'system', 'Status': sys.Status | default({})}] + temps + psus + fans
+                  if c.Status is mapping and c.Status.State | default('') not in ['Absent', 'Disabled']
+                  and c.Status.Health | default('OK') not in ['OK', none] -%}
+              {%- set _ = out.append(c.Name | default('?') ~ ' ' ~ c.Status.Health) -%}
+            {%- endfor -%}
+            {%- for sub, parts in sys_health.items() if parts is sequence and parts is not string and parts is not mapping -%}
+              {%- for c in parts if c.Status is mapping and c.Status.State | default('') not in ['Absent', 'Disabled']
+                    and c.Status.Health | default('OK') not in ['OK', none] -%}
+                {%- set uri = c.values() | select('string') | select('match', '/redfish/') | first | default('?') -%}
+                {%- set _ = out.append(sub ~ ' ' ~ (uri | regex_replace('/$', '') | basename) ~ ' ' ~ c.Status.Health) -%}
+              {%- endfor -%}
+            {%- endfor -%}
+            {{ out }}
+          firmware: "{{ (bmc_rf.Update.firmware.entries | default([])) | map('dict2items')
+                        | map('selectattr', 'key', 'in', ['Name', 'Version']) | map('items2dict') | list }}"
+          errors: "{{ bmc_errors }}"
+          source: "{{ 'redfish_info' if bmc_direct is not defined or bmc_direct is skipped else 'redfish_info + direct Thermal/Power' }}"
+      vars:
+        sys: "{{ (bmc_rf.Systems.system.entries | default([[{}, {}]]))[0][1] }}"
+        sys_health: "{{ (bmc_rf.Systems.health_report.entries | default([[{}, {}]]))[0][1] }}"
+        mgr: "{{ (bmc_rf.Manager.manager.entries | default([[{}, {}]]))[0][1] }}"
+        direct: "{{ (bmc_direct.results | default([])) | selectattr('json', 'defined') | map(attribute='json') | list
+                    if bmc_direct is defined and bmc_direct is not skipped else [] }}"
+        temps: "{{ bmc_rf.Chassis.thermals.entries | default([]) if bmc_rf.Chassis.thermals.ret | default(false)
+                   else direct | map(attribute='Temperatures', default=[]) | flatten }}"
+        fans: "{{ bmc_rf.Chassis.fan.entries | default([]) if bmc_rf.Chassis.fan.ret | default(false)
+                  else direct | map(attribute='Fans', default=[]) | flatten }}"
+        psus: "{{ bmc_rf.Chassis.psu.entries | default([]) if bmc_rf.Chassis.psu.ret | default(false)
+                  else direct | map(attribute='PowerSupplies', default=[]) | flatten }}"
+        pwr: "{{ (bmc_rf.Chassis.chassis_power.entries | default([{}]))[0] if bmc_rf.Chassis.chassis_power.ret | default(false)
+                 else (direct | map(attribute='PowerControl', default=[]) | flatten | first | default({})) }}"
 
     - name: Result
       ansible.builtin.debug:
-        msg: "{{ inventory_hostname }}: {{ bmc_summary.vendor }} {{ bmc_summary.product }}, Redfish {{ bmc_summary.redfish }}"
+        msg: >-
+          {{ inventory_hostname }}: {{ bmc_summary.model }} ({{ bmc_summary.vendor }} {{ bmc_summary.product }},
+          Redfish {{ bmc_summary.redfish }}), power {{ bmc_summary.power_state }}, health {{ bmc_summary.health }},
+          BIOS {{ bmc_summary.bios }}, BMC firmware {{ bmc_summary.bmc_firmware }},
+          {{ bmc_summary.cpus }}× {{ bmc_summary.cpu_model }}, {{ bmc_summary.memory_gib }} GiB,
+          {{ bmc_summary.power_watts }} W, hottest {{ bmc_summary.hottest.Name | default('?') }}
+          {{ bmc_summary.hottest.ReadingCelsius | default('?') }} °C
+          {%- if bmc_summary.not_ok %}; not OK: {{ bmc_summary.not_ok | join(', ') }}{% endif %}
+          {%- if bmc_summary.errors %}; not read: {{ bmc_summary.errors | list | join(', ') }}{% endif %}
 
 - name: Write discovery/bmc.json
   hosts: localhost

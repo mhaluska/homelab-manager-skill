@@ -34,13 +34,16 @@ Read-only health and firmware from this Mac over HTTPS; no ipmitool, no SSH into
    `ipmitool … sdr list`/`fru`, power commands need approval).
 2. Ask the user for a **read-only BMC account** (iLO "Login" privilege only, iDRAC "Read Only", Supermicro
    "User"); the user stores `user:password` in the keychain (`homelab/bmc`) and you map it in homelab.yaml:
-   `config_set.py 'secrets.bmc={service: homelab/bmc, kind: user_password, env: BMC}'`. One account name and
-   password for all BMCs; different ones → one secret per group (`env` BMC_HPE, and the group's bmc_user/
-   bmc_password vars read `BMC_HPE_USER`/`BMC_HPE_PASSWORD`).
+   `config_set.py 'secrets.bmc={service: homelab/bmc, kind: user_password, env: BMC}'`. A BMC with its own
+   account gets a secret of its own (`secrets.bmc-ilo`, `env: BMC_ILO`) and `bmc_secret_env: BMC_ILO` in its
+   host vars; run with every secret needed (`with_secrets.py bmc bmc-ilo -- …`).
 3. Add the BMCs to the `bmc` group (child of `appliances`) in hosts.yml, `ansible_host` = address.
-4. `with_secrets.py bmc -- ansible-playbook playbooks/bmc-info.yml` → `discovery/bmc.json` (system model,
-   power state, health, PSUs, thermals, BMC and BIOS/firmware versions). Self-signed certificates are
-   accepted (`bmc_validate_certs: false` in group_vars/bmc.yml); set true once the CA is trusted.
+4. `with_secrets.py bmc -- ansible-playbook playbooks/bmc-info.yml` → `discovery/bmc.json` (model, power
+   state, health, BIOS and BMC firmware, CPUs/RAM, power draw, hottest sensor, PSUs, components not OK).
+   Self-signed certificates are accepted (`bmc_validate_certs: false` in group_vars/bmc.yml); set true once
+   the CA is trusted. The playbook reads one Redfish category at a time: a category the BMC refuses (iLO 4
+   has no UpdateService, Supermicro wants a licence for it) lands in the BMC's `errors` and the rest still
+   counts; unreadable chassis data falls back to reading Thermal/Power directly. Keep these when editing it.
 5. Report health problems and outdated firmware; firmware updates and power actions
    (`community.general.redfish_command`, `ipmitool power`) are approval items (the guard asks).
 Keep BMCs on a management network: the drift report flags BMCs found elsewhere.
