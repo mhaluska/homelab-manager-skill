@@ -1231,7 +1231,8 @@ class UpgradeNotesTests(unittest.TestCase):
                         str(self.cfg)], check=True)                     # config notes of 0.16.0 settled
         out = run("upgrade_notes.py", "--json", cwd=self.d).stdout
         ids = [n["id"] for n in json.loads(out)]
-        self.assertEqual(ids, ["inventory-guest-ips", "recheck-hidden-suggestions"])   # the latter: any reviewed repo
+        self.assertEqual(ids, ["inventory-guest-ips", "recheck-hidden-suggestions",   # the latter: any reviewed repo
+                               "inventory-node-versions"])
         ids = [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", "--all", cwd=self.d).stdout)]
         self.assertIn("proxmox-tls-check", ids)
         subprocess.run(["yq", "-i", ".components.proxmox = false", str(self.cfg)], check=True)

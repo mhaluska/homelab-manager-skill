@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.34.0 — 2026-11-18
+- OVERVIEW.md shows what the repository knows instead of raw scan output:
+  - Network devices ([#94](https://github.com/mhaluska/homelab-manager-skill/issues/94)) start from the inventory groups `routeros`, `unifi`, `bmc`, `qnap` and
+    `appliances`, enriched from routeros.json (model from routerboard or board-name, RouterOS version, findings),
+    unifi.json, bmc.json (model, firmware, health) and updates.json (QNAP model and firmware). A device without data
+    says "not audited" / "no data" with the command to run.
+  - "Other scanned addresses" ([#96](https://github.com/mhaluska/homelab-manager-skill/issues/96)) lists only addresses nothing names: inventory hosts and their
+    `hm_extra_ips`, Proxmox node and guest addresses (every NIC), cluster VIPs, VLAN gateways, RouterOS interface
+    addresses, NAS containers and scanned hosts whose hostname is a known host's are left out (and counted). New Name
+    column; OS is the best nmap match with its accuracy instead of a Python list.
+  - Health ([#95](https://github.com/mhaluska/homelab-manager-skill/issues/95)) always lists Proxmox nodes and critical hosts (kernel, when checked, "up to date"), marks
+    update data a week older than the newest check as stale, names inventory hosts without update data (not checked
+    yet / not covered by `check-updates.yml`), and adds BMC health, RouterOS updates available and a one-line drift
+    summary.
+  - Guests ([#97](https://github.com/mhaluska/homelab-manager-skill/issues/97)): VLAN and IP come from the same NIC (netN in numeric order, preferring the NIC holding the
+    inventory `ansible_host`); QNAP Container Station containers (qnap-containers.json) under Containers; a long
+    list of ranges is a count; backup jobs show their comment (or "job N" for a generated id) and a guest count; the
+    node table has PVE version, kernel and addresses.
+  - The site map ([#93](https://github.com/mhaluska/homelab-manager-skill/issues/93)) groups VLANs under their gateway (`network.vlans[].gw`) in columns of five, joins
+    devices to their VLAN by address and folds VLANs without guests, addresses or devices into one node: roughly as
+    wide as tall instead of one long strip.
+- `proxmox_inventory.py` records each node's Proxmox VE version and kernel and each backup job's comment, and a plain
+  refresh keeps the guests' reported addresses along with their config; it dropped them before ([#97](https://github.com/mhaluska/homelab-manager-skill/issues/97)).
+- `pve_node_plan.py` lists the node's local LVM-thin storages with the guests that stop on them and the node's
+  uptime; `patch-proxmox-node.yml` refuses a pool with a health flag set or metadata 90 % used before stopping
+  anything, and `-e thin_check=true` runs `thin_check` on a metadata snapshot of each active pool ([#91](https://github.com/mhaluska/homelab-manager-skill/issues/91)).
+  references/patching.md "LVM-thin pools".
+- `drift_report.py --stale` also reports a stale OVERVIEW.md ([#89](https://github.com/mhaluska/homelab-manager-skill/issues/89)).
+- `routeros_audit.py`: an open connection to a service (a dynamic `/ip service` row) no longer counts as a second
+  enabled service, so a plain-text finding is not reported twice.
+- Upgrade notes: `patch-proxmox-node-lvm-thin` (template, edited copies), `inventory-node-versions` (regenerate).
+
 ## 0.33.1 — 2026-11-18
 - `patch-proxmox-node.yml` no longer leaves a node's guests stopped ([#90](https://github.com/mhaluska/homelab-manager-skill/issues/90)): "Nothing runs on the node any
   more" polls `/cluster/resources` (12 × 10 s; pvestatd lags ~10 s behind a shutdown) and shares a rescue with the

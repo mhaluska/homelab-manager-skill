@@ -590,6 +590,14 @@
       "text": "patch-proxmox-node.yml checks every LVM-thin pool on the node before stopping anything (health flags, metadata below 90 %); -e thin_check=true also runs thin_check on a metadata snapshot. pve_node_plan.py lists local LVM-thin storages with the guests that stop on them and the node's uptime (#91).",
       "edited": "This repo's copy has local edits, so --sync-managed did not replace it.",
       "action": "Replace ansible/playbooks/patch-proxmox-node.yml with {template}, carrying over any local edits (show the user the diff first), then `ansible-playbook playbooks/patch-proxmox-node.yml --syntax-check`; see references/patching.md \"LVM-thin pools\"."
+    },
+    {
+      "version": "0.34.0",
+      "id": "inventory-node-versions",
+      "kind": "regenerate",
+      "when": {"component": "proxmox", "file_lacks": ["discovery/proxmox.json", "\"pveversion\""]},
+      "text": "proxmox_inventory.py records each node's Proxmox VE version and kernel (shown in OVERVIEW.md), and a plain refresh now keeps the guests' reported addresses; before 0.34.0 a plain refresh dropped them (#97).",
+      "action": "Refresh it: `python3 {HM}/scripts/proxmox_inventory.py --details` (read-only; every site: --all-sites), then `python3 {HM}/scripts/overview.py` when the repo has an OVERVIEW.md."
     }
   ]
 }
