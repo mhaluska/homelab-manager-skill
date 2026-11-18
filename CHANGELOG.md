@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.31.1 — 2026-11-18
+- `pve_node_plan.py` refuses a snapshot without guest config before planning ([#85](https://github.com/mhaluska/homelab-manager-skill/issues/85)): it prints only "refresh with
+  `proxmox_inventory.py --details`" instead of a table listing every guest as `migrate (shared storage only)`.
+  A plain `proxmox_inventory.py` run keeps each guest's config from the previous `--details` snapshot (same VMID
+  and type) and stamps it `details_at`; the summary and the plan show its age.
+- `patch-proxmox-node.yml` upgrade-only run ([#86](https://github.com/mhaluska/homelab-manager-skill/issues/86)): `migrated`, `ha` and `stopped_and_restored` are empty
+  unless the node rebooted; the plan is reported as `planned_migrate`, `planned_ha` and `planned_stop`.
+
 ## 0.31.0 — 2026-11-18
 - Debian release upgrade ([#84](https://github.com/mhaluska/homelab-manager-skill/issues/84)): `playbooks/dist-upgrade-debian.yml -e target=<host>
   -e target_release=<next codename>`, one release per run, one host at a time. With `--check` it is a read-only
