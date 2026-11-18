@@ -226,6 +226,7 @@ Scripts (all in `$HM/scripts/`):
 | `drift_report.py [--tofu-json F]` / `--stale` | Proxmox ↔ OpenTofu ↔ Ansible ↔ network / is drift.md out of date | `discovery/drift.md` |
 | `tofu_to_inventory.py [--site N]` | OpenTofu output → Ansible inventory | `ansible/inventory/managed/tofu_hosts[-<site>].yml` |
 | `proxmox_to_inventory.py [--vlan N] [--range CIDR] [--type vm\|lxc]` | draft inventory entries for existing Linux guests (review before use) | — (stdout) |
+| `guest_map.py [--site N]` | per-NIC guest map: VLAN, IPs, subnet/ansible_host/VMID checks | `discovery/guest-map.md` |
 | `ssh_probe.py [targets] [--user U] [--draft]` | read-only SSH probe of discovered hosts: hostname, OS, usable Python, OS group | `discovery/network.json` |
 | `routeros_audit.py <hosts> [--group G] [--user U]` | read-only MikroTik RouterOS inspection + audit findings (Markdown report) | `discovery/routeros.json` |
 | `upgrade_notes.py [--all] [--json]` | opt-in changes newer releases suggest for this repo (shown by `--sync-managed`) | — |

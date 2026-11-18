@@ -144,3 +144,14 @@ show the VLAN of each address. Collect the table read-only and propose it for th
 6. Commit `discovery/drift.md` and refreshed snapshots with message `discovery: drift report <date>`.
 
 Never "fix" drift automatically: reality might be right and the code wrong.
+
+## Guest network map: "which VLAN and IP does each guest NIC have?"
+
+`python3 $HM/scripts/guest_map.py [--site N]` (read-only, from discovery data: refresh `proxmox_inventory.py
+--details` first, every site) writes `discovery/guest-map.md`: one row per guest NIC with VLAN tag and name,
+bridge/trunks and addresses (config, guest agent, LXC, RouterOS guests from `routeros.json` by MAC; `+` = extra,
+e.g. a keepalived VIP; tunnel and container interfaces left out). Findings on top: an address outside its
+VLAN's cidr (or an untagged NIC in a VLAN's subnet), a tag not in `network.vlans`, a running NIC with no known
+address, a stale `ansible_host` (not one of the guest's addresses, or its VIP), a VMID off `vmid_scheme`. Report
+them; fixes (the guest's network, `ansible_host`, `network.vlans`) are each the user's call. Never keep a
+hand-written guest map: regenerate this one and commit it with the other discovery files.

@@ -502,6 +502,9 @@ def main():
             L += [f"- {ip} → {containers[ip]}" + vlan_suffix(cfg, ip) for ip in seen_containers]
         L.append("")
 
+    if snaps:  # VLAN/IP per guest NIC is checked there (GitHub issue #62)
+        L += ["Guest NICs (VLAN, addresses, subnet and ansible_host checks): `discovery/guest-map.md`"
+              + ("" if (root / "discovery" / "guest-map.md").exists() else " — run guest_map.py"), ""]
     L.append(f"**Total findings: {issues}** (unmanaged network devices listed separately)")
     text = "\n".join(L) + "\n"
     out = Path(a.out) if a.out else root / "discovery" / "drift.md"

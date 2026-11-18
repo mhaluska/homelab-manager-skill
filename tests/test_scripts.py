@@ -1312,6 +1312,60 @@ class OnboardingTests(unittest.TestCase):  # issue 20
         self.assertEqual(check_env.el8_without_interpreter(inv), [])
 
 
+class GuestMapTests(unittest.TestCase):  # GitHub issue #62
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d)
+        run("init_repo.py", str(self.d), "--components", "proxmox,ansible", cwd=self.d)
+        subprocess.run(["yq", "-i", '.network.vlans = [{"id": 10, "name": "INFRA", "cidr": "10.0.10.0/24"}, '
+                        '{"id": 20, "name": "DMZ", "cidr": "10.0.20.0/24"}] | .vmid_scheme = "{vlan}{octet:03d}"',
+                        str(self.d / "homelab.yaml")], check=True)
+        guests = [
+            {"vmid": 10011, "name": "proxy1", "type": "lxc", "node": "pve1", "status": "running",
+             "config": {"net0": "name=eth0,bridge=vmbr0,hwaddr=BC:24:11:00:00:01,ip=10.0.10.11/24,tag=10"},
+             "ips": [{"iface": "eth0", "mac": "bc:24:11:00:00:01", "ip": "10.0.10.11", "source": "config"},
+                     {"iface": "eth0", "mac": "bc:24:11:00:00:01", "ip": "10.0.10.250", "source": "lxc", "extra": True}]},
+            {"vmid": 20015, "name": "web01", "type": "vm", "node": "pve1", "status": "running",
+             "config": {"net0": "virtio=BC:24:11:00:00:02,bridge=vmbr0,tag=20",
+                        "net1": "virtio=BC:24:11:00:00:03,bridge=vmbr0,tag=30"},
+             "ips": [{"iface": "ens18", "mac": "bc:24:11:00:00:02", "ip": "10.0.10.15", "source": "agent"},
+                     {"iface": "wg0", "mac": "00:00:00:00:00:00", "ip": "10.99.0.2", "source": "agent"}]},
+            {"vmid": 10002, "name": "chr", "type": "vm", "node": "pve1", "status": "running",
+             "config": {"net0": "virtio=BC:24:11:00:00:04,bridge=vmbr0,tag=10"}},
+            {"vmid": 9000, "name": "tpl", "type": "vm", "template": True, "config": {}},
+        ]
+        (self.d / "discovery/proxmox.json").write_text(json.dumps({"collected_at": "t", "guests": guests}))
+        (self.d / "discovery/network.json").write_text(json.dumps({"hosts": {
+            "10.0.10.11": {"hostnames": ["proxy1"]}, "10.0.10.5": {"hostnames": ["switch"]}}}))
+        (self.d / "discovery/routeros.json").write_text(json.dumps({"devices": {"10.0.10.1": {
+            "interfaces": [{"name": "ether1", "mac-address": "BC:24:11:00:00:04"}],
+            "addresses": [{"address": "10.0.10.1/24", "interface": "ether1"}]}}}))
+        (self.d / "ansible/inventory/managed/hosts.yml").write_text(
+            "all:\n  children:\n    linux:\n      hosts:\n        proxy1:\n          ansible_host: 10.0.10.250\n"
+            "        web01:\n          ansible_host: 10.0.20.15\n          proxmox_vmid: 20015\n")
+
+    def test_map_and_findings(self):
+        r = run("guest_map.py", "--out", "-", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = r.stdout
+        self.assertIn("10.0.10.11 (config), +10.0.10.250 (lxc)", out)
+        self.assertIn("proxy1 uses 10.0.10.250, an extra address", out)
+        self.assertIn("20015 web01 net0: 10.0.10.15 is outside VLAN 20's 10.0.20.0/24", out)
+        self.assertIn("net1: VLAN tag 30 is not in network.vlans", out)
+        self.assertIn("net1: running, no address known", out)
+        self.assertIn("Ansible host web01 has ansible_host 10.0.20.15, not one of the guest's addresses", out)
+        self.assertIn("10002 chr: vmid_scheme {vlan}{octet:03d} gives 10001 for 10.0.10.1 on VLAN 10", out)
+        self.assertNotIn("gives 20015", out)                                # VMID fits its scheme
+        self.assertIn("10.0.10.1 (routeros)", out)                         # CHR address by MAC
+        self.assertNotIn("10.99.0.2", out)                                 # tunnel interface left out
+        self.assertNotIn("tpl", out)
+        self.assertIn("- 10.0.10.5 switch (VLAN 10 INFRA)", out)
+        self.assertNotIn("- 10.0.10.11", out)
+        r = run("guest_map.py", "--no-ansible", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((self.d / "discovery/guest-map.md").exists())
+
+
 class VlanNameRedactionTests(unittest.TestCase):  # issue 34: VLAN names are site data
     def test_vlan_names_are_site_terms(self):
         sys.path.insert(0, str(SCRIPTS))
