@@ -569,26 +569,33 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known) -
     return out, stats
 
 
+def compose(c: dict) -> str:
+    """Where a container's Compose project lives (GitHub issue #102): its working directory, else its project."""
+    return str(c.get("compose_working_dir") or c.get("compose_project") or "")
+
+
 def containers(cfg: dict, docs: dict, managed: dict) -> list[str]:
     rows = []
     for host, d in sorted((docs["containers.json"].get("hosts") or {}).items()):
         for c in sorted(d.get("containers") or [], key=lambda c: str(c.get("name"))):
             ports = c.get("ports")
             rows.append([host, d.get("site"), c.get("name"), c.get("image"),
-                         ", ".join(map(str, ports)) if isinstance(ports, list) else ports])
+                         ", ".join(map(str, ports)) if isinstance(ports, list) else ports, compose(c)])
         for k in d.get("kubernetes") or []:
-            rows.append([host, d.get("site"), "Kubernetes", k if isinstance(k, str) else json.dumps(k, sort_keys=True), ""])
+            rows.append([host, d.get("site"), "Kubernetes", k if isinstance(k, str) else json.dumps(k, sort_keys=True), "", ""])
     for nas, d in sorted((docs["qnap-containers.json"] or {}).items()):   # GitHub issue #97
         if not isinstance(d, dict):
             continue
         site = (hmlib.target_site(cfg, managed, nas) or {}).get("name") if managed else ""
         for c in sorted(d.get("docker") or [], key=lambda c: str(c.get("name"))):
-            rows.append([nas, site, c.get("name"), c.get("image"), c.get("networks")])
+            nets = c.get("networks")
+            rows.append([nas, site, c.get("name"), c.get("image"),
+                         ", ".join(map(str, nets)) if isinstance(nets, list) else nets, compose(c)])
         for c in sorted(d.get("lxd") or [], key=lambda c: str(c.get("name"))):
-            rows.append([nas, site, c.get("name"), f"LXD ({c.get('state') or '?'})", c.get("ipv4")])
+            rows.append([nas, site, c.get("name"), f"LXD ({c.get('state') or '?'})", c.get("ipv4"), ""])
     if not rows:
         return []
-    return ["## Containers", ""] + table(["Host", "Site", "Container", "Image", "Ports / network"], rows) + [""]
+    return ["## Containers", ""] + table(["Host", "Site", "Container", "Image", "Ports / network", "Compose"], rows) + [""]
 
 
 def management(cfg: dict, managed: dict, note: str) -> list[str]:

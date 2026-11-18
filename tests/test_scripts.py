@@ -1545,7 +1545,9 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         (d / "discovery/bmc.json").write_text(json.dumps({"hosts": {"bmc1": {"model": "ML350", "health": "Critical",
                                                                               "not_ok": ["psu"], "power_state": "On"}}}))
         (d / "discovery/qnap-containers.json").write_text(json.dumps({"nas1": {"lxd": [
-            {"name": "ct-pbs1", "state": "RUNNING", "ipv4": "10.9.20.99 (eth0)"}], "docker": []}}))
+            {"name": "ct-pbs1", "state": "RUNNING", "ipv4": "10.9.20.99 (eth0)"}], "docker": [
+            {"name": "app", "image": "nginx", "networks": ["bridge"], "compose_project": "web",
+             "compose_working_dir": "/share/web", "compose_config_files": ["/share/web/compose.yml"]}]}}))
         (d / "discovery/updates.json").write_text(json.dumps({"hosts": {
             "pve1": {"os": "Debian 13", "pending": 0, "collected_at": "2026-01-10T00:00:00"},
             "web": {"os": "Rocky 9", "pending": 3, "collected_at": "2026-01-01T00:00:00"}}}))
@@ -1564,7 +1566,8 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertIn("| pve1 | online | 9.1.11 | 7.0.2-4-pve |", md)                                     # #97 node
         self.assertIn("| job 1 | yes |", md)                                                            # #97 job id
         self.assertIn("| 2 listed |", md)
-        self.assertIn("| nas1 | – | ct-pbs1 | LXD (RUNNING) | 10.9.20.99 (eth0) |", md)                  # #97 NAS
+        self.assertIn("| nas1 | – | ct-pbs1 | LXD (RUNNING) | 10.9.20.99 (eth0) | – |", md)              # #97 NAS
+        self.assertIn("| app | nginx | bridge | /share/web |", md)                                      # #102
         self.assertIn("Drift (2026-01-02 03:04): 2 findings — 2 not managed by OpenTofu; 3 network devices", md)
         self.assertIn("| RouterOS | sw1 | CRS317 | 10.9.20.1 | 7.21.4 | 1 audit findings (2026-01-02) |", md)  # #94
         self.assertIn("| RouterOS | sw2 | – | 10.9.20.3 | – | not audited", md)
