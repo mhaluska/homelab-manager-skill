@@ -186,5 +186,9 @@
           {%- for name in reported -%}
             {%- set _ = hosts.update({name: hostvars[name].bmc_summary | combine({'collected_at': now(utc=true).isoformat()})}) -%}
           {%- endfor -%}
+          {%- for name in hosts | list -%}   {# each host's site: its site_<name> group (GitHub #75) #}
+            {%- set _ = hosts.update({name: hosts[name] | combine({'site': hostvars[name].group_names | select('match', '^site_')
+                                            | map('regex_replace', '^site_', '') | first | default(none)})}) -%}
+          {%- endfor -%}
           {{ {'hosts': hosts} | to_nice_json }}
       when: reported | length > 0

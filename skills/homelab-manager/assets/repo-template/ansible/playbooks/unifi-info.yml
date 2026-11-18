@@ -1,7 +1,8 @@
 # Read-only status of controller-managed UniFi devices.
 #   python3 $HM/scripts/with_secrets.py unifi-api -- ansible-playbook playbooks/unifi-info.yml
 # 1. The controller's Integration API (X-API-KEY from UNIFI_API_KEY; secrets.unifi-api, kind env): application
-#    info, sites and every adopted device (model, firmware, state, IP, MAC) → discovery/unifi.json.
+#    info, UniFi sites and every adopted device (model, firmware, state, IP, MAC) → discovery/unifi.json, under
+#    the homelab site of the first `unifi` host (its site_<name> group; none: "default"), next to other sites'.
 # 2. Devices in the `unifi` group, over SSH with the raw module: `mca-cli-op info` (version, uptime, inform URL,
 #    controller status). `info` is only an interactive shell alias, so it isn't used.
 # Never configures anything: changes go through the controller (its UI or API), with the user's yes.
@@ -13,6 +14,9 @@
     certs: "{{ hostvars[groups['unifi'][0]].unifi_validate_certs | default(false) if (groups['unifi'] | default([])) else false }}"
     key: "{{ lookup('ansible.builtin.env', 'UNIFI_API_KEY') }}"
     unifi_file: "{{ playbook_dir }}/../../discovery/unifi.json"
+    unifi_site: >-
+      {{ (hostvars[groups['unifi'][0]].group_names | select('match', '^site_') | map('regex_replace', '^site_', '')
+          | first | default('default')) if (groups['unifi'] | default([])) else 'default' }}
   tasks:
     - name: Controller URL and API key are set
       ansible.builtin.assert:
@@ -48,16 +52,23 @@
       register: unifi_devices
       no_log: true
 
-    - name: Write discovery/unifi.json
+    - name: Previous results
+      ansible.builtin.stat:
+        path: "{{ unifi_file }}"
+      register: prev_unifi
+
+    - name: Write discovery/unifi.json (this site's part; the other sites' stay)
       ansible.builtin.copy:
         dest: "{{ unifi_file }}"
         mode: "0644"
         content: >-
-          {{ {'collected_at': now(utc=true).isoformat(),
+          {%- set prev = (lookup('ansible.builtin.file', unifi_file) | from_json) if prev_unifi.stat.exists else {} -%}
+          {%- set parts = dict(prev.sites) if prev.sites is mapping else {} -%}
+          {%- set _ = parts.update({unifi_site: {'collected_at': now(utc=true).isoformat(),
               'application': unifi_info.json | default({}),
-              'sites': unifi_devices.results | map(attribute='item') | map(attribute='name', default='?') | list,
-              'devices': unifi_devices.results | map(attribute='json') | map(attribute='data', default=[]) | flatten}
-             | to_nice_json }}
+              'unifi_sites': unifi_devices.results | map(attribute='item') | map(attribute='name', default='?') | list,
+              'devices': unifi_devices.results | map(attribute='json') | map(attribute='data', default=[]) | flatten}}) -%}
+          {{ {'sites': parts} | to_nice_json }}
 
     - name: Result
       ansible.builtin.debug:
