@@ -21,7 +21,8 @@ doesn't make it managed. Promoting a device to managed is a deliberate edit of
 ## Proxmox inventory
 
 ```bash
-python3 $HM/scripts/proxmox_inventory.py            # snapshot + summary table
+python3 $HM/scripts/proxmox_inventory.py            # snapshot + summary table (keeps guest config of an
+                                                    # earlier --details run, stamped details_at)
 python3 $HM/scripts/proxmox_inventory.py --details  # + per-guest config (disks, NICs, cloud-init) and the IPs
                                                     # running guests report (QEMU guest agent, LXC interfaces)
 python3 $HM/scripts/proxmox_inventory.py --summary  # print only, write nothing

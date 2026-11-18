@@ -287,6 +287,25 @@ def collect(pve: PVE, details: bool) -> dict:
             **({"guest_ip_sources": ip_sources} if details else {}), **({"warnings": warnings} if warnings else {})}
 
 
+def keep_details(old: dict | None, new: dict) -> dict:
+    """A run without --details keeps each guest's config from the previous snapshot (same VMID and type) and
+    stamps when it was read (details_at), so a plain refresh doesn't strip what pve_node_plan.py needs."""
+    if not old or any("config" in g for g in new.get("guests") or []):
+        return new
+    configs = {(g.get("vmid"), g.get("type")): g["config"] for g in old.get("guests") or [] if "config" in g}
+    if not configs:
+        return new
+    kept = 0
+    for g in new.get("guests") or []:
+        conf = configs.get((g.get("vmid"), g.get("type")))
+        if conf is not None:
+            g["config"] = conf
+            kept += 1
+    if kept:
+        new["details_at"] = old.get("details_at") or old.get("collected_at")
+    return new
+
+
 def used_vmids(cfg: dict, site_name: str | None = None) -> dict[int, str]:
     """{vmid: who} at one site: its Proxmox snapshot and every vm_id / template_vm_id in its OpenTofu environment
     (the default site: every environment that isn't another site's). VMIDs repeat across sites."""
@@ -335,6 +354,8 @@ def summary(inv: dict, cfg: dict | None = None) -> str:
     agent = (inv.get("guest_ip_sources") or {}).get("agent", "")
     if agent.startswith("forbidden"):
         lines.append(f"\nGuest agent IPs not read — {agent}.")
+    if inv.get("details_at"):
+        lines.append(f"\nGuest config kept from the --details run of {inv['details_at']} (refresh with --details).")
     for w in inv.get("warnings") or []:
         lines.append(f"\nWarning: {w}.")
     return "\n".join(lines)
@@ -398,6 +419,11 @@ def inventory_site(cfg: dict, px: dict, a) -> None:
             out.write_text(json.dumps(inv, indent=2) + "\n")
         else:
             out = hmlib.proxmox_snapshot_file(cfg["_root"])
+            if not a.details:
+                try:
+                    inv = keep_details(hmlib.site_part(out, s), inv)
+                except hmlib.ConfigError:
+                    pass   # an unreadable old snapshot is simply replaced
             hmlib.write_site_part(out, s, inv)
         print(f"Wrote {out}" + ("" if a.out else f" (site {hmlib.site_key(s)})") + "\n")
     if s["name"]:

@@ -2275,6 +2275,39 @@ class PveNodePlanTests(unittest.TestCase):  # issue 23
         plan, blockers = self.p.make_plan(self.inv, "nope")
         self.assertEqual(plan, {})
 
+    def test_snapshot_without_config_refuses_before_classifying(self):  # GitHub issue #85
+        for g in self.inv["guests"]:
+            g.pop("config")
+        plan, blockers = self.p.make_plan(self.inv, "pve1")
+        self.assertEqual(plan, {})
+        self.assertTrue(any("--details" in b for b in blockers))
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        run("init_repo.py", str(d), "--components", "proxmox,ansible", cwd=d)
+        (d / "discovery/proxmox.json").write_text(json.dumps(self.inv))
+        r = run("pve_node_plan.py", "pve1", cwd=d)
+        self.assertEqual(r.returncode, 4)
+        self.assertIn("--details", r.stderr)
+        self.assertNotIn("migrate", r.stdout + r.stderr)
+        self.assertFalse((d / "discovery/pve-patch.json").exists())
+
+    def test_plain_inventory_keeps_details_of_previous_snapshot(self):  # GitHub issue #85
+        import proxmox_inventory as pinv
+        old = {"collected_at": "t1", "guests": [{"vmid": 101, "type": "vm", "config": {"scsi0": "local-zfs:x"}},
+                                                {"vmid": 102, "type": "lxc", "config": {"rootfs": "ceph:y"}}]}
+        new = {"collected_at": "t2", "guests": [{"vmid": 101, "type": "vm"}, {"vmid": 102, "type": "vm"},
+                                                {"vmid": 103, "type": "vm"}]}
+        out = pinv.keep_details(old, new)
+        self.assertEqual(out["guests"][0]["config"], {"scsi0": "local-zfs:x"})
+        self.assertNotIn("config", out["guests"][1])            # VMID reused by another guest type
+        self.assertNotIn("config", out["guests"][2])
+        self.assertEqual(out["details_at"], "t1")
+        self.assertEqual(pinv.keep_details({**old, "details_at": "t0"}, {"guests": [{"vmid": 101, "type": "vm"}]})
+                         ["details_at"], "t0")                  # still the original --details run
+        self.assertNotIn("details_at", pinv.keep_details(None, {"guests": []}))
+        plan, _ = self.p.make_plan({**self.inv, "details_at": "t1"}, "pve1")
+        self.assertIn("guest config from t1", self.p.render(plan, []))
+
     def test_cli_writes_plan_only_without_blockers(self):
         d = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, d)

@@ -103,7 +103,8 @@ def make_plan(inv: dict, node: str, max_pct: float = 85, migrate: bool = True) -
         blockers.append(f"other node(s) offline: {', '.join(offline)} — patch one node at a time with the rest up")
     guests = [g for g in inv.get("guests") or [] if g.get("node") == node and not g.get("template")]
     if guests and not any("config" in g for g in guests):
-        blockers.append("snapshot has no guest config — refresh with proxmox_inventory.py --details")
+        # without disk placement every guest would look movable: refuse before classifying anything
+        return {}, blockers + ["snapshot has no guest config — refresh with proxmox_inventory.py --details"]
     shared = {s["storage"] for s in inv.get("storage") or [] if s.get("shared")}
     others = [n for n in nodes if n["node"] != node and n.get("status") == "online"]
 
@@ -138,7 +139,8 @@ def make_plan(inv: dict, node: str, max_pct: float = 85, migrate: bool = True) -
                 row.update(action="stop", reason=f"no node has room below {max_pct:g}% memory")
     plan = {"node": node, "site": inv.get("site") or "", "standalone": not cluster and len(nodes) == 1,
             "created_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
-            "snapshot_at": inv.get("collected_at"), "max_mem_pct": max_pct, "guests": rows,
+            "snapshot_at": inv.get("collected_at"), **({"details_at": inv["details_at"]} if inv.get("details_at") else {}),
+            "max_mem_pct": max_pct, "guests": rows,
             # shut down in reverse startup order, start in startup order (as Proxmox does)
             "stop_order": [r["vmid"] for r in sorted(rows, key=lambda r: (-r["startup_order"], -r["vmid"]))
                            if r["action"] == "stop"]}
@@ -147,7 +149,8 @@ def make_plan(inv: dict, node: str, max_pct: float = 85, migrate: bool = True) -
 
 def render(plan: dict, blockers: list[str]) -> str:
     where = f" at site {plan['site']}" if plan.get("site") else ""
-    lines = [f"Patch plan for node {plan['node']}{where} (snapshot {plan.get('snapshot_at') or '?'}):", ""]
+    lines = [f"Patch plan for node {plan['node']}{where} (snapshot {plan.get('snapshot_at') or '?'}"
+             + (f", guest config from {plan['details_at']}" if plan.get("details_at") else "") + "):", ""]
     if plan.get("standalone"):
         lines += ["Standalone node (no cluster): nowhere to move guests — every running guest is down during the "
                   "reboot.", ""]
