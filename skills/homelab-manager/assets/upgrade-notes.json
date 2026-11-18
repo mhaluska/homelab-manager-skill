@@ -598,6 +598,41 @@
       "when": {"component": "proxmox", "file_lacks": ["discovery/proxmox.json", "\"pveversion\""]},
       "text": "proxmox_inventory.py records each node's Proxmox VE version and kernel (shown in OVERVIEW.md), and a plain refresh now keeps the guests' reported addresses; before 0.34.0 a plain refresh dropped them (#97).",
       "action": "Refresh it: `python3 {HM}/scripts/proxmox_inventory.py --details` (read-only; every site: --all-sites), then `python3 {HM}/scripts/overview.py` when the repo has an OVERVIEW.md."
+    },
+    {
+      "version": "0.35.0",
+      "id": "containers-compose-paths",
+      "kind": "template",
+      "when": {
+        "component": "ansible",
+        "file_lacks": [
+          [
+            "ansible/playbooks/docker-containers.yml",
+            "compose_working_dir"
+          ],
+          [
+            "ansible/playbooks/qnap-containers.yml",
+            "compose_working_dir"
+          ]
+        ]
+      },
+      "text": "docker-containers.yml and qnap-containers.yml record each Compose project's working directory and config files (compose_working_dir, compose_config_files), so a container's Compose file can be found and used (#102).",
+      "edited": "These playbooks have local edits, so --sync-managed did not replace them: {files}.",
+      "action": "In {files}, add the compose_working_dir and compose_config_files entries from the same playbooks in {HM}/assets/repo-template/ansible/playbooks/ (show the user the diff first), then `ansible-playbook <playbook> --syntax-check`."
+    },
+    {
+      "version": "0.35.0",
+      "id": "containers-compose-refresh",
+      "kind": "regenerate",
+      "when": {
+        "component": "ansible",
+        "file_lacks": [
+          "discovery/containers.json",
+          "compose_working_dir"
+        ]
+      },
+      "text": "containers.json now records where each Compose project lives; OVERVIEW.md shows it in a Compose column (#102).",
+      "action": "Refresh it: `ansible-playbook playbooks/docker-containers.yml` (read-only; QNAP: playbooks/qnap-containers.yml), then `python3 {HM}/scripts/overview.py` when the repo has an OVERVIEW.md."
     }
   ]
 }

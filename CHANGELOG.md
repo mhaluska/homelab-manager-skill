@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.35.0 — 2026-11-18
+- `proxmox.endpoint` (and `sites[].proxmox.endpoint`) takes several addresses in priority order, as a YAML list or
+  comma-separated ([#98](https://github.com/mhaluska/homelab-manager-skill/issues/98)). `proxmox_inventory.py`, `pve_snapshot.py`, `pve_guest.py` and `with_secrets.py`
+  (OpenTofu, Packer) use the first that accepts a connection and say when it isn't the first; a refused token or
+  certificate does not move on. `check_env.py` checks each (`proxmox:tls#N`): one that is down is a warning while
+  another answers. A single URL works as before. references/proxmox.md "API endpoints".
+- Known unmanaged devices get a name ([#100](https://github.com/mhaluska/homelab-manager-skill/issues/100)): `discovery.ignore_unmanaged` takes `{ip, name, mac}` (`site`
+  optional). The drift report lists them as known devices and recognises one by MAC at a new DHCP address;
+  OVERVIEW.md shows them under Network devices instead of "Other scanned addresses".
+  `routeros_audit.py --leases` reads the routers' DHCP leases and ARP table and proposes names for unknown scanned
+  addresses (lease comment, else host-name, reduced to plain characters) with the `config_set.py` command to record
+  the ones the user confirms; leases and ARP are not kept in routeros.json.
+- `docker-containers.yml` and `qnap-containers.yml` record each Compose project's working directory and config files
+  ([#102](https://github.com/mhaluska/homelab-manager-skill/issues/102)); OVERVIEW.md has a Compose column. references/discovery.md: a container with Compose labels is
+  stopped, started or recreated only through `docker compose` in its working directory, never plain `docker`.
+- OVERVIEW.md lists a NAS Docker container's networks as text instead of a Python list.
+- Upgrade notes: `containers-compose-paths` (template, edited copies), `containers-compose-refresh` (regenerate).
+
 ## 0.34.1 — 2026-11-18
 - `ssh_probe.py` no longer uses a Jinja template from the inventory as the SSH user ([#101](https://github.com/mhaluska/homelab-manager-skill/issues/101)): an
   `ansible_user` such as `"{{ homelab_admin_user | default(omit) }}"` (ansible-inventory does not render templates)
