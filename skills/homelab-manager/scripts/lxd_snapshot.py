@@ -62,7 +62,7 @@ def ssh_run(t: dict, command: str, timeout: int) -> tuple[int, str, str]:
 
 def targets(hosts: dict, wanted: list[str]) -> tuple[dict[str, dict], dict[str, str]]:
     """Inventory names → ({name: target}, {name: problem}). A target says how to reach the instance."""
-    lit = lambda x: None if x is None or "{{" in str(x) else x  # ansible-inventory doesn't render templates
+    lit = hmlib.literal  # ansible-inventory doesn't render templates
     found, problems = {}, {}
     for w in wanted:
         hits = [w] if w in hosts else [h for h in hosts if h.split(".")[0] == w]

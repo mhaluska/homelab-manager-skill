@@ -3506,6 +3506,16 @@ class SshProbeTests(unittest.TestCase):  # issue 25
         r = self.probe("10.0.30.5", "--include-managed", "--site", "home", "--user", "root", "--no-write")
         self.assertIn("at site home as root", r.stderr)                         # --site and --user still win
 
+    def test_templated_inventory_user_is_skipped(self):  # issue 101
+        (self.d / "ansible/inventory/managed/hosts.yml").write_text(
+            "all:\n  vars:\n    ansible_user: \"{{ homelab_admin_user | default(omit) }}\"\n"
+            "  children:\n    appliances:\n      hosts:\n        box:\n          ansible_host: 10.0.20.11\n")
+        r = self.probe("10.0.20.11", "--include-managed", "--no-write")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("{{", r.stderr)
+        users = [c[c.index("-l") + 1] for c in map(json.loads, self.log.read_text().splitlines())]
+        self.assertEqual(users, ["admin"])                                       # defaults.admin_user
+
     def test_scope(self):
         r = self.probe("10.0.30.0/24")
         self.assertEqual(r.returncode, 4)

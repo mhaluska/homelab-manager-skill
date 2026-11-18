@@ -12,7 +12,8 @@ network.json. Hosts already in the managed Ansible inventory are skipped unless 
 each target goes to its own site: an address to its inventory host's site_<name> group, else to the site whose
 ranges hold it, a range to the site holding its first address, the rest to the default site (GitHub issue #82).
 With neither targets nor --site: the default site's part and every site's exclusions (GitHub issues #72, #75).
-The SSH user is --user, else the inventory host's ansible_user, else defaults.admin_user.
+The SSH user is --user, else the inventory host's ansible_user (unless it is a
+Jinja template), else defaults.admin_user.
 
 It runs the same read-only commands Ansible's `raw` module would (no Python needed on the target), but
 over plain `ssh -T` with BatchMode (agent keys only, never a password prompt), a hard timeout per host
@@ -306,9 +307,10 @@ def site_groups(cfg: dict, managed: dict, targets: list[str]) -> dict[str, tuple
 
 
 def ssh_user(cfg: dict, managed: dict, ip: str, given: str | None) -> str | None:
-    """--user, else the inventory host's ansible_user (GitHub issue #82), else defaults.admin_user."""
+    """--user, else the inventory host's ansible_user (GitHub issue #82) unless it is a template (#101), else
+    defaults.admin_user."""
     found = hmlib.inventory_host(managed, ip)
-    return given or (found and found[1].get("ansible_user")) or hmlib.get(cfg, "defaults.admin_user")
+    return given or (found and hmlib.literal(found[1].get("ansible_user"))) or hmlib.get(cfg, "defaults.admin_user")
 
 
 def probe_site(a, cfg: dict, managed: dict, net_site: dict, scope_site: str | None, targets: list[str],

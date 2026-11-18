@@ -510,6 +510,12 @@ def site_of_address(cfg: dict, ip: str) -> dict | None:
     return next((s for s in sites(cfg) if any(addr in n for n in s["ranges"])), None)
 
 
+def literal(value):
+    """An inventory value as given, or None when it is a Jinja template: ansible-inventory does not render them, so
+    `{{ x | default(omit) }}` would otherwise be used verbatim (GitHub issue #101)."""
+    return None if value is None or "{{" in str(value) or "{%" in str(value) else value
+
+
 def inventory_host(managed: dict, key: str) -> tuple[str, dict] | None:
     """(name, vars) of the managed-inventory host whose name or ansible_host is key (drift_report.load_ansible)."""
     if key in managed:
