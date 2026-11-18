@@ -40,6 +40,9 @@ python3 $HM/scripts/nmap_scan.py 10.0.10.5 --profile os           # + OS detecti
 python3 $HM/scripts/nmap_scan.py 10.0.10.0/24 --profile os --only-live  # OS-scan only hosts already seen up
 ```
 - Targets must be inside `network.authorized_ranges`; `excluded_hosts` are always skipped.
+- Several sites (proxmox.md "Several sites"): pass `--site <name>` for the site the Mac is at (ssh_probe.py too):
+  the scan goes to `discovery/network-<name>.json` (the default site: `network.json`) and that site's
+  `{ip, site}` exclusions apply with the plain ones; without `--site` every site's exclusions apply.
   The script and the guard hook both enforce this. If the user asks for a range that isn't
   authorized, say so and offer to add it to `homelab.yaml` **if they confirm they own it**.
 - "My management subnet": resolve the name from `homelab.yaml` comments/ranges or ask which
@@ -136,7 +139,8 @@ show the VLAN of each address. Collect the table read-only and propose it for th
    network*, not as unknown devices. If VM IPs weren't read (the token lacks
    `VM.GuestAgent.Audit`), say so and point to `docs/proxmox-tokens.md`. A device's other addresses (router or
    switch secondary IPs, multi-homed NAS/firewall) belong in its host var `hm_extra_ips: [ip, …]`, not in
-   `discovery.ignore_unmanaged`: the report then lists them as that host's secondary addresses.
+   `discovery.ignore_unmanaged`: the report then lists them as that host's secondary addresses. With several
+   sites the report lists each site's scan apart, and an ignored address can name its site: `{ip, site}`.
 5. The findings live in `discovery/drift.md` (regenerated each run; before quoting an existing one, run
    `drift_report.py --stale`: exit 1 = the inventory, `homelab.yaml` or a snapshot changed since) and your reply; they are not
    copied anywhere else. If `drift_report.py` itself misbehaved (crash, a guest wrongly flagged),

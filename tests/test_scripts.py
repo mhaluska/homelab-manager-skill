@@ -2601,6 +2601,95 @@ if __name__ == "__main__":
     unittest.main()
 
 
+FAKE_NMAP = r'''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["FAKE_NMAP_LOG"], "a") as f:
+    f.write(json.dumps(args) + "\n")
+out = args[args.index("-oX") + 1]
+rows = "".join(f'<host><status state="up" reason="echo-reply"/><address addr="{ip}" addrtype="ipv4"/></host>'
+               for ip in ("10.0.0.5", "10.0.0.9"))
+open(out, "w").write(f"<nmaprun>{rows}</nmaprun>")
+'''
+
+
+class PerSiteScanTests(unittest.TestCase):  # GitHub #72, #66: scans know their site, exclusions may name one
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d)
+        run("init_repo.py", str(self.d), "--components", "ansible,discovery", cwd=self.d)
+        r = run("config_set.py", "network.authorized_ranges+=10.0.0.0/24",
+                "sites+={name: home, ranges: [10.0.0.0/24]}", "sites+={name: offsite, ranges: [10.0.0.0/24]}",
+                "network.excluded_hosts+=10.0.0.1", "network.excluded_hosts+={ip: 10.0.0.5, site: offsite}",
+                "discovery.ignore_unmanaged+={ip: 10.0.0.9, site: home}", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        bin_ = self.d / "bin"
+        bin_.mkdir()
+        (bin_ / "nmap").write_text(FAKE_NMAP)
+        (bin_ / "nmap").chmod(0o755)
+        self.log = self.d / "nmap.log"
+        self.env = {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "FAKE_NMAP_LOG": str(self.log)}
+        sys.path.insert(0, str(SCRIPTS))
+        import hmlib
+        self.h = hmlib
+
+    def scan(self, *args):
+        r = subprocess.run([sys.executable, str(SCRIPTS / "nmap_scan.py"), "10.0.0.0/24", *args], cwd=self.d,
+                           env=self.env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        last = json.loads(self.log.read_text().splitlines()[-1])
+        return last[last.index("--exclude") + 1], r
+
+    def test_entries_and_scope(self):
+        h = self.h
+        cfg = h.load_config(self.d)
+        ex = lambda st: [str(n) for n in h.scan_scope(cfg, st)[1]]
+        self.assertEqual(ex("home"), ["10.0.0.1/32"])
+        self.assertEqual(ex("offsite"), ["10.0.0.1/32", "10.0.0.5/32"])
+        self.assertEqual(ex(None), ["10.0.0.1/32", "10.0.0.5/32"])                  # site unknown: every entry
+        self.assertEqual([str(n) for n in h.site_entries(cfg, "discovery.ignore_unmanaged", "offsite")], [])
+        self.assertEqual(h.network_file("/r", "offsite", False).name, "network-offsite.json")
+        self.assertEqual(h.network_file("/r", "home", True).name, "network.json")
+        self.assertEqual(h.outside_site(cfg, h.site(cfg, "home"), ["10.0.0.0/25", "10.0.1.5"]), ["10.0.1.5"])
+        found = "\n".join(h.site_ambiguities(cfg))
+        self.assertIn("network.excluded_hosts: 10.0.0.1 is in ranges sites home and offsite share", found)
+        self.assertNotIn("10.0.0.5 is in", found)                                   # names its site
+        for bad in ({"ip": "10.0.0.7", "site": "moon"}, {"ip": "10.0.0.7"}):
+            with self.assertRaises(h.ConfigError):
+                h.sites({**cfg, "network": {**cfg["network"], "excluded_hosts": [bad]}})
+        r = run("config_set.py", "network.excluded_hosts+={ip: 10.0.0.7, site: moon}", cwd=self.d)
+        self.assertNotEqual(r.returncode, 0)                                         # refused before writing
+        import ssh_probe
+        db = {"hosts": {"10.0.0.5": {"ports": [{"port": 22}]}}}
+        self.assertEqual(ssh_probe.select(db, [], cfg, set(), False, 22, "home")[0], ["10.0.0.5"])
+        self.assertEqual(ssh_probe.select(db, [], cfg, set(), False, 22, "offsite")[0], [])
+
+    def test_scan_per_site_and_drift(self):
+        excl, _ = self.scan("--site", "offsite")
+        self.assertEqual(excl, "10.0.0.1/32,10.0.0.5/32")
+        off = json.loads((self.d / "discovery/network-offsite.json").read_text())
+        self.assertEqual((off["site"], sorted(off["hosts"])), ("offsite", ["10.0.0.5", "10.0.0.9"]))
+        self.assertFalse((self.d / "discovery/network.json").exists())
+        excl, _ = self.scan("--site", "home")
+        self.assertEqual(excl, "10.0.0.1/32")
+        self.assertTrue((self.d / "discovery/network.json").exists())
+        excl, _ = self.scan()
+        self.assertEqual(excl, "10.0.0.1/32,10.0.0.5/32")                           # no --site: fail-safe
+        hosts = self.d / "ansible/inventory/managed/hosts.yml"
+        hosts.write_text(hosts.read_text().replace("    linux:\n", "    site_offsite:\n      hosts:\n"
+                                                   "        web: {ansible_host: 10.0.0.5}\n    linux:\n", 1))
+        r = run("drift_report.py", "--no-tofu", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = r.stdout
+        home = out[out.index("## Network devices not in managed inventory — site home"):]
+        home, offsite = home.split("## Network devices not in managed inventory — site offsite")
+        self.assertIn("- 10.0.0.5", home)          # the inventory host 10.0.0.5 is offsite's
+        self.assertNotIn("10.0.0.9", home)         # ignored at home only
+        self.assertIn("- 10.0.0.9", offsite)
+        self.assertNotIn("10.0.0.5", offsite.split("##")[0])
+        self.assertIn("| Network scan — site offsite |", out)
+
+
 class NmapInterfaceTests(unittest.TestCase):  # issue 18
     def setUp(self):
         sys.path.insert(0, str(ROOT / "skills/homelab-manager/scripts"))

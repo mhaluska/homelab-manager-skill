@@ -372,7 +372,8 @@ def site_terms(cfg) -> tuple[list[str], list[str]]:
         hosts.add(name)
     hosts.update(str(v["name"]) for v in hmlib.vlans(cfg) if v.get("name"))  # VLAN names are site data too
     for f in [root / "discovery" / "proxmox.json", root / "discovery" / "network.json",
-              *sorted((root / "discovery").glob("proxmox-*.json"))]:
+              *sorted((root / "discovery").glob("proxmox-*.json")),
+              *sorted((root / "discovery").glob("network-*.json"))]:
         try:
             _names_in(json.loads(f.read_text()), hosts)
         except (OSError, ValueError):

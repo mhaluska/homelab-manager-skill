@@ -25,7 +25,7 @@ site:
 network:
   # CIDRs Claude may scan with nmap. Nothing outside these is ever scanned (enforced by a hook).
   authorized_ranges: []      # e.g. [10.0.10.0/24]
-  # IPs/CIDRs never scanned, even inside an authorized range.
+  # IPs/CIDRs never scanned, even inside an authorized range ({ip: …, site: <name>}: only at that site).
   excluded_hosts: []
   # VLANs by name, so "create a VM in DMZ" works: --vlan accepts a name, reports show the VLAN of an address.
   vlans: []                  # e.g. [{id: 20, name: DMZ, cidr: 10.0.20.0/24, gw: 10.0.20.1}]; site: <name>
@@ -123,7 +123,7 @@ secrets:
   # unifi-api:  {service: homelab/unifi-api,    kind: env, env: UNIFI_API_KEY}   # UniFi Network Integration API key
 
 discovery:
-  ignore_unmanaged: []       # IPs you know about and don't want flagged (phones, TVs, …)
+  ignore_unmanaged: []       # IPs you know about and don't want flagged (phones, TVs, …); {ip, site}: one site
 
 issues:
   file: skill_issues.md            # problems with / ideas for the homelab-manager skill itself (not the homelab)

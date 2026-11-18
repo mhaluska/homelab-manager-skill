@@ -308,7 +308,7 @@ def edit_file(path: Path, ops: list[tuple], dry_run: bool = False) -> str:
     """Apply ops to a YAML file; verify with yq; return a unified diff ('' = no change)."""
     old = path.read_text()
     new, want = apply_ops(old, yq_json(old), ops)
-    if any(op[1].split(".")[0] in ("sites", "network", "opentofu") for op in ops):
+    if any(op[1].split(".")[0] in ("sites", "network", "opentofu", "discovery") for op in ops):
         try:   # site names become Ansible groups, VLAN sites must exist: refuse a bad edit before writing
             hmlib.sites(want)
         except hmlib.ConfigError as e:

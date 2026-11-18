@@ -5,7 +5,8 @@
     drift_report.py --stale        # is discovery/drift.md older than its inputs? exit 0 fresh, 1 stale, 2 missing
 
 Sources (all read-only):
-  live      discovery/proxmox.json   (proxmox_inventory.py)  and discovery/network.json (nmap_scan.py);
+  live      discovery/proxmox.json   (proxmox_inventory.py)  and discovery/network.json (nmap_scan.py;
+            another site's scan: network-<site>.json, its devices listed per site);
             other sites (sites: in homelab.yaml): discovery/proxmox-<site>.json, reported per site
   state     `tofu show -json` in tofu/environments/<env>  (run under with_secrets.py for the state backend)
             or a file passed with --tofu-json; another site: its own environment tofu/environments/<site>
@@ -168,7 +169,7 @@ def compare_state(px: dict, state: dict, prefix: str = "") -> tuple[list[str], i
 
 
 STALE_INPUTS = ["homelab.yaml", "ansible/inventory", "discovery/proxmox.json", "discovery/proxmox-*.json",
-                "discovery/network.json", "discovery/containers.json"]
+                "discovery/network.json", "discovery/network-*.json", "discovery/containers.json"]
 
 
 def container_ips(root: Path) -> dict[str, str]:
@@ -304,10 +305,11 @@ def main():
               else "fresh: no input changed since the report")
         return 1 if newer else 0
 
-    net_file = root / "discovery" / "network.json"
     try:
         all_sites = hmlib.sites(cfg)
         snaps = hmlib.proxmox_snapshots(cfg)
+        nets = hmlib.network_snapshots(cfg)   # per site: network.json, network-<site>.json (GitHub #72)
+        ignores = {st["name"]: hmlib.site_entries(cfg, "discovery.ignore_unmanaged", st["name"]) for st in all_sites}
     except hmlib.ConfigError as e:
         print(f"drift_report: {e}", file=sys.stderr)
         return 3
@@ -320,7 +322,11 @@ def main():
     all_guests = [g for _, p in snaps for g in p.get("guests") or []]
     gref = (lambda g: f"{g['_site']}/{g['vmid']}") if multi else (lambda g: str(g["vmid"]))
     in_site = (lambda st: f" — site {hmlib.site_title(st)}") if multi else (lambda st: "")
-    net = json.loads(net_file.read_text()) if net_file.exists() else None
+    net = None
+    for _, db in nets:   # every site's scan in one view for matching guests and inventory hosts
+        net = net or {"hosts": {}, "updated_at": db.get("updated_at")}
+        for ip, h in (db.get("hosts") or {}).items():
+            net["hosts"].setdefault(ip, h)
     states = {}   # site name → (state or None, why / source); each site is compared with its own environment
     for st in all_sites:
         if st["default"]:
@@ -338,7 +344,8 @@ def main():
          *[f"| Proxmox snapshot{in_site(st)} | " + (next((p['collected_at'] for x, p in others if x["name"] == st["name"]), None)
            or f"missing — run proxmox_inventory.py --site {st['name']}") + " |"
            for st in all_sites[1:] if st["proxmox"] and st["proxmox"].get("endpoint")],
-         f"| Network scan | {net.get('updated_at') if net else 'missing — run nmap_scan.py'} |",
+         *([f"| Network scan{in_site(st) if len(nets) > 1 else ''} | {db.get('updated_at')} |" for st, db in nets]
+           or ["| Network scan | missing — run nmap_scan.py |"]),
          *[f"| OpenTofu state{in_site(st)} | {msg if state is not None else 'unavailable: ' + msg} |"
            for st in all_sites for state, msg in [states[st["name"]]]
            if st["default"] or (st["proxmox"] and st["proxmox"].get("endpoint"))],
@@ -476,39 +483,57 @@ def main():
         L.append("")
 
     if net:
-        known_ips = {v.get("ansible_host") for v in ans.values() if v.get("ansible_host")}
+        default_name = all_sites[0]["name"]
+        own_files = {st["name"] for st, _ in nets}
+        # what a site's network file is checked against: that site's inventory hosts, guests and nodes, and on the
+        # default site's file also those of sites without a file of their own (scanned without --site)
+        belongs = lambda x, st: not multi or x == st["name"] or (st["default"] and x not in own_files)
+        host_site = lambda v: (hmlib.host_sites(v.get("_groups_all") or v.get("groups")) or [default_name])[0]
         secondary = {ip: h for h, v in ans.items() for ip in extra_ips(v)}
-        known_ips |= set(matched) | set(secondary)
-        for _, p in snaps:
-            for node_nets in (p.get("networks") or {}).values():
-                for n in node_nets:
-                    if n.get("cidr"):
-                        known_ips.add(str(ipaddress.ip_interface(n["cidr"]).ip))
         containers = container_ips(root)
-        seen_containers = sorted((ip for ip in containers if ip in net["hosts"] and ip not in known_ips),
-                                 key=ipaddress.ip_address)
-        known_ips |= set(containers)
-        ignore = set(hmlib.get(cfg, "discovery.ignore_unmanaged", []) or [])
-        unknown = [(ip, h) for ip, h in net["hosts"].items() if ip not in known_ips and ip not in ignore]
-        L += ["## Network devices not in managed inventory", ""]
-        if unknown:
-            L += [f"{len(unknown)} device(s) — add to inventory, or list in `discovery.ignore_unmanaged`"
-                  + (" (Proxmox guests are listed above, not here)" if matched else "") + ":", ""]
-            L += [f"- {ip} {(h.get('hostnames') or [''])[0]} — {h.get('device_type_guess')} {h.get('vendor') or ''}".rstrip()
-                  + vlan_suffix(cfg, ip) + (site_suffix(cfg, ip) if multi else "")
-                  + (" — **management controller (BMC)**: keep it off user networks" if
-                     "bmc" in str(h.get("device_type_guess") or "").split("/") else "")
-                  for ip, h in sorted(unknown)]
-        else:
-            L.append("None.")
+        per_site = len(nets) > 1
+        for st, db in nets:
+            hosts_here = db.get("hosts") or {}
+            here = [v for v in ans.values() if belongs(host_site(v), st)]
+            known_ips = {v.get("ansible_host") for v in here if v.get("ansible_host")}
+            known_ips |= {ip for v in here for ip in extra_ips(v)}
+            known_ips |= {ip for ip, (g, _) in matched.items() if belongs(g.get("_site", default_name), st)}
+            for sp, p in snaps:
+                if belongs(sp["name"], st):
+                    for node_nets in (p.get("networks") or {}).values():
+                        for n in node_nets:
+                            if n.get("cidr"):
+                                known_ips.add(str(ipaddress.ip_interface(n["cidr"]).ip))
+            known_ips |= set(containers)
+            ignore = ignores[st["name"]]
+            ignored = lambda ip: any(ipaddress.ip_address(ip) in n for n in ignore
+                                     if n.version == ipaddress.ip_address(ip).version)
+            unknown = [(ip, h) for ip, h in hosts_here.items() if ip not in known_ips and not ignored(ip)]
+            L += [f"## Network devices not in managed inventory{in_site(st) if per_site else ''}", ""]
+            if unknown:
+                L += [f"{len(unknown)} device(s) — add to inventory, or list in `discovery.ignore_unmanaged`"
+                      + (f" (`{{ip: …, site: {st['name']}}}` for this site only)" if multi else "")
+                      + (" (Proxmox guests are listed above, not here)" if matched else "") + ":", ""]
+                L += [f"- {ip} {(h.get('hostnames') or [''])[0]} — {h.get('device_type_guess')} {h.get('vendor') or ''}".rstrip()
+                      + vlan_suffix(cfg, ip) + (site_suffix(cfg, ip) if multi and st["default"] else "")
+                      + (" — **management controller (BMC)**: keep it off user networks" if
+                         "bmc" in str(h.get("device_type_guess") or "").split("/") else "")
+                      for ip, h in sorted(unknown)]
+            else:
+                L.append("None.")
+            L.append("")
         seen_secondary = sorted((ip for ip in secondary if ip in net["hosts"]), key=ipaddress.ip_address)
         if seen_secondary:
-            L += ["", f"Secondary addresses of inventory hosts (`hm_extra_ips`, {len(seen_secondary)}):", ""]
+            L += [f"Secondary addresses of inventory hosts (`hm_extra_ips`, {len(seen_secondary)}):", ""]
             L += [f"- {ip} → `{secondary[ip]}` (secondary)" for ip in seen_secondary]
+            L.append("")
+        inventory_ips = {v.get("ansible_host") for v in ans.values()} | set(matched) | set(secondary)
+        seen_containers = sorted((ip for ip in containers if ip in net["hosts"] and ip not in inventory_ips),
+                                 key=ipaddress.ip_address)
         if seen_containers:
-            L += ["", f"Container addresses (`discovery/*containers.json`, {len(seen_containers)}):", ""]
+            L += [f"Container addresses (`discovery/*containers.json`, {len(seen_containers)}):", ""]
             L += [f"- {ip} → {containers[ip]}" + vlan_suffix(cfg, ip) for ip in seen_containers]
-        L.append("")
+            L.append("")
 
     if snaps:  # VLAN/IP per guest NIC is checked there (GitHub issue #62)
         L += ["Guest NICs (VLAN, addresses, subnet and ansible_host checks): `discovery/guest-map.md`"

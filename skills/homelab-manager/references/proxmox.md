@@ -168,9 +168,13 @@ config_set.py 'sites+={name: offsite, label: Rented server, ranges: [192.0.2.0/2
   sites). A site may set its own `vmid_ranges`, `vmid_scheme` and `templates` (build network) in its entry;
   otherwise the top-level ones apply. `network.vlans` entries name a `site` (a VLAN only there; `site: all` =
   every site on purpose; none = every site too): `--vlan <name>` resolves with the site's VLANs.
+- Network scans: `nmap_scan.py … --site offsite` / `ssh_probe.py --site offsite` → `discovery/network-offsite.json`.
+  `network.excluded_hosts` and `discovery.ignore_unmanaged` take `{ip: 10.0.0.5, site: offsite}` next to plain
+  addresses (plain = every site) — needed when sites reuse the same private ranges.
 - With two or more sites `check_env.py` (`sites:ambiguous`) and the drift report ("Site ambiguity") flag what
   "no site" leaves open: VLANs without a site, a VLAN name shared by entries not all tied to one site,
-  overlapping or missing `ranges`, inventory hosts in no site group, `clusters:` groups across sites.
+  overlapping or missing `ranges`, inventory hosts in no site group, `clusters:` groups across sites, plain
+  excluded/ignored addresses inside ranges two sites share.
 - Templates: templates.md "Another site". Node patching: patching.md "Patch Proxmox nodes" with `--site`.
 
 ## Cloud-init and SSH keys

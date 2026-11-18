@@ -225,12 +225,12 @@ Scripts (all in `$HM/scripts/`):
 | `pve_guest.py status\|start <guest…>` | guest status; start a stopped guest (after an approved reboot or rollback) | — |
 | `lxd_snapshot.py list\|check\|create\|delete\|restore <host…> [--name N]` | LXD/Incus instance snapshots (NAS; host vars lxd_host, lxd_snapshots) (delete/restore: approval) | — |
 | `pve_node_plan.py <node> [--site N] [--max-mem-pct 85] [--no-migrate]` | read-only plan for patching one Proxmox node: migrate, HA, stop/restore per guest | `discovery/pve-patch-[<site>-]<node>.json` |
-| `nmap_scan.py <targets> [--profile ping\|services\|os] [--only-live]` | scope-checked scan | `discovery/network.json` |
+| `nmap_scan.py <targets> [--profile ping\|services\|os] [--only-live] [--site N]` | scope-checked scan | `discovery/network[-<site>].json` |
 | `drift_report.py [--tofu-json F]` / `--stale` | Proxmox ↔ OpenTofu ↔ Ansible ↔ network / is drift.md out of date | `discovery/drift.md` |
 | `tofu_to_inventory.py [--site N]` | OpenTofu output → Ansible inventory | `ansible/inventory/managed/tofu_hosts[-<site>].yml` |
 | `proxmox_to_inventory.py [--vlan N] [--range CIDR] [--type vm\|lxc]` | draft inventory entries for existing Linux guests (review before use) | — (stdout) |
 | `guest_map.py [--site N]` | per-NIC guest map: VLAN, IPs, subnet/ansible_host/VMID checks | `discovery/guest-map.md` |
-| `ssh_probe.py [targets] [--user U] [--draft]` | read-only SSH probe of discovered hosts: hostname, OS, usable Python, OS group | `discovery/network.json` |
+| `ssh_probe.py [targets] [--user U] [--draft] [--site N]` | read-only SSH probe of discovered hosts: hostname, OS, usable Python, OS group | `discovery/network.json` |
 | `routeros_audit.py <hosts> [--group G] [--user U]` | read-only MikroTik RouterOS inspection + audit findings (Markdown report) | `discovery/routeros.json` |
 | `upgrade_notes.py [--all] [--json]` / `--decline ID…` / `--done ID…` | opt-in changes newer releases suggest for this repo (shown by `--sync-managed`); record the user's no / a manual step done | — |
 | `config_set.py 'path=value' 'list+=item' [--delete path] [--dry-run]` | edit homelab.yaml keeping comments and layout | `homelab.yaml` |

@@ -2,12 +2,14 @@
 """Read-only SSH probe of discovered hosts: hostname, OS, Python, virtualisation (for onboarding).
 
     ssh_probe.py [<target> ...] [--user U] [--port 22] [--timeout 10] [--jobs 16]
-                 [--include-managed] [--draft] [--no-write]
+                 [--include-managed] [--draft] [--no-write] [--site NAME]
 
 Targets are IPs, CIDRs or a.b.c.x-y ranges inside network.authorized_ranges (excluded_hosts are skipped).
 A single address is probed as given; a range probes the hosts discovery/network.json knows inside it with
 the SSH port open (run `nmap_scan.py <range> --profile services` first). No target = every such host in
 network.json. Hosts already in the managed Ansible inventory are skipped unless --include-managed.
+--site NAME: the probe runs at that site — its network file (network-<name>.json; the default site:
+network.json) and its {ip, site} exclusions; without it every site's exclusions apply (GitHub issue #72).
 
 It runs the same read-only commands Ansible's `raw` module would (no Python needed on the target), but
 over plain `ssh -T` with BatchMode (agent keys only, never a password prompt), a hard timeout per host
@@ -90,9 +92,9 @@ def ssh_open(h: dict, port: int) -> bool | None:
 
 
 def select(db: dict, targets: list[str], cfg: dict, managed_ips: set[str], include_managed: bool,
-           port: int = 22) -> tuple[list[str], list[str]]:
+           port: int = 22, site_name: str | None = None) -> tuple[list[str], list[str]]:
     """(addresses to probe, skipped with reasons)."""
-    allowed, excluded = hmlib.scan_scope(cfg)
+    allowed, excluded = hmlib.scan_scope(cfg, site_name)
     known = db.get("hosts") or {}
     explicit: set[str] = set()
     nets = []
@@ -296,10 +298,12 @@ def main():
     ap.add_argument("--include-managed", action="store_true")
     ap.add_argument("--draft", action="store_true", help="print a YAML inventory draft instead of the table")
     ap.add_argument("--no-write", action="store_true", help="don't merge results into discovery/network.json")
+    ap.add_argument("--site", help="the site this probe runs at (sites: in homelab.yaml)")
     a = ap.parse_args()
     try:
         cfg = hmlib.load_config()
         problems = hmlib.check_targets(a.targets, cfg) if a.targets else []
+        st = hmlib.scan_site(cfg, a.site)
     except hmlib.ConfigError as e:
         print(f"ssh_probe: {e}", file=sys.stderr)
         return 3
@@ -307,13 +311,13 @@ def main():
         print("Probe refused:\n  " + "\n  ".join(problems), file=sys.stderr)
         return 4
     root = Path(cfg["_root"])
-    net_file = root / "discovery" / "network.json"
+    net_file = hmlib.network_file(root, st["name"], st["default"]) if st else hmlib.network_file(root)
     db = json.loads(net_file.read_text()) if net_file.exists() else {"hosts": {}}
     db.setdefault("hosts", {})
     from drift_report import load_ansible
     managed, _ = load_ansible(root)
     managed_ips = {str(v.get("ansible_host") or "") for v in managed.values()} | set(managed)
-    chosen, skipped = select(db, a.targets, cfg, managed_ips, a.include_managed, a.port)
+    chosen, skipped = select(db, a.targets, cfg, managed_ips, a.include_managed, a.port, st["name"] if st else None)
     for s in skipped:
         print(f"skip {s}", file=sys.stderr)
     if not chosen:

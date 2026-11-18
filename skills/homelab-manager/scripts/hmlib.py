@@ -154,6 +154,11 @@ def sites(cfg: dict) -> list[dict]:
 
 
 def _check_vlan_sites(cfg: dict, names: list[str]):
+    for key in ("network.excluded_hosts", "discovery.ignore_unmanaged"):   # {ip, site} entries (GitHub issue #66)
+        for item in get(cfg, key, []) or []:
+            if isinstance(item, dict) and (not item.get("ip") or str(item.get("site") or "") not in names
+                                           or not item.get("site")):
+                raise ConfigError(f"{key}: {item!r} needs ip and a site from sites: ({', '.join(names) or 'none'}).")
     for v in get(cfg, "network.vlans", []) or []:
         st = v.get("site") if isinstance(v, dict) else None
         if st not in (None, "", EVERY_SITE) and st not in names:
@@ -365,6 +370,17 @@ def site_ambiguities(cfg: dict, host_groups: dict | None = None) -> list[str]:
             out.append(f"sites: {st['name']} has no ranges, so reports don't label its addresses"
                        + (f" (init_repo.py --name-default-site {default} --steps ranges proposes them)"
                           if st["default"] else ""))
+    shared = [(a["name"], b["name"], na, nb) for i, a in enumerate(all_sites) for b in all_sites[i + 1:]
+              for na in a["ranges"] for nb in b["ranges"] if na.version == nb.version and na.overlaps(nb)]
+    for key in SITE_LISTS:
+        for item in get(cfg, key, []) or []:
+            if isinstance(item, dict):
+                continue
+            for n in _networks([item]):
+                hit = next((x for x in shared if any(n.version == r.version and n.overlaps(r) for r in x[2:])), None)
+                if hit:
+                    out.append(f"{key}: {item} is in ranges sites {hit[0]} and {hit[1]} share, so it applies at both — "
+                               f"name the site: {{ip: {item}, site: <name>}}")
     if host_groups is None:
         return out
     loose = sorted(h for h, gs in host_groups.items() if not host_sites(gs))
@@ -450,10 +466,71 @@ def _networks(items) -> list:
     return nets
 
 
-def scan_scope(cfg: dict) -> tuple[list, list]:
+SITE_LISTS = ("network.excluded_hosts", "discovery.ignore_unmanaged")
+
+
+def site_entries(cfg: dict, key: str, site_name: str | None = None) -> list:
+    """Networks of an address list that may name sites (GitHub issue #66): a plain address applies at every site,
+    {ip, site} only at that site. site_name None = the scan's site is unknown: every entry (never fewer)."""
+    known = {s["name"] for s in sites(cfg) if s["name"]}
+    out = []
+    for item in get(cfg, key, []) or []:
+        if isinstance(item, dict):
+            st = str(item.get("site") or "")
+            if not item.get("ip") or not st:
+                raise ConfigError(f"{key}: {item!r} needs ip and site ({{ip: 10.0.0.5, site: <name>}}).")
+            if st not in known:
+                raise ConfigError(f"{key}: {item['ip']} has site {st!r}, which is not in sites: "
+                                  f"({', '.join(sorted(known)) or 'none'}).")
+            if site_name is not None and st != site_name:
+                continue
+            out += _networks([item["ip"]])
+        else:
+            out += _networks([item])
+    return out
+
+
+def scan_scope(cfg: dict, site_name: str | None = None) -> tuple[list, list]:
+    """(authorized ranges, excluded networks) for a scan at site_name; None: every site's exclusions."""
     allowed = _networks(get(cfg, "network.authorized_ranges", []))
-    excluded = _networks(get(cfg, "network.excluded_hosts", []))
+    excluded = site_entries(cfg, "network.excluded_hosts", site_name)
     return allowed, excluded
+
+
+def network_file(root: str | os.PathLike, site_name: str | None = None, default: bool = True) -> Path:
+    """discovery/network.json for the default site, discovery/network-<name>.json for the others (GitHub #72)."""
+    d = Path(root) / "discovery"
+    return d / "network.json" if default or not site_name else d / f"network-{site_name}.json"
+
+
+def scan_site(cfg: dict, name: str | None) -> dict | None:
+    """The site a scan runs at (--site), or None when not given."""
+    return site(cfg, name) if name else None
+
+
+def network_snapshots(cfg: dict) -> list[tuple[dict, dict]]:
+    """[(site, network db)] for every site whose network file exists, the default site first."""
+    out = []
+    for s in sites(cfg):
+        f = network_file(cfg["_root"], s["name"], s["default"])
+        if f.is_file():
+            try:
+                out.append((s, json.loads(f.read_text())))
+            except ValueError:
+                raise ConfigError(f"{f.name} is not valid JSON: run nmap_scan.py again.")
+    return out
+
+
+def outside_site(cfg: dict, st: dict, targets: list[str]) -> list[str]:
+    """Targets not inside the ranges of site st (a warning: the scan may be at another site)."""
+    if not st or not st["ranges"]:
+        return []
+    out = []
+    for t in targets:
+        nets = target_to_network(t) or []
+        if nets and not all(any(n.version == r.version and n.subnet_of(r) for r in st["ranges"]) for n in nets):
+            out.append(t)
+    return out
 
 
 _RANGE_RE = re.compile(r"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.)(\d{1,3})-(\d{1,3})$")

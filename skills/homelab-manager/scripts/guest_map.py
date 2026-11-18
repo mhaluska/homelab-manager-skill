@@ -4,7 +4,7 @@
     guest_map.py [--site NAME] [--out FILE|-] [--no-ansible]
 
 Reads what discovery already collected, contacts nothing: discovery/proxmox*.json (proxmox_inventory.py
---details, every site unless --site), network.vlans in homelab.yaml, discovery/network.json (nmap_scan.py),
+--details, every site unless --site), network.vlans in homelab.yaml, discovery/network[-<site>].json (nmap_scan.py),
 discovery/routeros.json (routeros_audit.py: addresses of RouterOS guests such as a CHR, matched by MAC) and the
 managed Ansible inventory (`ansible-inventory --list`). Writes discovery/guest-map.md (--out - prints it).
 
@@ -222,8 +222,14 @@ def main() -> int:
         print("guest_map: the snapshot has no guest config — refresh it with proxmox_inventory.py --details.",
               file=sys.stderr)
         return 4
-    net_file = root / "discovery" / "network.json"
-    net_hosts = (json.loads(net_file.read_text()).get("hosts") or {}) if net_file.exists() else {}
+    net_hosts = {}
+    try:   # every site's scan (network.json, network-<site>.json — GitHub #72), the default site's first
+        for _, db in hmlib.network_snapshots(cfg):
+            for ip, h in (db.get("hosts") or {}).items():
+                net_hosts.setdefault(ip, h)
+    except hmlib.ConfigError as e:
+        print(f"guest_map: {e}", file=sys.stderr)
+        return 3
     ansible = {} if a.no_ansible else load_ansible(root)[0]
     text = build(cfg, snaps, net_hosts, ansible, routeros_by_mac(root))
     if a.out == "-":
