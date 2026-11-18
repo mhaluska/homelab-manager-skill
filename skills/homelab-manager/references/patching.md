@@ -87,6 +87,9 @@ counts; the play's last task lists them. They are findings too: report them in t
    Docker/Podman containers that ran before must run again; Docker containers that stay down get one restart
    of containerd and then Docker (needed after a containerd upgrade), else the host fails with each
    container's state and error.
+   Proxmox LXC guests: an in-guest reboot can leave the container stopped. Pass `-e hm_scripts=$HM/scripts`
+   with any reboot: after `lxc_reboot_timeout` (300 s) the run starts a stopped container once through the API
+   (`pve_guest.py start`, provisioning token) and reports it, instead of failing after 900 s.
 6. Reboots: a separate, approved run with `-e reboot=if_required` (or the cluster's `reboot`), one cluster member at a
    time (`serial: 1` is the default; never raise it for cluster groups). Wait for health
    checks to pass before the next host — the playbook does this.
@@ -94,7 +97,8 @@ counts; the play's last task lists them. They are findings too: report them in t
 8. Snapshots: once the hosts are verified, offer to remove them — they grow with every write and slow the
    guest's storage: `pve_snapshot.py list <guests>`, then `pve_snapshot.py delete <guests> --name prepatch-<date>`
    (the user's yes; the guard asks). A failed update: `pve_snapshot.py rollback <guest> --name …` (the user's yes;
-   the changes since are lost, and a VM is left stopped — start it afterwards). LXD/Incus hosts: the same with
+   the changes since are lost; a guest that was running is started again and its final status printed,
+   `--no-start` leaves it stopped). LXD/Incus hosts: the same with
    `lxd_snapshot.py list|delete|restore`.
 
 Snapshots by hand ("snapshot web01 before I change it"): `pve_snapshot.py create <guest…> [--name …]`

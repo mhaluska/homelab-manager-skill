@@ -5,7 +5,7 @@
     pve_snapshot.py check <guest…> [--json]                        # read-only: can each one be snapshotted?
     pve_snapshot.py create <guest…> [--name prepatch-YYYYMMDD] [--description TEXT]
     pve_snapshot.py delete <guest…> --name NAME                    # needs the user's yes (the guard asks)
-    pve_snapshot.py rollback <guest> --name NAME                   # needs the user's yes (the guard asks)
+    pve_snapshot.py rollback <guest> --name NAME [--no-start]      # needs the user's yes (the guard asks)
 
 <guest> is a VMID or a guest name from the cluster. create/delete/rollback use the provisioning token
 (proxmox.tokens.provisioning, role HomelabProvisioner: VM.Snapshot; rollback also VM.Snapshot.Rollback
@@ -17,6 +17,8 @@ check (before a patch run with snapshot=true) reports every guest, not only the 
 guest of the cluster (e.g. an LXD container on a NAS: snapshot it there), or no snapshot (Proxmox's snapshot
 feature check, with the reason when the config shows one: a bind or device mount point of a container).
 Exit 0 when all can be snapshotted, 1 when not.
+rollback stops the guest; one that was running is started again (Proxmox's start option, then pve_guest.py's
+start if it is still stopped) unless --no-start, and the final status is printed (GitHub issue #59).
 --site NAME: a guest of another site's Proxmox (sites: in homelab.yaml), with that site's tokens; VMIDs and
 names are only unique within one site.
 """
@@ -121,6 +123,7 @@ def main() -> int:
     ap.add_argument("--name")
     ap.add_argument("--description", default="")
     ap.add_argument("--json", action="store_true", help="check: print the result as JSON")
+    ap.add_argument("--no-start", action="store_true", help="rollback: leave the guest stopped")
     ap.add_argument("--site", help="the site whose Proxmox holds the guests (default: the default site)")
     a = ap.parse_args()
     name = a.name or (default_name() if a.action == "create" else None)
@@ -161,12 +164,14 @@ def main() -> int:
                 print(f"  {s['name']:<40} {when}  {hmlib.clean(s.get('description') or '', 80)}")
         return 0
 
-    apply(pve, a.action, guests, name, a.description)
-    return 0
+    return 1 if apply(pve, a.action, guests, name, a.description, start=not a.no_start) else 0
 
 
-def apply(pve: PVE, action: str, guests: list[dict], name: str, description: str = "") -> None:
-    """create / delete / rollback snapshot `name` on each guest, waiting for every Proxmox task."""
+def apply(pve: PVE, action: str, guests: list[dict], name: str, description: str = "", start: bool = True) -> list[str]:
+    """create / delete / rollback snapshot `name` on each guest, waiting for every Proxmox task. Returns the
+    guests a rollback should have started but that are not running."""
+    import pve_guest  # imports this module
+    down = []
     for g in guests:
         what = f"{action} snapshot {name!r} of {label(g)}"
         existing = {s["name"] for s in snapshots(pve, g)}
@@ -183,10 +188,20 @@ def apply(pve: PVE, action: str, guests: list[dict], name: str, description: str
         elif action == "delete":
             upid = pve.write("DELETE", base(g) + f"/snapshot/{name}")
         else:
-            upid = pve.write("POST", base(g) + f"/snapshot/{name}/rollback")
+            was_running = pve_guest.status(pve, g) == "running"
+            upid = pve.write("POST", base(g) + f"/snapshot/{name}/rollback",
+                             **({"start": 1} if start and was_running else {}))
         if upid:
             wait(pve, g["node"], upid, what)
-        print(f"{label(g)}: {action} {name!r} done")
+        if action != "rollback":
+            print(f"{label(g)}: {action} {name!r} done")
+            continue
+        final = pve_guest.start(pve, g) if start and was_running else pve_guest.status(pve, g)
+        print(f"{label(g)}: rollback {name!r} done, now {final}"
+              + ("" if final == "running" or not (start and was_running) else " — it was running before: start it"))
+        if start and was_running and final != "running":
+            down.append(label(g))
+    return down
 
 
 if __name__ == "__main__":

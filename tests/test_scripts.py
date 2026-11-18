@@ -1413,6 +1413,42 @@ class PveSnapshotTests(unittest.TestCase):  # issue 37
         with self.assertRaises(SystemExit):
             self.s.apply(self.pve, "rollback", gs[1:], "missing")
 
+    def test_rollback_starts_a_guest_that_was_running(self):  # GitHub issue #59
+        import pve_guest
+        state = {"st": "running", "starts": 0}
+        orig = self.pve.get
+
+        def get(path, _method="GET", **params):
+            if path.endswith("/status/current"):
+                return {"status": state["st"]}
+            if path.endswith("/rollback"):
+                state["st"] = "stopped"                 # Proxmox's start was not enough: still stopped
+            if path.endswith("/status/start"):
+                state["st"] = "running"
+                state["starts"] += 1
+            return orig(path, _method, **params)
+        self.pve.get = get
+        g = self.s.find_guests(self.pve, ["web01"])
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            down = self.s.apply(self.pve, "rollback", g, "old")
+        self.assertEqual(down, [])
+        self.assertIn(("POST", "/nodes/pve1/qemu/101/snapshot/old/rollback", {"start": 1}), self.calls)
+        self.assertEqual(state["starts"], 1)
+        self.assertIn("now running", out.getvalue())
+        state["st"] = "stopped"                         # stopped before: left stopped, no start option
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.s.apply(self.pve, "rollback", g, "old")
+        self.assertIn(("POST", "/nodes/pve1/qemu/101/snapshot/old/rollback", {}), self.calls)
+        self.assertEqual(state["starts"], 1)
+        self.assertIn("now stopped", out.getvalue())
+        state["st"] = "running"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.s.apply(self.pve, "rollback", g, "old", start=False)
+        self.assertEqual(state["starts"], 1)
+        state["st"] = "paused"                          # only a stopped guest is started
+        self.assertEqual(pve_guest.start(self.pve, g[0], timeout=0, sleep=lambda _: None), "paused")
+        self.assertEqual(state["starts"], 1)
+
     def test_failed_task_raises(self):
         self.pve.get = lambda path, **_: {"status": "stopped", "exitstatus": "snapshot feature is not available"}
         with self.assertRaises(SystemExit) as e:
