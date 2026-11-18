@@ -120,12 +120,12 @@
           not_ok: >-
             {%- set out = [] -%}
             {%- for c in [{'Name': 'system', 'Status': sys.Status | default({})}] + temps + psus + fans
-                  if c.Status is mapping and c.Status.State | default('') not in ['Absent', 'Disabled']
+                  if c.Status | default(none) is mapping and c.Status.State | default('') not in ['Absent', 'Disabled']
                   and c.Status.Health | default('OK') not in ['OK', none] -%}
               {%- set _ = out.append(c.Name | default('?') ~ ' ' ~ c.Status.Health) -%}
             {%- endfor -%}
             {%- for sub, parts in sys_health.items() if parts is sequence and parts is not string and parts is not mapping -%}
-              {%- for c in parts if c.Status is mapping and c.Status.State | default('') not in ['Absent', 'Disabled']
+              {%- for c in parts if c.Status | default(none) is mapping and c.Status.State | default('') not in ['Absent', 'Disabled']
                     and c.Status.Health | default('OK') not in ['OK', none] -%}
                 {%- set uri = c.values() | select('string') | select('match', '/redfish/') | first | default('?') -%}
                 {%- set _ = out.append(sub ~ ' ' ~ (uri | regex_replace('/$', '') | basename) ~ ' ' ~ c.Status.Health) -%}
