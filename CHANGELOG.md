@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.34.1 — 2026-11-18
+- `ssh_probe.py` no longer uses a Jinja template from the inventory as the SSH user ([#101](https://github.com/mhaluska/homelab-manager-skill/issues/101)): an
+  `ansible_user` such as `"{{ homelab_admin_user | default(omit) }}"` (ansible-inventory does not render templates)
+  is skipped, so the user comes from `defaults.admin_user`.
+- `config_set.py` selects a list entry by name or id ([#99](https://github.com/mhaluska/homelab-manager-skill/issues/99)): `'sites[offsite].proxmox.ca_cert=…'`,
+  `'network.vlans[20].gw=…'`, `--delete 'network.vlans[DMZ]'`; an entry that is missing or not unique is refused,
+  naming the entries. `check_env.py` prints the exact `config_set.py` command for a site's `ca_cert`.
+
 ## 0.34.0 — 2026-11-18
 - OVERVIEW.md shows what the repository knows instead of raw scan output:
   - Network devices ([#94](https://github.com/mhaluska/homelab-manager-skill/issues/94)) start from the inventory groups `routeros`, `unifi`, `bmc`, `qnap` and
