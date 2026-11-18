@@ -17,6 +17,7 @@ attribute drift (cores, memory, node, status), Ansible hosts that don't exist, w
 addresses are Proxmox guests (by config/agent IP, MAC, DNS name), and network devices nobody manages.
 An inventory host's other addresses (router/switch secondary IPs, multi-homed NAS or firewall) go in the host
 var `hm_extra_ips: [10.0.20.1, …]`: they count as that host's, listed as secondary, not as unmanaged devices.
+Interface addresses of audited RouterOS devices (discovery/routeros.json) count as the router's (GitHub issue #106).
 Container addresses from discovery/*containers.json (docker-containers.yml, or a NAS recorded by hand) are
 listed as containers, not as unmanaged devices. Attribute drift inside OpenTofu itself is best seen
 with `tofu plan -refresh-only`; this report covers the gaps between the sources.

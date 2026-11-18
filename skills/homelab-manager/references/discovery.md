@@ -154,7 +154,8 @@ show the VLAN of each address. Collect the table read-only and propose it for th
    network*, not as unknown devices. If VM IPs weren't read (the token lacks
    `VM.GuestAgent.Audit`), say so and point to `docs/proxmox-tokens.md`. A device's other addresses (router or
    switch secondary IPs, multi-homed NAS/firewall) belong in its host var `hm_extra_ips: [ip, …]`, not in
-   `discovery.ignore_unmanaged`: the report then lists them as that host's secondary addresses. With several
+   `discovery.ignore_unmanaged`: the report then lists them as that host's secondary addresses. An audited
+   RouterOS device's interface addresses (`discovery/routeros.json`) count without that. With several
    sites the report lists each site's scan apart, and an ignored address can name its site: `{ip, site}`.
    Name what an unknown device is once the user says (or a router lease shows it): `config_set.py
    'discovery.ignore_unmanaged+={ip: 10.0.0.40, name: Living room TV, mac: aa:bb:cc:dd:ee:ff}'` (`site` optional).
@@ -194,7 +195,8 @@ need `--details`), backup jobs and guests in none, network devices and other sca
 from the inventory groups `routeros`, `unifi`, `bmc`, `qnap` and `appliances` (a device without audit data says so),
 enriched from routeros.json, unifi.json, bmc.json and updates.json. "Other scanned addresses" lists only addresses
 nothing in the repo names: inventory hosts (and their `hm_extra_ips`), Proxmox node and guest addresses, cluster VIPs,
-RouterOS interface addresses, NAS containers, and scanned hosts whose hostname is a known host's. Then containers
+RouterOS interface addresses, NAS containers, `discovery.ignore_unmanaged` (every form; the drift report uses the
+same rules), and scanned hosts whose hostname is a known host's (listed in a collapsed block). Then containers
 (including QNAP's), Ansible groups, clusters and critical hosts, and health: updates of every Proxmox node and
 critical host plus any host with something pending (stale data marked), inventory hosts without update data, BMC
 health, RouterOS findings and updates, capacity and backup warnings, a one-line drift summary; and when each source
