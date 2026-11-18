@@ -11,3 +11,7 @@ bmc_secret_env: BMC
 bmc_user: "{{ lookup('ansible.builtin.env', bmc_secret_env ~ '_USER') }}"
 bmc_password: "{{ lookup('ansible.builtin.env', bmc_secret_env ~ '_PASSWORD') }}"
 bmc_validate_certs: false   # BMCs mostly use self-signed certificates; true once their CA is trusted
+# A known, harmless reason for a health that is not OK (e.g. a tripped chassis intrusion sensor that needs a manual
+# re-arm) is accepted per host, by the cause names bmc-info.yml records in health_causes (an entry also matches as
+# a part of a cause, case-insensitive): bmc_health_accept: [chassis_intrusion]. OVERVIEW.md then shows the health as
+# accepted and counts no warning; any other cause still warns. Only on the user's request.

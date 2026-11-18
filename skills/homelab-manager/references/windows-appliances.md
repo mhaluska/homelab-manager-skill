@@ -63,6 +63,11 @@ Read-only health and firmware from this Mac over HTTPS; no ipmitool, no SSH into
    the CA is trusted. The playbook reads one Redfish category at a time: a category the BMC refuses (iLO 4
    has no UpdateService, Supermicro wants a licence for it) lands in the BMC's `errors` and the rest still
    counts; unreadable chassis data falls back to reading Thermal/Power directly. Keep these when editing it.
+   A health that is not OK comes with `health_causes`: `chassis_intrusion` (the chassis intrusion sensor tripped,
+   from Redfish PhysicalSecurity; it stays tripped until re-armed in the BMC UI) and each component not OK. When
+   the user accepts a known, harmless cause, set the host var `bmc_health_accept: [chassis_intrusion]` (an entry
+   matches a cause or part of it): OVERVIEW.md shows the health as accepted and counts no warning, a new cause
+   still warns. Only on the user's word; note the decision in docs/decisions.md.
 5. Report health problems and outdated firmware; firmware updates and power actions
    (`community.general.redfish_command`, `ipmitool power`) are approval items (the guard asks).
 Keep BMCs on a management network: the drift report flags BMCs found elsewhere.

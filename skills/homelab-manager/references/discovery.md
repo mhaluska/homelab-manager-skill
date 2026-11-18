@@ -199,7 +199,7 @@ RouterOS interface addresses, NAS containers, `discovery.ignore_unmanaged` (ever
 same rules), and scanned hosts whose hostname is a known host's (listed in a collapsed block). Then containers
 (including QNAP's), Ansible groups, clusters and critical hosts, and health: updates of every Proxmox node and
 critical host plus any host with something pending (stale data marked), inventory hosts without update data, BMC
-health, RouterOS findings and updates, capacity and backup warnings, a one-line drift summary; and when each source
+health with its cause (accepted per host: `bmc_health_accept`), RouterOS findings and updates, capacity and backup warnings, a one-line drift summary; and when each source
 was collected. With several sites, a sites diagram first.
 - Regenerate it after every verified change (operating loop step 9) and commit it with that change. The output is
   deterministic (no "generated at" time), so the diff shows what changed. `--check` exits 1 when it is stale; so

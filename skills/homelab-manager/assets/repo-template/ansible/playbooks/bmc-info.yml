@@ -12,6 +12,10 @@
 # - chassis data unreadable (Supermicro X10: invalid UTF-8 in Chassis/1 from a corrupt FRU serial) → Thermal
 #   and Power are read directly with uri.
 # - power draw: PowerMetrics.AverageConsumedWatts before PowerConsumedWatts (nonsense on some Supermicro).
+# - why the health is not OK (GitHub #103): health_causes lists chassis_intrusion (Chassis PhysicalSecurity, read
+#   directly: redfish_info leaves it out) and every component not OK. Supermicro returns invalid UTF-8 and raw
+#   control characters in Chassis/Systems JSON: parsed leniently. A cause the user accepts goes into the host var
+#   bmc_health_accept (group_vars/bmc.yml); overview.py then shows the health as accepted, a new cause still warns.
 - name: BMC inventory (Redfish, read-only)
   hosts: "{{ target | default('bmc') }}"
   gather_facts: false
@@ -94,6 +98,73 @@
           ansible.builtin.set_fact:
             bmc_errors: "{{ bmc_errors | combine({'Chassis (direct)': ansible_failed_result.msg | default('failed')}) }}"
 
+    - name: Chassis collection (for PhysicalSecurity)
+      ansible.builtin.uri:
+        url: "https://{{ bmc_address }}/redfish/v1/Chassis"
+        url_username: "{{ bmc_user }}"
+        url_password: "{{ bmc_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ bmc_validate_certs | bool }}"
+        return_content: true
+      register: bmc_chassis_list
+      ignore_errors: true
+
+    - name: Intrusion sensor of each chassis, as raw bytes (uri cannot return the invalid UTF-8 Supermicro sends)
+      block:
+        - name: Scratch directory for the raw answers
+          ansible.builtin.tempfile:
+            state: directory
+            suffix: .bmc
+          register: bmc_tmp
+          changed_when: false   # scratch files only
+
+        - name: Each chassis read directly
+          ansible.builtin.uri:
+            url: "https://{{ bmc_address }}{{ item['@odata.id'] }}"
+            url_username: "{{ bmc_user }}"
+            url_password: "{{ bmc_password }}"
+            force_basic_auth: true
+            validate_certs: "{{ bmc_validate_certs | bool }}"
+            dest: "{{ bmc_tmp.path }}/chassis{{ i }}.json"
+          loop: "{{ bmc_chassis_list.json.Members | default([]) if bmc_chassis_list is succeeded else [] }}"
+          loop_control:
+            label: "{{ item['@odata.id'] }}"
+            index_var: i
+          register: bmc_chassis_each
+          changed_when: false   # scratch files only
+          ignore_errors: true
+
+        - name: Read the answers back
+          ansible.builtin.slurp:
+            src: "{{ item.path }}"
+          loop: "{{ bmc_chassis_each.results | default([]) | selectattr('path', 'defined') | list }}"
+          loop_control:
+            label: "{{ item.path | basename }}"
+          register: bmc_chassis_raw
+
+        - name: Intrusion sensors (lenient JSON, any byte, control characters dropped)
+          ansible.builtin.set_fact:
+            bmc_intrusion: >-
+              {%- set out = [] -%}
+              {%- for r in bmc_chassis_raw.results | default([]) -%}
+                {%- set doc = r.content | b64decode(encoding='latin-1') | regex_replace('[\\x00-\\x1f]', ' ') | from_json -%}
+                {%- if (doc.PhysicalSecurity | default({})).IntrusionSensor is defined -%}
+                  {%- set _ = out.append(doc.PhysicalSecurity.IntrusionSensor) -%}
+                {%- endif -%}
+              {%- endfor -%}
+              {{ out }}
+      rescue:
+        - name: No intrusion data (the rest still counts)
+          ansible.builtin.set_fact:
+            bmc_errors: "{{ bmc_errors | combine({'PhysicalSecurity': ansible_failed_result.msg | default('failed')}) }}"
+      always:
+        - name: Remove the scratch directory
+          ansible.builtin.file:
+            path: "{{ bmc_tmp.path }}"
+            state: absent
+          when: bmc_tmp.path is defined
+          changed_when: false   # scratch files only
+
     - name: Summarise
       ansible.builtin.set_fact:
         bmc_summary:
@@ -117,26 +188,32 @@
           psus: "{{ psus | map('dict2items') | map('selectattr', 'key', 'in', ['Name', 'Model', 'PowerCapacityWatts', 'Status'])
                     | map('items2dict') | list }}"
           fans: "{{ fans | length }}"
-          not_ok: >-
-            {%- set out = [] -%}
-            {%- for c in [{'Name': 'system', 'Status': sys.Status | default({})}] + temps + psus + fans
-                  if c.Status | default(none) is mapping and c.Status.State | default('') not in ['Absent', 'Disabled']
-                  and c.Status.Health | default('OK') not in ['OK', none] -%}
-              {%- set _ = out.append(c.Name | default('?') ~ ' ' ~ c.Status.Health) -%}
-            {%- endfor -%}
-            {%- for sub, parts in sys_health.items() if parts is sequence and parts is not string and parts is not mapping -%}
-              {%- for c in parts if c.Status | default(none) is mapping and c.Status.State | default('') not in ['Absent', 'Disabled']
-                    and c.Status.Health | default('OK') not in ['OK', none] -%}
-                {%- set uri = c.values() | select('string') | select('match', '/redfish/') | first | default('?') -%}
-                {%- set _ = out.append(sub ~ ' ' ~ (uri | regex_replace('/$', '') | basename) ~ ' ' ~ c.Status.Health) -%}
-              {%- endfor -%}
-            {%- endfor -%}
-            {{ out }}
+          not_ok: "{{ bmc_not_ok }}"
+          intrusion: "{{ (bmc_intrusion | default([]) | reject('eq', 'Normal') | first)
+                         | default(bmc_intrusion | default([]) | first | default(none)) }}"
           firmware: "{{ (bmc_rf.Update.firmware.entries | default([])) | map('dict2items')
                         | map('selectattr', 'key', 'in', ['Name', 'Version']) | map('items2dict') | list }}"
           errors: "{{ bmc_errors }}"
+          health_causes: >-
+            {{ (['chassis_intrusion'] if bmc_intrusion | default([]) | reject('eq', 'Normal') | list else [])
+               + (bmc_not_ok | reject('match', '^system ') | list) }}
           source: "{{ 'redfish_info' if bmc_direct is not defined or bmc_direct is skipped else 'redfish_info + direct Thermal/Power' }}"
       vars:
+        bmc_not_ok: >-
+          {%- set out = [] -%}
+          {%- for c in [{'Name': 'system', 'Status': sys.Status | default({})}] + temps + psus + fans
+                if c.Status | default(none) is mapping and c.Status.State | default('') not in ['Absent', 'Disabled']
+                and c.Status.Health | default('OK') not in ['OK', none] -%}
+            {%- set _ = out.append(c.Name | default('?') ~ ' ' ~ c.Status.Health) -%}
+          {%- endfor -%}
+          {%- for sub, parts in sys_health.items() if parts is sequence and parts is not string and parts is not mapping -%}
+            {%- for c in parts if c.Status | default(none) is mapping and c.Status.State | default('') not in ['Absent', 'Disabled']
+                  and c.Status.Health | default('OK') not in ['OK', none] -%}
+              {%- set uri = c.values() | select('string') | select('match', '/redfish/') | first | default('?') -%}
+              {%- set _ = out.append(sub ~ ' ' ~ (uri | regex_replace('/$', '') | basename) ~ ' ' ~ c.Status.Health) -%}
+            {%- endfor -%}
+          {%- endfor -%}
+          {{ out }}
         sys: "{{ (bmc_rf.Systems.system.entries | default([[{}, {}]]))[0][1] }}"
         sys_health: "{{ (bmc_rf.Systems.health_report.entries | default([[{}, {}]]))[0][1] }}"
         mgr: "{{ (bmc_rf.Manager.manager.entries | default([[{}, {}]]))[0][1] }}"
@@ -161,6 +238,7 @@
           {{ bmc_summary.power_watts }} W, hottest {{ bmc_summary.hottest.Name | default('?') }}
           {{ bmc_summary.hottest.ReadingCelsius | default('?') }} °C
           {%- if bmc_summary.not_ok %}; not OK: {{ bmc_summary.not_ok | join(', ') }}{% endif %}
+          {%- if bmc_summary.health_causes %}; causes: {{ bmc_summary.health_causes | join(', ') }}{% endif %}
           {%- if bmc_summary.errors %}; not read: {{ bmc_summary.errors | list | join(', ') }}{% endif %}
 
 - name: Write discovery/bmc.json

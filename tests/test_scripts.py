@@ -1626,7 +1626,7 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertIn("| web | Rocky 9 | – | 3 | – | – | 2026-01-01 (stale) | updates pending |", health)
         self.assertIn("Not checked yet (`check-updates.yml`): db, rtr1.", health)
         self.assertIn("Not covered by `check-updates.yml` (see Network devices): bmc1, sw1, sw2.", health)
-        self.assertIn("BMC health: bmc1 Critical (not OK: psu).", health)
+        self.assertIn("BMC health: bmc1 Critical (not OK: psu; bmc-info.yml records the cause).", health)
         self.assertIn("RouterOS updates available: sw1 7.21.4 → 7.21.5.", health)
         site_map = md.split("```mermaid")[1]                                                      # #93
         self.assertIn('subgraph default_g0["gateway sw1"]', site_map)
@@ -1680,6 +1680,28 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertNotIn("---", out)
         md = run("overview.py", "--no-ansible", "--out", "-", cwd=self.d).stdout
         self.assertIn("1 site, 1 Proxmox node, 2 guests.", md)
+
+    def test_bmc_accepted_health(self):  # GitHub issue #103
+        sys.path.insert(0, str(SCRIPTS))
+        import hmlib
+        import overview
+        d = {"health": "Critical", "not_ok": ["system Critical"], "health_causes": ["chassis_intrusion"]}
+        self.assertTrue(overview.bmc_health(d, {"bmc_health_accept": ["chassis_intrusion"]})["accepted"])
+        self.assertTrue(overview.bmc_health(d, {"bmc_health_accept": "Intrusion"})["accepted"])     # part, any case
+        self.assertFalse(overview.bmc_health(d, {})["accepted"])
+        two = dict(d, health_causes=["chassis_intrusion", "PSU 2 Critical"])
+        b = overview.bmc_health(two, {"bmc_health_accept": ["chassis_intrusion"]})
+        self.assertFalse(b["accepted"])                                                            # a new cause
+        self.assertEqual(overview.bmc_text(b), "Critical (cause: PSU 2 Critical; accepted: chassis_intrusion)")
+        self.assertFalse(overview.bmc_health(dict(d, health_causes=[]), {"bmc_health_accept": ["x"]})["accepted"])
+        self.assertEqual(overview.bmc_text(overview.bmc_health(dict(d, health_causes=[]), {})), "Critical (cause unknown)")
+        self.assertFalse(overview.bmc_health({"health": "OK", "health_causes": []}, {"bmc_health_accept": ["x"]})["accepted"])
+        Path(self.d, "discovery/bmc.json").write_text(json.dumps({"hosts": {"bmc1": dict(d, model="X10", power_state="On")}}))
+        managed = {"bmc1": {"ansible_host": "10.9.20.9", "_groups_all": ["appliances", "bmc"],
+                            "bmc_health_accept": ["chassis_intrusion"]}}
+        md = overview.render(hmlib.load_config(self.d), managed, "test")
+        self.assertIn("| BMC | bmc1 | X10 | 10.9.20.9 | – | health Critical (accepted: chassis\\_intrusion), power On", md)
+        self.assertIn("BMC health: bmc1 Critical (accepted: chassis\\_intrusion).", md)
 
     def test_lists_never_cut(self):  # GitHub issue #115
         sys.path.insert(0, str(SCRIPTS))

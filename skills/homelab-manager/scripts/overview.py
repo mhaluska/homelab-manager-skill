@@ -144,6 +144,35 @@ def os_top(os) -> str:
     return str(os or "")
 
 
+def bmc_health(d: dict, host_vars: dict) -> dict:
+    """Health of one BMC with its causes (GitHub issue #103): bmc-info.yml records health_causes (chassis_intrusion,
+    components not OK); the host var bmc_health_accept names causes the user accepted (equal to or part of a cause,
+    case-insensitive). accepted: the health is not OK and every recorded cause is accepted."""
+    health = str(d.get("health") or "?")
+    acc = host_vars.get("bmc_health_accept") or []
+    acc = [str(a).lower() for a in ([acc] if isinstance(acc, str) else acc if isinstance(acc, list) else []) if a]
+    causes = [str(c) for c in d.get("health_causes") or []]
+    open_ = [c for c in causes if not any(a == c.lower() or a in c.lower() for a in acc)]
+    bad = health not in ("OK", "?")
+    return {"health": health, "bad": bad, "causes": causes, "open": open_, "recorded": "health_causes" in d,
+            "accepted": bad and bool(causes) and not open_,
+            "not_ok": [str(x) for x in d.get("not_ok") or []]}
+
+
+def bmc_text(b: dict) -> str:
+    """"Critical (accepted: chassis_intrusion)", "Critical (cause: psu PS2 Critical)", "OK"."""
+    if not b["bad"]:
+        return b["health"]
+    if b["accepted"]:
+        return f"{b['health']} (accepted: {', '.join(b['causes'])})"
+    if b["causes"]:
+        return f"{b['health']} (cause: {', '.join(b['open'])}" + (f"; accepted: {', '.join(c for c in b['causes'] if c not in b['open'])}"
+                                                                  if len(b["open"]) < len(b["causes"]) else "") + ")"
+    if b["recorded"]:
+        return f"{b['health']} (cause unknown)"
+    return f"{b['health']} (not OK: {', '.join(b['not_ok']) or '?'}; bmc-info.yml records the cause)"
+
+
 def short_version(v) -> str:
     """pve-manager/9.1.11/8eac… → 9.1.11"""
     m = re.search(r"/(\d[\w.\-]*)", str(v or ""))
@@ -340,10 +369,9 @@ def device_rows(cfg: dict, st: dict, docs: dict, managed: dict, net: dict, unifi
         elif kind == "BMC":
             d = bmc.get(h)
             if d:
-                bad = d.get("not_ok") or []
                 r.update(model=d.get("model") or "", firmware=d.get("bmc_firmware") or "",
-                         state=f"health {d.get('health') or '?'}, power {d.get('power_state') or '?'}"
-                         + (f", not OK: {', '.join(map(str, bad))}" if bad else "") + f" ({stamp(d.get('collected_at'))})")
+                         state=f"health {bmc_text(bmc_health(d, v))}, power {d.get('power_state') or '?'}"
+                         + f" ({stamp(d.get('collected_at'))})")
             else:
                 r["state"] = "no data (bmc-info.yml)"
         elif kind == "QNAP NAS":
@@ -737,8 +765,7 @@ def health(cfg: dict, root: Path, docs: dict, managed: dict, warnings: list[str]
         out.append("")
     bmc = docs["bmc.json"].get("hosts") or {}
     if bmc:
-        out += ["BMC health: " + ", ".join(f"{cell(h)} {cell(d.get('health') or '?')}"
-                                          + (f" (not OK: {cell(', '.join(map(str, d.get('not_ok'))))})" if d.get("not_ok") else "")
+        out += ["BMC health: " + ", ".join(f"{cell(h)} {cell(bmc_text(bmc_health(d, managed.get(h) or {})))}"
                                           for h, d in sorted(bmc.items())) + ".", ""]
     devs = docs["routeros.json"].get("devices") or {}
     ros = [(h, f) for h, d in sorted(devs.items()) for f in d.get("findings") or []]
