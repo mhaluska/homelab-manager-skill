@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.31.0 — 2026-11-18
+- Debian release upgrade ([#84](https://github.com/mhaluska/homelab-manager-skill/issues/84)): `playbooks/dist-upgrade-debian.yml -e target=<host>
+  -e target_release=<next codename>`, one release per run, one host at a time. With `--check` it is a read-only
+  pre-flight (next release only, Debian only, not a Proxmox node, free space, the current release patched,
+  `dpkg --audit`, held packages, `sshd -t`, foreign APT sources and pin files). The upgrade (the guard asks)
+  snapshots the guest, backs up the APT/SSH/PAM/SSSD/Kerberos/sudo configuration, rewrites the Debian sources
+  (`tasks/debian-sources.sh`; `foreign_sources=disable|keep`), stops before anything changes if the upgrade would
+  remove a package matching `autoremove_protect`, runs `upgrade --without-new-pkgs` and `full-upgrade
+  --force-confold` in a transient systemd unit that survives an sshd restart, checks `sshd -t` before the reboot,
+  then the new release, `health_services` and failed units. Ubuntu is not covered. references/patching.md
+  "Debian release upgrade".
+- RouterOS management access ([#80](https://github.com/mhaluska/homelab-manager-skill/issues/80)): `routeros_audit.py` flags `ssh`, `winbox`, `www-ssl` and `api-ssl`
+  without an address limit, and the MAC server, MAC Winbox or neighbour discovery on all interfaces, with the
+  command that fixes it. New `playbooks/routeros-restrict-management.yml` (RouterOS 7) limits the services to the
+  new `network.management_ranges` (homelab.yaml) and MAC/discovery to `routeros_management_interface_list` (per
+  device), each part behind its own switch. It runs `--check` first and applies only with
+  `-e homelab_read_only=false`. It refuses when its own SSH session comes from outside the ranges, so it can't
+  lock Ansible out, and it reads the state back afterwards.
+- QNAP NAS ([#81](https://github.com/mhaluska/homelab-manager-skill/issues/81)): `check-updates.yml` also covers the `qnap` group (raw only, reads files): the installed
+  QTS / QuTS hero firmware with the time QTS last checked for a new one, and each installed app with the newest
+  version for this platform in App Center's catalogue as QTS cached it, when that is newer (`pending`). The
+  available firmware version stays in the QTS UI (QNAP's public feed is outdated); nothing asks QNAP's servers.
+- Upgrade notes (opt-in): `dist-upgrade-debian`, `routeros-restrict-management`, `qnap-update-report`.
+
 ## 0.30.1 — 2026-11-18
 - `ssh_probe.py <ip>` without `--site` files each address under its own site ([#82](https://github.com/mhaluska/homelab-manager-skill/issues/82)): its inventory host's
   `site_<name>` group, else the site whose `ranges` hold it, else the default site; a range goes to the site holding
