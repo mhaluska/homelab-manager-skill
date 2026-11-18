@@ -156,7 +156,8 @@ config_set.py 'sites+={name: offsite, label: Rented server, ranges: [192.0.2.0/2
 - Read-only: `proxmox_inventory.py --site offsite` → its part of `discovery/proxmox.json` (`--all-sites` reads
   each and carries on past an unreachable one); `proxmox_to_inventory.py --site offsite` drafts into `site_offsite`.
   The drift report covers every site (VMIDs are shown as `<site>/<vmid>`: they repeat across sites).
-- `pve_snapshot.py --site offsite …`; patch-linux.yml uses the host's site by itself. `with_secrets.py <secret>`
+- `pve_snapshot.py --site offsite …`; without `--site` a guest named as its inventory host takes the site of its
+  `site_<name>` group (VMIDs: the default site); patch-linux.yml uses the host's site by itself. `with_secrets.py <secret>`
   connects to the site whose tokens name that secret.
 - Provisioning there: `init_repo.py --add-site offsite` (after the site is in homelab.yaml) scaffolds its
   OpenTofu environment `tofu/environments/offsite` (own state; fill `defaults` from `sites[offsite].proxmox`) and a

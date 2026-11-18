@@ -1576,6 +1576,26 @@ class PveSnapshotTests(unittest.TestCase):  # issue 37
             return "UPID:pve1:1"
         self.pve.get = get
 
+    def test_infer_site(self):  # issue 83
+        cfg = {"_root": "/nonexistent", "proxmox": {"endpoint": "https://pve1.example:8006"},
+               "sites": [{"name": "home"}, {"name": "offsite", "ranges": ["192.0.2.0/24"],
+                                            "proxmox": {"endpoint": "https://pve-off.example:8006"}}]}
+        managed = {"jump": {"ansible_host": "10.0.0.9", "_groups_all": ["linux", "site_offsite"]},
+                   "vpn": {"ansible_host": "192.0.2.4"}, "web01": {"ansible_host": "10.0.0.5"}}
+        infer = lambda gs: self.s.infer_site(cfg, gs, managed)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(infer(["jump"]), "offsite")                  # site_<name> group
+            self.assertEqual(infer(["vpn", "123"]), "offsite")            # ranges; a VMID says nothing
+        self.assertIn("site offsite (from the inventory", err.getvalue())
+        self.assertIsNone(infer(["web01"]))                               # default site
+        self.assertIsNone(infer(["101", "nope"]))
+        three = {**cfg, "sites": cfg["sites"] + [{"name": "lab", "ranges": ["10.0.0.0/24"]}]}
+        import hmlib
+        with self.assertRaises(hmlib.ConfigError) as e:
+            self.s.infer_site(three, ["jump", "web01"], managed)
+        self.assertIn("guests of different sites (jump: offsite, web01: lab)", str(e.exception))
+        self.assertIsNone(self.s.infer_site({"_root": "/x", "proxmox": {"endpoint": "x"}}, ["jump"], managed))
+
     def test_resolves_guests_by_vmid_or_name(self):
         gs = self.s.find_guests(self.pve, ["web01", "901"])
         self.assertEqual([(g["vmid"], g["type"], g["node"]) for g in gs], [(101, "qemu", "pve1"), (901, "lxc", "pve2")])

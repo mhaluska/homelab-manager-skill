@@ -20,7 +20,8 @@ Exit 0 when all can be snapshotted, 1 when not.
 rollback stops the guest; one that was running is started again (Proxmox's start option, then pve_guest.py's
 start if it is still stopped) unless --no-start, and the final status is printed (GitHub issue #59).
 --site NAME: a guest of another site's Proxmox (sites: in homelab.yaml), with that site's tokens; VMIDs and
-names are only unique within one site.
+names are only unique within one site. Without it, a guest that is an inventory host picks its site from its
+site_<name> group (else from the site ranges holding its ansible_host); VMIDs use the default site.
 """
 from __future__ import annotations
 
@@ -116,6 +117,27 @@ def label(g: dict) -> str:
     return f"{g['vmid']} {g.get('name') or ''}".strip()
 
 
+def infer_site(cfg: dict, guests: list[str], managed: dict | None = None) -> str | None:
+    """The site of guests named without --site (GitHub issue #83): the inventory site_<name> group of a guest
+    that is an inventory host, else the site whose ranges hold its ansible_host. VMIDs and unknown names say
+    nothing. None: the default site. Guests of different sites are refused (VMIDs repeat across sites)."""
+    names = [g for g in guests if not g.isdigit()]
+    if len(hmlib.sites(cfg)) < 2 or not names:
+        return None
+    if managed is None:
+        from drift_report import load_ansible
+        managed, _ = load_ansible(Path(cfg["_root"]))
+    found = {g: st for g in names if (st := hmlib.target_site(cfg, managed, g))}
+    by_site = sorted({st["name"] for st in found.values()})
+    if len(by_site) > 1:
+        raise hmlib.ConfigError("guests of different sites (" + ", ".join(f"{g}: {st['name']}" for g, st
+                                in sorted(found.items())) + "): run once per site with --site.")
+    if not by_site or found[next(iter(found))]["default"]:
+        return None
+    print(f"pve_snapshot: site {by_site[0]} (from the inventory; --site to override)", file=sys.stderr)
+    return by_site[0]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("action", choices=["list", "check", "create", "delete", "rollback"])
@@ -124,7 +146,8 @@ def main() -> int:
     ap.add_argument("--description", default="")
     ap.add_argument("--json", action="store_true", help="check: print the result as JSON")
     ap.add_argument("--no-start", action="store_true", help="rollback: leave the guest stopped")
-    ap.add_argument("--site", help="the site whose Proxmox holds the guests (default: the default site)")
+    ap.add_argument("--site", help="the site whose Proxmox holds the guests (default: the guests' inventory "
+                                   "site, else the default site)")
     a = ap.parse_args()
     name = a.name or (default_name() if a.action == "create" else None)
     if a.action in ("delete", "rollback") and not name:
@@ -135,7 +158,8 @@ def main() -> int:
         ap.error("rollback one guest at a time")
     try:
         cfg = hmlib.load_config()
-        px = hmlib.proxmox_site(cfg, a.site)
+        site = a.site if a.site else infer_site(cfg, a.guests)
+        px = hmlib.proxmox_site(cfg, site)
         secret = hmlib.proxmox_token_name(px, "read_only" if a.action in ("list", "check") else "provisioning")
         pve = PVE(px["endpoint"], hmlib.read_secret(cfg, secret), hmlib.proxmox_ssl_context(cfg, px))
     except hmlib.ConfigError as e:
