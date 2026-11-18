@@ -207,13 +207,19 @@ def collect(host: str, user: str | None, port: int, timeout: int, runner=ssh_run
 
 # --------------------------------------------------------------------------- findings
 
+def ip_services(dev: dict) -> list[dict]:
+    """`/ip service` rows without the dynamic ones: RouterOS 7 lists each open connection to a service as a
+    dynamic row (flags D, c; local/remote), which is not a second enabled service."""
+    return [r for r in dev.get("services") or [] if "D" not in str(r.get("_flags") or "")]
+
+
 def findings(dev: dict, today: dt.date | None = None) -> list[tuple[str, str]]:
     """[(severity high|medium|low|info, text)] for one device."""
     today = today or dt.date.today()
     out = []
     if not dev.get("reachable"):
         return [("high", f"not inspected: {dev['errors'].get('resource')}")]
-    for row in dev.get("services") or []:
+    for row in ip_services(dev):
         name = row.get("name", "")
         if name in PLAINTEXT and enabled(row):
             sev, alt = PLAINTEXT[name]
@@ -224,7 +230,7 @@ def findings(dev: dict, today: dt.date | None = None) -> list[tuple[str, str]]:
                         + f"): disable it and use {alt}" + ("" if where else ", or at least limit it to the "
                                                             "management network")))
     for name in open_management(dev):
-        port = next((r.get("port", "?") for r in dev.get("services") or [] if r.get("name") == name), "?")
+        port = next((r.get("port", "?") for r in ip_services(dev) if r.get("name") == name), "?")
         out.append(("low", f"`{name}` reachable from any address (port {port}): limit it to the management network"))
     for section, key, sev, what in INTERFACE_LISTS:
         if (dev.get(section) or {}).get(key) == "all":
@@ -290,13 +296,13 @@ def version_drift(devs: list[dict]) -> dict[str, list[str]]:
 
 def plaintext_enabled(dev: dict) -> list[str]:
     """Plain-text services enabled on a device, in RouterOS's order."""
-    return [r.get("name") for r in dev.get("services") or [] if r.get("name") in PLAINTEXT and enabled(r)]
+    return [r.get("name") for r in ip_services(dev) if r.get("name") in PLAINTEXT and enabled(r)]
 
 
 def open_management(dev: dict) -> list[str]:
     """Management services enabled without an address limit (GitHub issue #80); live connections (D) don't count."""
-    return [r.get("name") for r in dev.get("services") or [] if r.get("name") in MANAGEMENT and enabled(r)
-            and "D" not in r.get("_flags", "") and not r.get("address")]
+    return [r.get("name") for r in ip_services(dev) if r.get("name") in MANAGEMENT and enabled(r)
+            and not r.get("address")]
 
 
 def wide_open(dev: dict) -> bool:

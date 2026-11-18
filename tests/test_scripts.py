@@ -3568,6 +3568,14 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         return subprocess.run([sys.executable, str(SCRIPTS / "routeros_audit.py"), *args], cwd=self.d,
                               env=self.env, capture_output=True, text=True)
 
+    def test_live_connection_is_not_a_second_service(self):
+        dev = {"reachable": True, "services": [
+            {"name": "api", "port": "8728", "_flags": ""},
+            {"name": "api", "port": "8728", "_flags": "Dc", "local": "10.9.0.1", "remote": "10.9.0.5:50150"}]}
+        texts = [t for _, t in self.ra.findings(dev)]
+        self.assertEqual(sum("plain-text service `api`" in t for t in texts), 1)
+        self.assertEqual(self.ra.plaintext_enabled(dev), ["api"])
+
     def test_parsers(self):
         rows = self.ra.parse_terse(' 0 X name=ftp port=21 address=""\n 1   name=ssh comment="a b=c"\nFlags: X\n')
         self.assertEqual(rows, [{"name": "ftp", "port": "21", "address": "", "_flags": "X"},
