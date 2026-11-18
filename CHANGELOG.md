@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.29.1 — 2026-11-18
+- `init_repo.py --sync-managed` no longer says "has local edits, so --sync-managed did not replace it" about a
+  file the same run replaces ([#76](https://github.com/mhaluska/homelab-manager-skill/issues/76)). A note about several files stays a suggestion while an edited one is
+  left and names only those: `host-files-site-tag` now checks `check-updates.yml`, `docker-containers.yml` and
+  `bmc-info.yml`, not only the first. Upgrade notes get an optional `edited` sentence, and `file_lacks` takes a
+  list of `[path, text]` pairs.
+- UniFi controllers without API keys ([#77](https://github.com/mhaluska/homelab-manager-skill/issues/77)): `unifi-info.yml` takes `unifi_auth: login` (in
+  `group_vars/unifi.yml`) for a self-hosted UniFi Network application with no Integrations page. It reads the
+  classic API with a read-only local admin (`secrets.unifi`, kind `user_password`, env `UNIFI`;
+  `unifi_controller_url`) and logs out at the end. It writes the same per-site part of `discovery/unifi.json`,
+  with only the device fields the Integration API reports (no device keys). `api_key` stays the default.
+- `unifi-info.yml` no longer fails on its first run, before `discovery/unifi.json` exists. `bmc-info.yml` no
+  longer stops at a Redfish sensor without `Status`.
+- Guard: write requests to the classic UniFi API (`/api/s/<site>/cmd|rest|set|upd|group`) ask, like
+  Integration API writes.
+- Upgrade notes: `unifi-per-site` keeps a classic-login copy on `unifi_auth: login` instead of an API key the
+  controller can't create; `unifi-login-mode` offers the template to repos that adapted their own copy.
+
 ## 0.29.0 — 2026-11-18
 - Discovery files never carry a site in their name ([#75](https://github.com/mhaluska/homelab-manager-skill/issues/75)): one file per kind with every site inside.
   `proxmox.json`, `network.json`, `pve-patch.json` and `unifi.json` hold `{"sites": {"<site>": …}}` (a repo
