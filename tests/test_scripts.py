@@ -3749,6 +3749,24 @@ sys.stdout.write(out[cmd])
 '''
 
 
+class SshProbeMergeTests(unittest.TestCase):  # GitHub issue #110
+    def test_failure_keeps_last_good_facts(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import ssh_probe
+        good = {"ok": True, "hostname": "kvm1", "kernel": "Linux 5.10", "user": "root", "collected_at": "2026-01-01"}
+        bad = {"ok": False, "error": "auth failed", "user": "admin", "collected_at": "2026-01-02"}
+        kept = ssh_probe.merge_probe(good, bad)
+        self.assertEqual(kept["hostname"], "kvm1")
+        self.assertTrue(kept["ok"])
+        self.assertEqual(kept["collected_at"], "2026-01-01")
+        self.assertEqual((kept["last_error"], kept["last_error_at"], kept["last_error_user"]),
+                         ("auth failed", "2026-01-02", "admin"))
+        self.assertEqual(ssh_probe.merge_probe(kept, {**bad, "error": "x"})["last_error"], "x")
+        self.assertEqual(ssh_probe.merge_probe(kept, good), good)            # a good probe clears the error
+        self.assertEqual(ssh_probe.merge_probe(None, bad), bad)
+        self.assertEqual(ssh_probe.merge_probe(bad, bad), bad)
+
+
 class RouterosAuditTests(unittest.TestCase):  # issue 26
     def setUp(self):
         sys.path.insert(0, str(SCRIPTS))
