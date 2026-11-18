@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.28.0 — 2026-11-18
+- Discovery layout ([#73](https://github.com/mhaluska/homelab-manager-skill/issues/73)): `discovery/README.md` lists every file the scripts and playbooks write there, with the
+  naming rule: a per-site file (`proxmox`, `network`, `pve-patch`) has no site in its name for the default site
+  and the site's name for the others; files keyed by inventory host (`updates`, `containers`, `bmc`, `unifi`,
+  `routeros`) hold every site in one file. A test keeps the README complete. Not renamed: the proposed
+  `<site>-<kind>` names for every file, including the default site.
+- Upgrade note (repos whose `bmc-info.yml` writes one file per BMC): replace it with the template, which merges
+  every BMC into `discovery/bmc.json`, and remove the per-BMC files.
+- Upgrade note (repos with an edited older `discovery/README.md`): replace it with the template; unedited copies
+  are replaced by `--sync-managed`.
+
 ## 0.27.0 — 2026-11-18
 - Sites: network scans know their site ([#72](https://github.com/mhaluska/homelab-manager-skill/issues/72)). `nmap_scan.py --site NAME` and `ssh_probe.py --site NAME` write
   `discovery/network-<name>.json` for a site other than the default (which keeps `network.json`) and warn about
