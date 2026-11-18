@@ -81,6 +81,11 @@
                           'ports': ports | unique,
                           'compose_project': labels['com.docker.compose.project']
                                              | default(labels['io.podman.compose.project'] | default(none)),
+                          'compose_working_dir': labels['com.docker.compose.project.working_dir'] | default(none),
+                          'compose_config_files': (labels['com.docker.compose.project.config_files'] | split(',')
+                                                   | map('trim') | select | list)
+                                                  if labels['com.docker.compose.project.config_files'] is defined
+                                                  else none,
                           'auto_update': labels['com.centurylinklabs.watchtower.enable']
                                          | default(labels['io.containers.autoupdate'] | default(none))}) -%}
                   {%- endfor -%}

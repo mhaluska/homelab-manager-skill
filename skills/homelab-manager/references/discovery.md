@@ -102,8 +102,13 @@ no Proxmox guest behind it, or the user asks what runs in containers:
 - Linux hosts in the inventory: `ansible-playbook playbooks/docker-containers.yml [-e target=…]` (read-only)
   → `discovery/containers.json`: per host the runtimes (Docker, Podman), Kubernetes (k3s, k0s, kubelet,
   microk8s) and each container's image, state, restart policy, network mode, addresses, published ports,
-  compose project and auto-update label. Report restart-looping or exited containers, `restart: no` services,
-  and auto-updaters (Watchtower) — they change images outside any patch window.
+  compose project (with its working directory and config files) and auto-update label. Report restart-looping or
+  exited containers, `restart: no` services, and auto-updaters (Watchtower) — they change images outside any
+  patch window.
+- A container with a `compose_project` belongs to a Compose project: stop, start, restart or recreate it only with
+  `docker compose -f <compose_config_files…> <cmd> <service>` in `compose_working_dir` (`podman-compose` for
+  Podman), never plain `docker start/stop/rm/run` — those drift from the Compose file and the next `up` undoes
+  them. Name the working directory and config files when reporting a finding on such a container.
 - QNAP NAS in the `qnap` group: `ansible-playbook playbooks/qnap-containers.yml` (read-only) →
   `discovery/qnap-containers.json`, Container Station's LXD and Docker in the same layout
   (references/windows-appliances.md, QNAP NAS).

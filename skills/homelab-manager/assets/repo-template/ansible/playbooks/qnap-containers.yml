@@ -77,7 +77,8 @@
                         'state': c.status | default('') | lower,
                         'restart': 'autostart' if cfg['boot.autostart'] | default('') in ['true', '1'] else '',
                         'network_mode': '', 'networks': ((c.state | default({}, true)).network | default({}, true)).keys() | reject('equalto', 'lo') | list,
-                        'ips': addrs | unique, 'ports': [], 'compose_project': none, 'auto_update': none}) -%}
+                        'ips': addrs | unique, 'ports': [], 'compose_project': none, 'compose_working_dir': none,
+                        'compose_config_files': none, 'auto_update': none}) -%}
                 {%- endfor -%}
                 {%- for c in docker_list -%}
                   {%- set nets = c.NetworkSettings.Networks | default({}, true) -%}
@@ -100,6 +101,11 @@
                         'ips': nets.values() | map(attribute='IPAddress') | select | list | unique,
                         'ports': ports | unique,
                         'compose_project': labels['com.docker.compose.project'] | default(none),
+                        'compose_working_dir': labels['com.docker.compose.project.working_dir'] | default(none),
+                        'compose_config_files': (labels['com.docker.compose.project.config_files'] | split(',')
+                                                 | map('trim') | select | list)
+                                                if labels['com.docker.compose.project.config_files'] is defined
+                                                else none,
                         'auto_update': labels['com.centurylinklabs.watchtower.enable'] | default(none)}) -%}
                 {%- endfor -%}
                 {{ out | sort(attribute='name') }}
