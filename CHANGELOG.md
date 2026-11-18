@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.29.0 — 2026-11-18
+- Discovery files never carry a site in their name ([#75](https://github.com/mhaluska/homelab-manager-skill/issues/75)): one file per kind with every site inside.
+  `proxmox.json`, `network.json`, `pve-patch.json` and `unifi.json` hold `{"sites": {"<site>": …}}` (a repo
+  without `sites:` uses `default`); each script writes only its site's part and keeps the others. Replaces
+  `proxmox-<site>.json`, `network-<site>.json` and `pve-patch-[<site>-]<node>.json` with its `-state.json`
+  (the state before patching is now `state_before` in the node's plan). Files keyed by inventory host
+  (`updates`, `containers`, `bmc`, `routeros`) give each host its `site`. The site name `default` is reserved
+  for the default site.
+- `init_repo.py --sync-managed` moves existing per-site files into the new ones; a file still in the old
+  layout is read as the default site's.
+- Upgrade notes (copies with local edits): `patch-proxmox-node.yml` (reads `pve-patch.json`), `unifi-info.yml`,
+  the host `site` tag in `check-updates.yml` / `docker-containers.yml` / `bmc-info.yml`, `discovery/README.md`.
+
 ## 0.28.1 — 2026-11-18
 - BMC playbook keeps the vendor workarounds of #32 ([#74](https://github.com/mhaluska/homelab-manager-skill/issues/74)): `bmc-info.yml` reads one Redfish category per
   call, so a BMC that refuses one (iLO 4 has no UpdateService, Supermicro X10 wants a DCMS licence for it) still
