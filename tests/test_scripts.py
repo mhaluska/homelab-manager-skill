@@ -2375,12 +2375,21 @@ class DiscoveryLayoutTests(unittest.TestCase):  # GitHub issue #73
         sites = lambda kind: json.loads((disc / f"{kind}.json").read_text())["sites"]
         self.assertEqual(sites("proxmox"), {"home": old["proxmox.json"], "offsite": old["proxmox-offsite.json"]})
         self.assertEqual(sorted(sites("network")), ["home", "offsite"])
+        self.assertNotIn("site", sites("network")["offsite"])                     # its key says it (#82)
         self.assertEqual(sites("unifi"), {"home": old["unifi.json"]})
         plans = sites("pve-patch")
         self.assertEqual(plans["home"]["pve1"]["state_before"], old["pve-patch-pve1-state.json"])
         self.assertEqual((plans["home"]["pve1"]["default_site"], plans["offsite"]["pve1"]["default_site"]),
                          (True, False))
         self.assertNotIn("discovery/: move", run("init_repo.py", str(d), "--sync-managed", "--dry-run", cwd=d).stdout)
+        net = json.loads((disc / "network.json").read_text())                      # moved by 0.29.x, key kept
+        net["sites"]["offsite"]["site"] = "offsite"
+        (disc / "network.json").write_text(json.dumps(net))
+        self.assertIn('drop the redundant "site" key of offsite',
+                      run("init_repo.py", str(d), "--sync-managed", "--dry-run", cwd=d).stdout)
+        run("init_repo.py", str(d), "--sync-managed", cwd=d)
+        self.assertNotIn("site", sites("network")["offsite"])
+        self.assertEqual(sorted(sites("proxmox")["offsite"]), ["guests", "site"])   # proxmox.json keeps its key
         import hmlib                                                                 # readers see every site
         cfg = hmlib.load_config(d)
         self.assertEqual([s["name"] for s, _ in hmlib.proxmox_snapshots(cfg)], ["home", "offsite"])

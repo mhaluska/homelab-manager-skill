@@ -239,6 +239,10 @@ def upgrades(target: Path) -> list[tuple[str, callable]]:
     site_files = discovery_site_files(target)
     if site_files:
         out.append(site_files)
+    else:
+        stale_key = network_site_key(target)
+        if stale_key:
+            out.append(stale_key)
     # a file replaced whole needs none of the older patches to it
     return out[:first] + [o for o in out[first:] if not any(o[0].startswith(r + ":") for r in replaced)]
 
@@ -301,6 +305,8 @@ def discovery_site_files(target: Path):
                     for node, plan in data.items():
                         parts[key].setdefault(node, plan)
                 else:
+                    if kind == "network":
+                        data.pop("site", None)   # the key in network.json says it (GitHub issue #82)
                     parts.setdefault(key, data)
             f.write_text(json.dumps({"sites": parts}, indent=2, sort_keys=kind == "network") + "\n")
         for f in legacy:
@@ -309,6 +315,29 @@ def discovery_site_files(target: Path):
     names = sorted({f.name for f in legacy} | {f"{k}.json" for k in rewrite})
     return (f"discovery/: move {', '.join(names)} into one file per kind with every site inside "
             f"({', '.join(sorted(f'{k}.json' for k in found))}; GitHub issue #75)", move)
+
+
+def network_site_key(target: Path):
+    """0.29.x moved network-<site>.json into network.json with its old "site" key, which the next ssh_probe.py or
+    nmap_scan.py run of that site drops (GitHub issue #82): drop it now, so it doesn't show up in a later diff."""
+    f = target / "discovery" / "network.json"
+    try:
+        doc = json.loads(f.read_text())
+    except (OSError, ValueError):
+        return None
+    parts = doc.get("sites") if isinstance(doc, dict) else None
+    if not isinstance(parts, dict):
+        return None
+    stale = sorted(k for k, v in parts.items() if isinstance(v, dict) and "site" in v)
+    if not stale:
+        return None
+
+    def drop():
+        for k in stale:
+            parts[k].pop("site", None)
+        f.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+    return (f"discovery/network.json: drop the redundant \"site\" key of {', '.join(stale)} (the key it is stored "
+            "under says it; GitHub issue #82)", drop)
 
 
 TOKEN_ACL = re.compile(r"^pveum acl modify (\S+) --tokens '([^'!]+)![^']+' --roles (\S+)[ \t]*$", re.M)
