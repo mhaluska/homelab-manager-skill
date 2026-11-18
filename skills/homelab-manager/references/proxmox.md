@@ -153,8 +153,8 @@ config_set.py 'sites+={name: offsite, label: Rented server, ranges: [192.0.2.0/2
   `group_vars/site_<name>.yml` (`init_repo.py --add-site` writes it with `ansible_group_priority: 10`, so site
   settings win over OS groups on purpose). `check_env.py` and the drift report flag hosts in two site groups and
   groups with no site in homelab.yaml.
-- Read-only: `proxmox_inventory.py --site offsite` → `discovery/proxmox-offsite.json` (`--all-sites` reads each
-  and carries on past an unreachable one); `proxmox_to_inventory.py --site offsite` drafts into `site_offsite`.
+- Read-only: `proxmox_inventory.py --site offsite` → its part of `discovery/proxmox.json` (`--all-sites` reads
+  each and carries on past an unreachable one); `proxmox_to_inventory.py --site offsite` drafts into `site_offsite`.
   The drift report covers every site (VMIDs are shown as `<site>/<vmid>`: they repeat across sites).
 - `pve_snapshot.py --site offsite …`; patch-linux.yml uses the host's site by itself. `with_secrets.py <secret>`
   connects to the site whose tokens name that secret.
@@ -168,7 +168,7 @@ config_set.py 'sites+={name: offsite, label: Rented server, ranges: [192.0.2.0/2
   sites). A site may set its own `vmid_ranges`, `vmid_scheme` and `templates` (build network) in its entry;
   otherwise the top-level ones apply. `network.vlans` entries name a `site` (a VLAN only there; `site: all` =
   every site on purpose; none = every site too): `--vlan <name>` resolves with the site's VLANs.
-- Network scans: `nmap_scan.py … --site offsite` / `ssh_probe.py --site offsite` → `discovery/network-offsite.json`.
+- Network scans: `nmap_scan.py … --site offsite` / `ssh_probe.py --site offsite` → its part of `discovery/network.json`.
   `network.excluded_hosts` and `discovery.ignore_unmanaged` take `{ip: 10.0.0.5, site: offsite}` next to plain
   addresses (plain = every site) — needed when sites reuse the same private ranges.
 - With two or more sites `check_env.py` (`sites:ambiguous`) and the drift report ("Site ambiguity") flag what

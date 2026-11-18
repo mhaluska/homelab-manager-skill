@@ -220,12 +220,12 @@ Scripts (all in `$HM/scripts/`):
 | `init_repo.py --components … [--dry-run]` / `--add-components …` / `--sync-managed` / `--add-site N` | scaffold, extend, or update the repo after a plugin upgrade; scaffold a site | repo files |
 | `check_env.py [--keychain] [--json]` | tools, SSH agent, keychain self-test, secrets readable, Proxmox TLS, EL8 Python, unpushed commits | — |
 | `with_secrets.py <names…> -- <cmd>` | run a command with keychain secrets in env, output redacted | — |
-| `proxmox_inventory.py [--details] [--site N\|--all-sites]` / `--next-vmid vms\|lxc [--ip --vlan --site]` | read-only Proxmox snapshot + summary table (`--details`: configs, guest IPs; other sites: references/proxmox.md "Several sites") / VMID for a new guest | `discovery/proxmox[-<site>].json` |
+| `proxmox_inventory.py [--details] [--site N\|--all-sites]` / `--next-vmid vms\|lxc [--ip --vlan --site]` | read-only Proxmox snapshot + summary table (`--details`: configs, guest IPs; other sites: references/proxmox.md "Several sites") / VMID for a new guest | `discovery/proxmox.json` |
 | `pve_snapshot.py list\|check\|create\|delete\|rollback <guest…> [--name N]` | guest snapshots around patching (check: can they be; delete/rollback: approval) | — |
 | `pve_guest.py status\|start <guest…>` | guest status; start a stopped guest (after an approved reboot or rollback) | — |
 | `lxd_snapshot.py list\|check\|create\|delete\|restore <host…> [--name N]` | LXD/Incus instance snapshots (NAS; host vars lxd_host, lxd_snapshots) (delete/restore: approval) | — |
-| `pve_node_plan.py <node> [--site N] [--max-mem-pct 85] [--no-migrate]` | read-only plan for patching one Proxmox node: migrate, HA, stop/restore per guest | `discovery/pve-patch-[<site>-]<node>.json` |
-| `nmap_scan.py <targets> [--profile ping\|services\|os] [--only-live] [--site N]` | scope-checked scan | `discovery/network[-<site>].json` |
+| `pve_node_plan.py <node> [--site N] [--max-mem-pct 85] [--no-migrate]` | read-only plan for patching one Proxmox node: migrate, HA, stop/restore per guest | `discovery/pve-patch.json` |
+| `nmap_scan.py <targets> [--profile ping\|services\|os] [--only-live] [--site N]` | scope-checked scan | `discovery/network.json` |
 | `drift_report.py [--tofu-json F]` / `--stale` | Proxmox ↔ OpenTofu ↔ Ansible ↔ network / is drift.md out of date | `discovery/drift.md` |
 | `tofu_to_inventory.py [--site N]` | OpenTofu output → Ansible inventory | `ansible/inventory/managed/tofu_hosts[-<site>].yml` |
 | `proxmox_to_inventory.py [--vlan N] [--range CIDR] [--type vm\|lxc]` | draft inventory entries for existing Linux guests (review before use) | — (stdout) |

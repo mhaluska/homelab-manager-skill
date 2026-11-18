@@ -4,14 +4,15 @@ Discovery is read-only. Three pictures of the homelab are kept apart on purpose:
 
 | Picture | Where | Produced by |
 |---|---|---|
-| What is running | `discovery/proxmox.json` (other sites: `proxmox-<site>.json`), `discovery/network.json`, `discovery/updates.json`, `discovery/containers.json` | scripts and playbooks below |
+| What is running | `discovery/proxmox.json`, `discovery/network.json`, `discovery/updates.json`, `discovery/containers.json` | scripts and playbooks below |
 | What OpenTofu manages | OpenTofu state (local file or S3) | `tofu apply` |
 | What Git declares | `tofu/**/homelab.auto.tfvars`, `ansible/inventory/managed/` | you + the user |
 
-File names in `discovery/` (full list: its README.md): a file whose source is one site (`proxmox`, `network`,
-`pve-patch`) has no site in its name for the default site and the site's name for the others
-(`network-<site>.json`, `pve-patch-<site>-<node>.json`); a file keyed by inventory host
-(`updates`, `containers`, `bmc`, `unifi`, `routeros`) holds every site in one file. Don't invent other names.
+File names in `discovery/` (full list: its README.md): one file per kind, never a site in its name. Every site
+is inside: a file whose source is one site (`proxmox`, `network`, `pve-patch`, `unifi`) holds
+`{"sites": {"<site>": …}}` (no `sites:` in homelab.yaml: `default`) and the scripts write only their site's
+part; a file keyed by inventory host (`updates`, `containers`, `bmc`, `routeros`) gives each host its `site`.
+Read a site's data through that structure, and don't invent other names.
 
 `discovery/` is never used as Ansible inventory: a device showing up on the network
 doesn't make it managed. Promoting a device to managed is a deliberate edit of
@@ -46,7 +47,7 @@ python3 $HM/scripts/nmap_scan.py 10.0.10.0/24 --profile os --only-live  # OS-sca
 ```
 - Targets must be inside `network.authorized_ranges`; `excluded_hosts` are always skipped.
 - Several sites (proxmox.md "Several sites"): pass `--site <name>` for the site the Mac is at (ssh_probe.py too):
-  the scan goes to `discovery/network-<name>.json` (the default site: `network.json`) and that site's
+  the scan goes under that site in `discovery/network.json` (no `--site`: the default site) and that site's
   `{ip, site}` exclusions apply with the plain ones; without `--site` every site's exclusions apply.
   The script and the guard hook both enforce this. If the user asks for a range that isn't
   authorized, say so and offer to add it to `homelab.yaml` **if they confirm they own it**.
