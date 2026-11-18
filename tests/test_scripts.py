@@ -2309,6 +2309,50 @@ class DiscoveryLayoutTests(unittest.TestCase):  # GitHub issue #73
         self.assertIn("bmc-redfish", ids())
 
 
+    def test_discovery_readme_lists_every_file_written_there(self):
+        """Every discovery/ file a script or scaffolded playbook names matches an entry of discovery/README.md."""
+        assets = SCRIPTS.parent / "assets"
+        readme = (assets / "repo-template/discovery/README.md").read_text()
+
+        def pattern(p):  # `network[-<site>].json`: [..] optional, <..> any name
+            out = ""
+            for tok in re.findall(r"<[^>]+>|\[|\]|[^<\[\]]+", p):
+                out += "[^/]+" if tok.startswith("<") else "(?:" if tok == "[" else ")?" if tok == "]" else re.escape(tok)
+            return re.compile(out + r"\Z")
+
+        entries = [pattern(e) for e in re.findall(r"^- `([^`]+\.(?:json|md))`", readme, re.M)]
+        self.assertGreater(len(entries), 5)
+        files = [*SCRIPTS.glob("*.py"), *(assets / "repo-template/ansible/playbooks").rglob("*.yml")]
+        seen = set()
+        for f in files:
+            for m in re.finditer(r'discovery(?:/|"\s*/\s*\(?f?")([\w\-\[\]<>{}.*]+?\.(?:json|md))', f.read_text()):
+                name = re.sub(r"<[^>]+>|\{[^}]+\}|\b[A-Z]{2,}\b", "x", m.group(1)).replace("-*", "-x").replace("*", "")
+                name = name.replace("[", "").replace("]", "")
+                seen.add(name)
+                self.assertTrue(any(e.match(name) for e in entries), f"{f.name}: discovery/{m.group(1)}")
+        self.assertIn("bmc.json", seen)
+
+
+    def test_old_discovery_readme_is_replaced_or_offered(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        run("init_repo.py", str(d), "--components", "discovery", cwd=d)
+        ids = lambda: [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", "--all", cwd=d).stdout)]
+        self.assertNotIn("discovery-readme-complete", ids())
+        old = subprocess.run(["git", "show", "v0.27.0:skills/homelab-manager/assets/repo-template/discovery/README.md"],
+                             cwd=ROOT, capture_output=True, text=True)
+        if old.returncode:
+            self.skipTest("release tags not available")
+        readme = d / "discovery/README.md"
+        readme.write_text(old.stdout)       # unedited old template: --sync-managed replaces it
+        run("init_repo.py", str(d), "--sync-managed", cwd=d)
+        self.assertIn("nothing needs adding to it", readme.read_text())
+        readme.write_text(old.stdout + "- `guest-map.md` — added by hand\n")   # edited: offered instead
+        run("init_repo.py", str(d), "--sync-managed", cwd=d)
+        self.assertIn("added by hand", readme.read_text())
+        self.assertIn("discovery-readme-complete", ids())
+
+
 class FixedIssuesTests(unittest.TestCase):
     """#12: reported entries fixed by the installed release are pointed out and can be resolved."""
 

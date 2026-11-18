@@ -405,6 +405,19 @@
       },
       "text": "bmc-info.yml writes every BMC into one discovery/bmc.json keyed by inventory host, merged across runs (#73). This repo's copy predates that layout (one file per BMC, e.g. bmc-<host>.json).",
       "action": "Replace ansible/playbooks/bmc-info.yml with {template}, carrying over any local edits (show the user the diff first). Run it once for every BMC (`with_secrets.py bmc -- ansible-playbook playbooks/bmc-info.yml`), check that discovery/bmc.json has each BMC under hosts, then `git rm` the old per-BMC files in discovery/. Keep the old file of a BMC that didn't answer until a later run records it."
+    },
+    {
+      "version": "0.28.0",
+      "id": "discovery-readme-complete",
+      "kind": "template",
+      "when": {
+        "file_lacks": [
+          "discovery/README.md",
+          "nothing needs adding to it"
+        ]
+      },
+      "text": "discovery/README.md now lists every file the scripts and playbooks write there, per site and across sites, with the naming rule (#73). This repo's copy is an older one with local edits, so --sync-managed did not replace it.",
+      "action": "Replace discovery/README.md with {template}. Show the user the diff first: entries added by hand are covered by the new list (or are hand-recorded `<name>-containers.json` files); keep only a note the template has no equivalent for."
     }
   ]
 }
