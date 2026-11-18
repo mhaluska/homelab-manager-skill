@@ -2294,6 +2294,21 @@ class PveNodePlaybookUpgradeTests(unittest.TestCase):  # issue 23
         self.assertIn("patch-requires-approval", ids())
 
 
+class DiscoveryLayoutTests(unittest.TestCase):  # GitHub issue #73
+    def test_old_per_bmc_playbook_offered_the_merged_layout(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        run("init_repo.py", str(d), "--components", "ansible,appliances", cwd=d)
+        ids = lambda: [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", "--all", cwd=d).stdout)]
+        self.assertNotIn("bmc-one-file", ids())
+        pb = d / "ansible/playbooks/bmc-info.yml"
+        pb.write_text(pb.read_text().replace("discovery/bmc.json", "discovery/bmc-{{ inventory_hostname }}.json"))
+        self.assertIn("bmc-one-file", ids())
+        pb.unlink()      # no playbook at all: bmc-redfish offers it instead
+        self.assertNotIn("bmc-one-file", ids())
+        self.assertIn("bmc-redfish", ids())
+
+
 class FixedIssuesTests(unittest.TestCase):
     """#12: reported entries fixed by the installed release are pointed out and can be resolved."""
 

@@ -391,6 +391,20 @@
       },
       "text": "Network scans know their site (#72): nmap_scan.py / ssh_probe.py --site <name> write discovery/network-<name>.json for a site other than the default, and network.excluded_hosts / discovery.ignore_unmanaged take {ip, site} entries (#66). discovery/network.json may still hold other sites' devices from earlier scans.",
       "action": "Ask the user which sites were scanned into discovery/network.json. Rescan each other site from there with `nmap_scan.py <its ranges> --site <name>`, then remove its addresses from network.json if the ranges don't overlap the default site's (with overlapping ranges, start network.json over with a scan at the default site). Turn excluded or ignored addresses that hold at one site only into {ip, site} entries; check_env.py lists the ones inside shared ranges."
+    },
+    {
+      "version": "0.28.0",
+      "id": "bmc-one-file",
+      "kind": "template",
+      "when": {
+        "component": "appliances",
+        "file_lacks": [
+          "ansible/playbooks/bmc-info.yml",
+          "discovery/bmc.json"
+        ]
+      },
+      "text": "bmc-info.yml writes every BMC into one discovery/bmc.json keyed by inventory host, merged across runs (#73). This repo's copy predates that layout (one file per BMC, e.g. bmc-<host>.json).",
+      "action": "Replace ansible/playbooks/bmc-info.yml with {template}, carrying over any local edits (show the user the diff first). Run it once for every BMC (`with_secrets.py bmc -- ansible-playbook playbooks/bmc-info.yml`), check that discovery/bmc.json has each BMC under hosts, then `git rm` the old per-BMC files in discovery/. Keep the old file of a BMC that didn't answer until a later run records it."
     }
   ]
 }
