@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.38.0 — 2026-11-18
+- OVERVIEW.md covers recovery, dependencies, exposure and expirations ([#89](https://github.com/mhaluska/homelab-manager-skill/issues/89)), only from data the
+  repository records, nothing guessed from names:
+  - **Last backup**: a Guests column, and under Backups the guests in a job with no successful backup within
+    `overview.backup_max_age_days` (homelab.yaml, default 7) or whose newest backup failed; counted in At a glance.
+  - **Start order**: each node's autostart guests in the order Proxmox starts them (`startup` order, then VMID;
+    HA-managed ones by the HA manager), the cluster's quorum, the running guests nothing starts again, and what each
+    guest does for others (gateway of VLANs, storage server, cluster member, critical).
+  - **If it goes down**: per Proxmox node its running guests and what they serve; per `network.vlans` gateway that
+    is no guest there its VLANs; per storage server its Proxmox storages and the guests with disks or ISOs there;
+    per NAS its containers and what they serve.
+  - **Port forwards**: enabled RouterOS dst-nat rules with every matcher and the target's name, and the public
+    addresses on RouterOS interfaces (other gateways and tunnels are not covered, and the page says so).
+  - **Access**: per known host the SSH command as Ansible connects, web UI links and other services.
+  - **Expirations**: CHR licences, Proxmox VE subscriptions, node web certificates and the TLS certificates nmap read,
+    soonest first; within 30 days is a warning. Ages and expiries are judged against the newest data, not today, so
+    the page still changes only with the data. Domain registrations are not looked up.
+  - "What changed" was declined: OVERVIEW.md is committed with the change it describes, so it can't list that
+    commit; `git log` is the record.
+- `proxmox_inventory.py` records each node's subscription (status, level, next due date, never the key) and web UI
+  certificate, and the server of each network storage. `--details` also records each guest's newest successful
+  backup and a newer failure from the nodes' vzdump task logs: the read-only token can't list backup volumes (that
+  needs VM.Backup), but reads task logs with Sys.Audit.
+- `routeros_audit.py` also reads the NAT rules (`/ip firewall nat print`, read-only).
+- `nmap_scan.py`: the `services` and `os` profiles run nmap's `ssl-cert` script (category safe: it reads the
+  certificate of a port nmap identified as TLS) and keep each port's certificate subject, issuer, names and expiry
+  (`tls`) and whether it is TLS (`tunnel`).
+- OVERVIEW.md reads `qnap-containers.json` in the layout `qnap-containers.yml` writes (`hosts.<nas>.containers`,
+  the layout of containers.json): the NAS containers were missing from Containers and their addresses were unknown.
+- Upgrade notes: `overview-recovery-proxmox`, `overview-port-forwards`, `overview-tls-certificates` (regenerate).
+
 ## 0.37.0 — 2026-11-18
 - OVERVIEW.md shows every item of a list cell ([#115](https://github.com/mhaluska/homelab-manager-skill/issues/115)): an Ansible group lists all its members (no cap at 12), and
   no name, port mapping or address is cut in half by the cell length limit; each item is escaped and limited on
