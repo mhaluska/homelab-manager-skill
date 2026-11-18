@@ -129,7 +129,8 @@ changing anything, show the user the jobs (`jq .backup_jobs discovery/proxmox.js
 ## Several sites
 
 A site is a location: home, a rented server, family's house reached over VPN. One site needs nothing (no
-`sites:`). For more, list them in homelab.yaml, the default site first; its Proxmox stays the `proxmox:` block:
+`sites:`). For more, list them in homelab.yaml, the default site first; its Proxmox is the `proxmox:` block or
+`sites[0].proxmox` (one of the two, the same keys):
 ```bash
 config_set.py 'sites+={name: home}'      # first time only: name the existing site
 config_set.py 'sites+={name: offsite, label: Rented server, ranges: [192.0.2.0/24], proxmox: {endpoint: "https://…:8006", tokens: {read_only: proxmox-offsite-ro, provisioning: proxmox-offsite-rw}}}'
@@ -139,7 +140,9 @@ config_set.py 'sites+={name: offsite, label: Rented server, ranges: [192.0.2.0/2
   networks (the drift report labels devices there). `proxmox` (optional: a site may have only a NAS and a
   router) takes the same keys as the `proxmox:` block, with its own tokens (docs/proxmox-tokens.md, run on
   that site's Proxmox) and secrets entries.
-- Inventory: each host is in at most one `site_<name>` group (`hosts.yml`); none = the default site. Target a
+- Inventory: each host is in at most one `site_<name>` group (`hosts.yml`); none = the default site. Once the
+  default site has a name, the inventory drafts put its hosts in `site_<default>` too and
+  `init_repo.py --add-site <default>` writes its `group_vars/site_<default>.yml`. Target a
   site with Ansible patterns: `-e target='site_offsite:&linux'`. Site settings (DNS, NTP, mirrors) go in
   `group_vars/site_<name>.yml` (`init_repo.py --add-site` writes it with `ansible_group_priority: 10`, so site
   settings win over OS groups on purpose). `check_env.py` and the drift report flag hosts in two site groups and

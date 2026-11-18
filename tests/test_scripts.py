@@ -1809,9 +1809,27 @@ class SitesTests(unittest.TestCase):  # issue 52
     def test_invalid_sites(self):
         h = self.h
         for bad in ([{"name": "Off-Site"}], [{"name": "a"}, {"name": "a"}], [{"label": "x"}],
-                    [{"name": "home", "proxmox": {"endpoint": "x"}}], "home", [{"name": "x", "ranges": ["nope"]}]):
+                    "home", [{"name": "x", "ranges": ["nope"]}]):
             with self.assertRaises(h.ConfigError, msg=bad):
                 h.sites({"sites": bad})
+        with self.assertRaises(h.ConfigError):            # issue 64: the default site's Proxmox in one place only
+            h.sites({"proxmox": {"endpoint": "a"}, "sites": [{"name": "home", "proxmox": {"endpoint": "x"}}]})
+
+    def test_default_site_proxmox_in_sites(self):  # issue 64
+        h = self.h
+        cfg = {"_root": "/nonexistent", "proxmox": {"endpoint": "", "verify_tls": True,
+                                                    "tokens": {"read_only": "proxmox-ro"}},   # template leftovers
+               "sites": [{"name": "home", "proxmox": {"endpoint": "https://pve1.example:8006", "verify_tls": False,
+                                                       "tokens": {"read_only": "home-ro"}}},
+                         {"name": "offsite", "proxmox": {"endpoint": "https://pve-off.example:8006"}}]}
+        px = h.proxmox_site(cfg)
+        self.assertEqual((px["endpoint"], px["_where"], px["_site"]),
+                         ("https://pve1.example:8006", "sites[home].proxmox", "home"))
+        self.assertEqual(h.site_of_secret(cfg, "home-ro")["_site"], "home")
+        self.assertEqual(h.config_value(cfg, "proxmox.endpoint"), "https://pve1.example:8006")
+        self.assertEqual(h.config_value(self.cfg, "proxmox.endpoint"), "https://pve1.example:8006")  # top-level
+        import ssl
+        self.assertEqual(h.proxmox_ssl_context(cfg).verify_mode, ssl.CERT_NONE)    # default: the site's block
 
     def test_site_settings_env_and_vlans(self):
         h = self.h
@@ -1967,7 +1985,10 @@ class SiteTofuTests(unittest.TestCase):  # issue 52, part 2
         res = check_env.check_tofu_sites(self.h.load_config(self.d))
         self.assertEqual(res[-1]["check"], "tofu:state")
         self.assertFalse(res[-1]["ok"])
-        self.assertNotEqual(run("init_repo.py", self.d, "--add-site", "home", cwd=self.d).returncode, 0)
+        r = run("init_repo.py", self.d, "--add-site", "home", cwd=self.d)     # issue 64: the default site's group_vars
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("group_vars/site_home.yml", r.stdout)
+        self.assertNotIn("tofu/environments", r.stdout)
         self.assertNotEqual(run("init_repo.py", self.d, "--add-site", "moon", cwd=self.d).returncode, 0)
 
     def test_state_per_environment(self):

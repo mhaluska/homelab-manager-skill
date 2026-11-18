@@ -52,7 +52,8 @@ proxmox:
 
 sites: []                    # optional, for more than one location (references/proxmox.md "Several sites"):
                              # [{name, label, ranges, proxmox}], the default site first; its Proxmox is the
-                             # proxmox: block above. Inventory hosts belong to a site via the group site_<name>.
+                             # proxmox: block above or sites[0].proxmox (one of the two). Inventory hosts belong
+                             # to a site via the group site_<name>.
                              # Another site may set its own vmid_ranges, vmid_scheme, templates; its OpenTofu
                              # environment is tofu/environments/<name> (init_repo.py --add-site <name>).
 

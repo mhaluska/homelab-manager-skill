@@ -66,7 +66,7 @@ def main():
         for g in (h.get("groups") or ["ungrouped_tofu"]):
             groups.setdefault(g, {})[name] = hv
     out = root / "ansible" / "inventory" / "managed" / ("tofu_hosts.yml" if default else f"tofu_hosts-{env}.yml")
-    site_group = hmlib.SITE_GROUP_PREFIX + st["name"] if not st["default"] else ""
+    site_group = hmlib.SITE_GROUP_PREFIX + st["name"] if st["name"] else ""   # a named default site too (#64)
     out.write_text(to_yaml(groups, "" if default else env, site_group))
     print(f"Wrote {out.relative_to(root)}: {len(hosts)} host(s) in {len(groups)} group(s)")
     missing = [n for n, h in hosts.items() if not h.get("ansible_host")]

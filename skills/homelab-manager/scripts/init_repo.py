@@ -24,7 +24,8 @@
 - `git init -b main` if needed; core.hooksPath → scripts/git-hooks (blocks committing secrets).
 - Registers this plugin's marketplace in .claude/settings.json when its Git remote is known.
 - --add-site: the site's OpenTofu environment tofu/environments/<name> (proxmox component) and a site.tf in it
-  and in the default environment that refuses another site's token; group_vars/site_<name>.yml (ansible).
+  and in the default environment that refuses another site's token; group_vars/site_<name>.yml (ansible). For the
+  default site only group_vars/site_<name>.yml (it uses the top-level settings and environment).
 Does not commit: the skill reviews the result with the user and commits.
 """
 from __future__ import annotations
@@ -416,13 +417,9 @@ def add_site(target: Path, name: str, dry_run: bool) -> int:
         print(f"Add it first: config_set.py 'sites+={{name: {name}, label: …, proxmox: {{endpoint: …, tokens: …}}}}'",
               file=sys.stderr)
         return 3
-    if st["default"]:
-        print(f"init_repo: {name} is the default site — it already uses the top-level settings and environment.",
-              file=sys.stderr)
-        return 3
     comps = current_components(target)
     files: dict[str, str] = {}
-    if "proxmox" in comps:
+    if "proxmox" in comps and not st["default"]:   # the default site uses the top-level settings and environment
         env = f"tofu/environments/{hmlib.tofu_env(cfg, name)}"
         src = TEMPLATE / "tofu" / "environments" / "homelab"
         for f in sorted(src.iterdir()):
@@ -442,7 +439,7 @@ def add_site(target: Path, name: str, dry_run: bool) -> int:
     print(f"Site {hmlib.site_title(st)}: {'would create' if dry_run else 'created'} {len(created)} file(s)")
     for rel in created:
         print(f"  + {rel}")
-    if "proxmox" in comps and st["proxmox"]:
+    if "proxmox" in comps and st["proxmox"] and not st["default"]:
         env = hmlib.tofu_env(cfg, name)
         print(f"Next: fill `defaults` in tofu/environments/{env}/homelab.auto.tfvars from sites[{name}].proxmox, then "
               f"`tofu_init.py --site {name}`; run plans with the site's token "

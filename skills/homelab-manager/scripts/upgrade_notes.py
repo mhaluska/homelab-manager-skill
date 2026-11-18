@@ -69,9 +69,9 @@ def _check(note: dict, cfg: dict, root: Path) -> tuple[bool, dict]:
     w, ph = note.get("when") or {}, {"HM": str(HERE.parent)}
     if w.get("component") and not _enabled(cfg, w["component"]):
         return False, ph
-    if w.get("config_empty") and hmlib.get(cfg, w["config_empty"]) not in (None, "", [], {}):
+    if w.get("config_empty") and hmlib.config_value(cfg, w["config_empty"]) not in (None, "", [], {}):
         return False, ph
-    if w.get("config_set") and hmlib.get(cfg, w["config_set"]) in (None, "", [], {}):
+    if w.get("config_set") and hmlib.config_value(cfg, w["config_set"]) in (None, "", [], {}):
         return False, ph
     if w.get("file_lacks"):
         rel, text = w["file_lacks"]

@@ -62,7 +62,8 @@ def get(cfg: dict, dotted: str, default=None):
 
 def proxmox_ca_file(cfg: dict, px: dict | None = None) -> str | None:
     """ca_cert of a Proxmox block (default: proxmox.*) as a usable path: ~ expanded, relative to the repo root."""
-    ca = (px or {}).get("ca_cert") if px is not None else get(cfg, "proxmox.ca_cert")
+    px = default_proxmox(cfg) if px is None else px
+    ca = px.get("ca_cert")
     if not ca:
         return None
     p = Path(os.path.expanduser(str(ca)))
@@ -78,12 +79,13 @@ def proxmox_ssl_context(cfg: dict, px: dict | None = None):
     to a PEM file and set as proxmox.ca_cert (check_env.py detects this case).
     """
     import ssl
-    verify = (px or {}).get("verify_tls", True) if px is not None else get(cfg, "proxmox.verify_tls", True)
+    px = default_proxmox(cfg) if px is None else px
+    verify = px.get("verify_tls", True)
     if verify is False:
         return ssl._create_unverified_context()
     ca = proxmox_ca_file(cfg, px)
     if ca and not Path(ca).is_file():
-        where = (px or {}).get("_where", "proxmox") if px is not None else "proxmox"
+        where = px.get("_where", "proxmox")
         raise ConfigError(f"{where}.ca_cert {ca!r} does not exist.")
     return ssl.create_default_context(cafile=ca)
 
@@ -91,8 +93,9 @@ def proxmox_ssl_context(cfg: dict, px: dict | None = None):
 # --------------------------------------------------------------------------- sites
 
 # A site is a location (home, a rented server, family's house). `sites:` in homelab.yaml lists them, the default
-# first: its Proxmox is the top-level `proxmox:` block; any other site may have its own (`sites[].proxmox`, same
-# keys). Inventory hosts belong to a site through the Ansible group site_<name> (none: the default site).
+# first: its Proxmox is the top-level `proxmox:` block or sites[0].proxmox (one of the two, GitHub issue #64); any
+# other site may have its own (`sites[].proxmox`, same keys). Inventory hosts belong to a site through the
+# Ansible group site_<name> (none: the default site).
 # Without `sites:` there is one unnamed default site. A site other than the default may also have its own
 # vmid_ranges, vmid_scheme and templates (build network); its OpenTofu environment is tofu/environments/<name>.
 SITE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,30}$")
@@ -121,10 +124,11 @@ def sites(cfg: dict) -> list[dict]:
         if name in seen:
             raise ConfigError(f"site {name!r} is listed twice.")
         seen.add(name)
-        if i == 0 and s.get("proxmox"):
-            raise ConfigError(f"sites[0] ({name}) is the default site: its Proxmox is the top-level proxmox: block, "
-                              "not sites[0].proxmox.")
-        px = top if i == 0 else s.get("proxmox")
+        own = i > 0 or s.get("proxmox") not in (None, {})
+        if i == 0 and own and top.get("endpoint"):
+            raise ConfigError(f"sites[0] ({name}) has a proxmox: block and so does the top level: describe the default "
+                              "site's Proxmox in one of them (sites[0].proxmox, or the top-level proxmox: block).")
+        px = s.get("proxmox") if own else top
         if px is not None and not isinstance(px, dict):
             raise ConfigError(f"sites.{name}.proxmox must be a mapping.")
         settings = {k: s[k] for k in SITE_SETTINGS if s.get(k) not in (None, "", {}, [])}
@@ -138,7 +142,7 @@ def sites(cfg: dict) -> list[dict]:
             if k in settings and not isinstance(settings[k], dict):
                 raise ConfigError(f"sites.{name}.{k} must be a mapping like the top-level {k}.")
         out.append({"name": name, "label": str(s.get("label") or ""), "default": i == 0,
-                    "proxmox": {**px, "_where": "proxmox" if i == 0 else f"sites[{name}].proxmox"} if px else None,
+                    "proxmox": {**px, "_where": f"sites[{name}].proxmox" if own else "proxmox"} if px else None,
                     "ranges": _networks(s.get("ranges")), "settings": settings})
     _check_vlan_sites(cfg, [s["name"] for s in out])
     return out
@@ -150,6 +154,21 @@ def _check_vlan_sites(cfg: dict, names: list[str]):
         if st not in (None, "") and st not in names:
             raise ConfigError(f"network.vlans: VLAN {v.get('id')} has site {st!r}, which is not in sites: "
                               f"({', '.join(names) or 'none'}).")
+
+
+def default_proxmox(cfg: dict) -> dict:
+    """The default site's Proxmox block (top-level proxmox: or sites[0].proxmox), with `_where`; {} if none."""
+    return sites(cfg)[0]["proxmox"] or {}
+
+
+def config_value(cfg: dict, key: str, default=None):
+    """get(), but proxmox.* is read from the default site's Proxmox block wherever homelab.yaml keeps it."""
+    if key == "proxmox" or key.startswith("proxmox."):
+        raw = cfg.get("sites")
+        if isinstance(raw, list) and raw and isinstance(raw[0], dict) and isinstance(raw[0].get("proxmox"), dict) \
+                and raw[0]["proxmox"]:
+            return get({"proxmox": raw[0]["proxmox"]}, key, default)
+    return get(cfg, key, default)
 
 
 def site_config(cfg: dict, name: str | None = None) -> dict:
