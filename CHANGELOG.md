@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.25.0 — 2026-11-18
+- `issues.py fixed --github` also lists reported entries whose GitHub issue was closed as not planned or as a
+  duplicate ([#69](https://github.com/mhaluska/homelab-manager-skill/issues/69)), apart from the fixed ones, with the follow-up issues a maintainer named when closing
+  (split into …) and a ready `resolve` command. `--apply` never resolves them: the user decides. Only issue
+  numbers from the owner's, members' or collaborators' comments are read, never comment text.
+- Sites ([#64](https://github.com/mhaluska/homelab-manager-skill/issues/64)): the default site's Proxmox may be described in `sites[0].proxmox` like every other site's
+  (the top-level `proxmox:` block stays valid; one of the two). Once the default site has a name,
+  `tofu_to_inventory.py` puts its hosts in `site_<default>` like `proxmox_to_inventory.py`, and
+  `init_repo.py --add-site <default>` writes `group_vars/site_<default>.yml`.
+- `routeros_audit.py`:
+  - kept only the first character of the identity (and could cut other values) on RouterOS 7 ([#70](https://github.com/mhaluska/homelab-manager-skill/issues/70)):
+    without a pty RouterOS wraps output at a width of 1. It logs in as `<user>+ct512w` (the user from `ssh -G`
+    when not given) and the parser joins wrapped values.
+  - the CHR licence finding used `next-renewal-at`, the next automatic renewal attempt, as the deadline
+    ([#71](https://github.com/mhaluska/homelab-manager-skill/issues/71)), so every healthy CHR was flagged for a month. It uses `deadline-at` (high once passed, medium
+    within 30 days) and flags a renewal only once it is overdue.
+
 ## 0.24.0 — 2026-11-18
 - `init_repo.py --sync-managed` replaces a template file you never edited with the current one instead of
   suggesting a manual merge ([#68](https://github.com/mhaluska/homelab-manager-skill/issues/68)). It knows every released version of each template file
