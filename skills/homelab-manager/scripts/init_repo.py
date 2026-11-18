@@ -240,8 +240,79 @@ def upgrades(target: Path) -> list[tuple[str, callable]]:
     tokens = token_user_acls(target)
     if tokens:
         out.append(tokens)
+    site_files = discovery_site_files(target)
+    if site_files:
+        out.append(site_files)
     # a file replaced whole needs none of the older patches to it
     return out[:first] + [o for o in out[first:] if not any(o[0].startswith(r + ":") for r in replaced)]
+
+
+def discovery_site_files(target: Path):
+    """Until 0.28.x discovery/ had a file per site (proxmox-<site>.json, network-<site>.json,
+    pve-patch-[<site>-]<node>.json with its -state.json); since 0.29.0 each kind is one file with every site
+    inside it, and unifi.json too (GitHub issue #75). Moves them in; a site's data already in the new file wins."""
+    d = target / "discovery"
+    if not d.is_dir():
+        return None
+    import hmlib  # noqa: E402
+    try:
+        default_key = hmlib.site_key(hmlib.site(hmlib.load_config(target)))
+    except (hmlib.ConfigError, OSError, ValueError):
+        default_key = hmlib.DEFAULT_SITE_KEY
+
+    def load(f: Path):
+        try:
+            doc = json.loads(f.read_text())
+        except (OSError, ValueError):
+            return None
+        return doc if isinstance(doc, dict) else None
+
+    found: dict[str, dict] = {}     # kind → {site key: data}
+    legacy: list[Path] = []          # files moved in, removed afterwards
+    rewrite: set[str] = set()        # kinds whose own file is still in the old layout
+    for kind in ("proxmox", "network", "unifi"):
+        main = load(d / f"{kind}.json")
+        if main and not isinstance(main.get("sites"), dict):
+            found.setdefault(kind, {})[default_key] = main
+            rewrite.add(kind)
+        for f in sorted(d.glob(f"{kind}-*.json")):
+            name, doc = f.stem[len(kind) + 1:], load(f)
+            if doc is not None and hmlib.SITE_NAME_RE.match(name):
+                found.setdefault(kind, {}).setdefault(name, doc)
+                legacy.append(f)
+    for f in sorted(d.glob("pve-patch-*.json")):
+        doc = load(f)
+        if f.stem.endswith("-state") or not doc or not doc.get("node"):
+            continue
+        key = doc.get("site") or default_key
+        state = f.with_name(f.stem + "-state.json")
+        if state.is_file():
+            doc["state_before"] = load(state)
+            legacy.append(state)
+        doc.setdefault("default_site", key == default_key)
+        found.setdefault("pve-patch", {}).setdefault(key, {})[doc["node"]] = doc
+        legacy.append(f)
+    if not found:
+        return None
+
+    def move():
+        for kind, sites_ in found.items():
+            f = d / f"{kind}.json"
+            parts = {} if kind in rewrite else hmlib.site_parts(f)
+            for key, data in sites_.items():
+                if kind == "pve-patch":
+                    parts.setdefault(key, {})
+                    for node, plan in data.items():
+                        parts[key].setdefault(node, plan)
+                else:
+                    parts.setdefault(key, data)
+            f.write_text(json.dumps({"sites": parts}, indent=2, sort_keys=kind == "network") + "\n")
+        for f in legacy:
+            f.unlink(missing_ok=True)
+
+    names = sorted({f.name for f in legacy} | {f"{k}.json" for k in rewrite})
+    return (f"discovery/: move {', '.join(names)} into one file per kind with every site inside "
+            f"({', '.join(sorted(f'{k}.json' for k in found))}; GitHub issue #75)", move)
 
 
 TOKEN_ACL = re.compile(r"^pveum acl modify (\S+) --tokens '([^'!]+)![^']+' --roles (\S+)[ \t]*$", re.M)

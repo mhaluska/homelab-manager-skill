@@ -1801,8 +1801,11 @@ class SitesTests(unittest.TestCase):  # issue 52
         self.assertEqual(h.site_of_address(self.cfg, "192.0.2.7")["name"], "offsite")
         self.assertIsNone(h.site_of_address(self.cfg, "10.0.0.1"))
         self.assertEqual(h.host_sites(["linux", "site_offsite"]), ["offsite"])
-        self.assertEqual(h.proxmox_snapshot_file("/r", "offsite", False).name, "proxmox-offsite.json")
-        self.assertEqual(h.proxmox_snapshot_file("/r", "home", True).name, "proxmox.json")
+        self.assertEqual(h.proxmox_snapshot_file("/r").name, "proxmox.json")   # every site inside (#75)
+        self.assertEqual([h.site_key(s) for s in h.sites(self.cfg)][:2], ["home", "offsite"])
+        self.assertEqual(h.site_key(h.sites({"proxmox": {"endpoint": "x"}})[0]), "default")      # no sites:
+        with self.assertRaises(h.ConfigError):
+            h.sites({"sites": [{"name": "home"}, {"name": "default"}]})                  # reserved for the default
         single = h.sites({"proxmox": {"endpoint": "x"}})                  # no sites: one unnamed default
         self.assertEqual((len(single), single[0]["name"], single[0]["default"]), (1, "", True))
 
@@ -1869,9 +1872,9 @@ class SitesTests(unittest.TestCase):  # issue 52
         r = run("config_set.py", "sites+={name: home}",
                 "sites+={name: offsite, proxmox: {endpoint: 'https://pve-off.example:8006'}}", cwd=d)
         self.assertEqual(r.returncode, 0, r.stderr)
-        snap = lambda ids: json.dumps({"guests": [{"vmid": i, "type": "vm", "name": f"g{i}"} for i in ids]})
-        Path(d, "discovery/proxmox.json").write_text(snap([100, 101]))
-        Path(d, "discovery/proxmox-offsite.json").write_text(snap([100]))
+        snap = lambda ids: {"guests": [{"vmid": i, "type": "vm", "name": f"g{i}"} for i in ids]}
+        Path(d, "discovery/proxmox.json").write_text(json.dumps({"sites": {"home": snap([100, 101]),
+                                                                          "offsite": snap([100])}}))
         Path(d, "tofu/environments/homelab/homelab.auto.tfvars").write_text("vms = {\n  a = {\n    vm_id = 102\n  }\n}\n")
         Path(d, "tofu/environments/offsite").mkdir()
         Path(d, "tofu/environments/offsite/homelab.auto.tfvars").write_text("vms = {\n  b = {\n    vm_id = 101\n  }\n}\n")
@@ -1950,7 +1953,7 @@ class SitesTests(unittest.TestCase):  # issue 52
     def test_draft_goes_into_the_site_group(self):
         import proxmox_to_inventory
         text = proxmox_to_inventory.to_yaml({"backup01": {"ansible_host": "192.0.2.2", "_os": "debian"}}, [],
-                                            "onboarding", "discovery/proxmox-offsite.json", "site_offsite")
+                                            "onboarding", "discovery/proxmox.json (site offsite)", "site_offsite")
         self.assertIn("    site_offsite:\n      hosts:\n        backup01:", text)
 
     def test_drift_and_redaction_cover_every_site(self):
@@ -1965,9 +1968,9 @@ class SitesTests(unittest.TestCase):  # issue 52
                                           "template": False, "tags": tags}
         snap = lambda guests: {"collected_at": "2026-01-01T00:00:00+00:00", "version": "9", "cluster": None,
                                "nodes": [], "networks": {}, "storage": [], "guests": guests, "backup_jobs": []}
-        Path(d, "discovery/proxmox.json").write_text(json.dumps(snap([guest(100, "dns01", "tofu")])))
-        Path(d, "discovery/proxmox-offsite.json").write_text(json.dumps(
-            {"site": "offsite", **snap([guest(100, "offbackup", "")])}))
+        Path(d, "discovery/proxmox.json").write_text(json.dumps({"sites": {
+            "home": snap([guest(100, "dns01", "tofu")]),
+            "offsite": {"site": "offsite", **snap([guest(100, "offbackup", "")])}}}))
         Path(d, "ansible/inventory/managed/hosts.yml").write_text(
             "all:\n  children:\n    site_home:\n      hosts:\n        dns01: {ansible_host: 10.0.10.5}\n"
             "    site_offsite:\n      hosts:\n        dns01:\n    site_moon:\n      hosts:\n        rover: {ansible_host: 10.9.9.9}\n")
@@ -2153,7 +2156,7 @@ class SiteTofuTests(unittest.TestCase):  # issue 52, part 2
         self.assertIn("- offsite/101 vm `hand`", text)
         self.assertIn("offsite/100 `module.vm[\"web09\"].x`: node n1 → live n2", text)
         self.assertEqual(n, 2)
-        Path(self.d, "discovery/proxmox-offsite.json").write_text(json.dumps({"collected_at": "x", **px}))
+        Path(self.d, "discovery/proxmox.json").write_text(json.dumps({"sites": {"offsite": {"collected_at": "x", **px}}}))
         Path(self.d, "state.json").write_text(json.dumps(state))
         r = run("drift_report.py", "--tofu-json", "state.json", cwd=self.d)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -2235,15 +2238,15 @@ class PveNodePlanTests(unittest.TestCase):  # issue 23
         r = run("pve_node_plan.py", "pve1", cwd=d)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("migrate → pve2", r.stdout)
-        plan = json.loads((d / "discovery/pve-patch-pve1.json").read_text())
-        self.assertEqual(plan["node"], "pve1")
-        (d / "discovery/pve-patch-pve1.json").unlink()
+        plan = json.loads((d / "discovery/pve-patch.json").read_text())["sites"]["default"]["pve1"]   # no sites:
+        self.assertEqual((plan["node"], plan["default_site"]), ("pve1", True))
+        (d / "discovery/pve-patch.json").unlink()
         self.inv["cluster"]["quorate"] = 0
         (d / "discovery/proxmox.json").write_text(json.dumps(self.inv))
         r = run("pve_node_plan.py", "pve1", cwd=d)
         self.assertEqual(r.returncode, 4)
         self.assertIn("Do NOT patch", r.stdout)
-        self.assertFalse((d / "discovery/pve-patch-pve1.json").exists())
+        self.assertFalse((d / "discovery/pve-patch.json").exists())
 
 
     def test_other_site_and_standalone_node(self):  # issue 52
@@ -2251,20 +2254,21 @@ class PveNodePlanTests(unittest.TestCase):  # issue 23
         self.addCleanup(shutil.rmtree, d)
         run("init_repo.py", str(d), "--components", "proxmox,ansible", cwd=d)
         run("config_set.py", "sites+={name: home}", "sites+={name: offsite, proxmox: {endpoint: 'https://x:8006'}}", cwd=d)
-        (d / "discovery/proxmox.json").write_text(json.dumps(self.inv))
         alone = {**self.inv, "site": "offsite", "cluster": None, "nodes": self.inv["nodes"][:1]}
-        (d / "discovery/proxmox-offsite.json").write_text(json.dumps(alone))
+        (d / "discovery/proxmox.json").write_text(json.dumps({"sites": {"home": self.inv, "offsite": alone}}))
         r = run("pve_node_plan.py", "pve1", "--site", "offsite", cwd=d)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("at site offsite", r.stdout)
         self.assertIn("Standalone node", r.stdout)
-        plan = json.loads((d / "discovery/pve-patch-offsite-pve1.json").read_text())
-        self.assertEqual((plan["site"], plan["standalone"]), ("offsite", True))
+        plans = lambda: json.loads((d / "discovery/pve-patch.json").read_text())["sites"]
+        plan = plans()["offsite"]["pve1"]
+        self.assertEqual((plan["site"], plan["standalone"], plan["default_site"]), ("offsite", True, False))
         self.assertEqual({r["action"] for r in plan["guests"]}, {"stop", "ha", "stays-stopped"})
-        self.assertFalse((d / "discovery/pve-patch-pve1.json").exists())   # the home node's plan is separate
+        self.assertNotIn("home", plans())                                   # the home node's plan is separate
         self.assertEqual(run("pve_node_plan.py", "pve1", cwd=d).returncode, 0)
-        plan = json.loads((d / "discovery/pve-patch-pve1.json").read_text())
-        self.assertEqual((plan["site"], plan["standalone"]), ("home", False))
+        plan = plans()["home"]["pve1"]
+        self.assertEqual((plan["site"], plan["standalone"], plan["default_site"]), ("home", False, True))
+        self.assertEqual(plans()["offsite"]["pve1"]["site"], "offsite")      # kept
 
 
 class PveNodePlaybookUpgradeTests(unittest.TestCase):  # issue 23
@@ -2320,6 +2324,62 @@ class DiscoveryLayoutTests(unittest.TestCase):  # GitHub issue #73
         pb.write_text(pb.read_text().replace("discovery/bmc.json", "discovery/bmc-{{ inventory_hostname }}.json"))
         self.assertEqual([i for i in ids() if i.startswith("bmc-")], ["bmc-one-file"])   # one note, not two
 
+    def test_sync_managed_moves_per_site_files_into_one_file_per_kind(self):  # GitHub issue #75
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        run("init_repo.py", str(d), "--components", "proxmox,ansible,discovery,appliances", cwd=d)
+        r = run("config_set.py", "sites+={name: home}", "sites+={name: offsite, proxmox: {endpoint: 'https://x:8006'}}",
+                cwd=d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        disc = d / "discovery"
+        old = {"proxmox.json": {"guests": [{"vmid": 100}]}, "proxmox-offsite.json": {"site": "offsite", "guests": []},
+               "network.json": {"hosts": {"10.0.0.1": {}}}, "network-offsite.json": {"site": "offsite", "hosts": {}},
+               "unifi.json": {"sites": ["Default"], "devices": []},
+               "pve-patch-pve1.json": {"node": "pve1", "site": "home", "guests": []},
+               "pve-patch-pve1-state.json": {"node": "pve1", "guests": [{"vmid": 100}]},
+               "pve-patch-offsite-pve1.json": {"node": "pve1", "site": "offsite", "guests": []}}
+        for name, doc in old.items():
+            (disc / name).write_text(json.dumps(doc))
+        out = run("init_repo.py", str(d), "--sync-managed", "--dry-run", cwd=d).stdout
+        self.assertIn("discovery/: move", out)
+        self.assertTrue((disc / "proxmox-offsite.json").exists())                   # dry run: nothing moved
+        r = run("init_repo.py", str(d), "--sync-managed", cwd=d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(sorted(f.name for f in disc.glob("*.json")),
+                         ["network.json", "proxmox.json", "pve-patch.json", "unifi.json"])
+        sites = lambda kind: json.loads((disc / f"{kind}.json").read_text())["sites"]
+        self.assertEqual(sites("proxmox"), {"home": old["proxmox.json"], "offsite": old["proxmox-offsite.json"]})
+        self.assertEqual(sorted(sites("network")), ["home", "offsite"])
+        self.assertEqual(sites("unifi"), {"home": old["unifi.json"]})
+        plans = sites("pve-patch")
+        self.assertEqual(plans["home"]["pve1"]["state_before"], old["pve-patch-pve1-state.json"])
+        self.assertEqual((plans["home"]["pve1"]["default_site"], plans["offsite"]["pve1"]["default_site"]),
+                         (True, False))
+        self.assertNotIn("discovery/: move", run("init_repo.py", str(d), "--sync-managed", "--dry-run", cwd=d).stdout)
+        import hmlib                                                                 # readers see every site
+        cfg = hmlib.load_config(d)
+        self.assertEqual([s["name"] for s, _ in hmlib.proxmox_snapshots(cfg)], ["home", "offsite"])
+
+    def test_site_files_keep_other_sites_and_read_old_layout(self):  # GitHub issue #75
+        import hmlib
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        f = d / "discovery/network.json"
+        f.parent.mkdir()
+        f.write_text(json.dumps({"hosts": {"10.0.0.1": {}}}))                         # before 0.29.0
+        home = {"name": "home", "default": True}
+        off = {"name": "offsite", "default": False}
+        self.assertEqual(hmlib.site_part(f, home), {"hosts": {"10.0.0.1": {}}})   # the default site's
+        self.assertIsNone(hmlib.site_part(f, off))
+        hmlib.write_site_part(f, off, {"hosts": {}})
+        hmlib.write_site_part(f, home, {"hosts": {"10.0.0.2": {}}})
+        self.assertEqual(json.loads(f.read_text()), {"sites": {"offsite": {"hosts": {}},
+                                                               "home": {"hosts": {"10.0.0.2": {}}}}})
+        unnamed = {"name": "", "default": True}                                     # no sites: in homelab.yaml
+        hmlib.write_site_part(f, unnamed, {"hosts": {}})
+        self.assertIn("default", hmlib.site_parts(f))
+        self.assertEqual(hmlib.site_part(f, home), {"hosts": {"10.0.0.2": {}}})     # its own key wins
+
     def test_bmc_playbook_reads_one_category_per_call(self):  # GitHub issue #74
         pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/bmc-info.yml").read_text()
         self.assertIn('category: "{{ item.category }}"', pb)
@@ -2354,6 +2414,7 @@ class DiscoveryLayoutTests(unittest.TestCase):  # GitHub issue #73
                 seen.add(name)
                 self.assertTrue(any(e.match(name) for e in entries), f"{f.name}: discovery/{m.group(1)}")
         self.assertIn("bmc.json", seen)
+        self.assertFalse([e for e in re.findall(r"^- `([^`]+)`", readme, re.M) if "site" in e])  # #75
 
 
     def test_old_discovery_readme_is_replaced_or_offered(self):
@@ -2730,8 +2791,7 @@ class PerSiteScanTests(unittest.TestCase):  # GitHub #72, #66: scans know their 
         self.assertEqual(ex("offsite"), ["10.0.0.1/32", "10.0.0.5/32"])
         self.assertEqual(ex(None), ["10.0.0.1/32", "10.0.0.5/32"])                  # site unknown: every entry
         self.assertEqual([str(n) for n in h.site_entries(cfg, "discovery.ignore_unmanaged", "offsite")], [])
-        self.assertEqual(h.network_file("/r", "offsite", False).name, "network-offsite.json")
-        self.assertEqual(h.network_file("/r", "home", True).name, "network.json")
+        self.assertEqual(h.network_file("/r").name, "network.json")   # every site inside (#75)
         self.assertEqual(h.outside_site(cfg, h.site(cfg, "home"), ["10.0.0.0/25", "10.0.1.5"]), ["10.0.1.5"])
         found = "\n".join(h.site_ambiguities(cfg))
         self.assertIn("network.excluded_hosts: 10.0.0.1 is in ranges sites home and offsite share", found)
@@ -2749,12 +2809,13 @@ class PerSiteScanTests(unittest.TestCase):  # GitHub #72, #66: scans know their 
     def test_scan_per_site_and_drift(self):
         excl, _ = self.scan("--site", "offsite")
         self.assertEqual(excl, "10.0.0.1/32,10.0.0.5/32")
-        off = json.loads((self.d / "discovery/network-offsite.json").read_text())
-        self.assertEqual((off["site"], sorted(off["hosts"])), ("offsite", ["10.0.0.5", "10.0.0.9"]))
-        self.assertFalse((self.d / "discovery/network.json").exists())
+        parts = lambda: json.loads((self.d / "discovery/network.json").read_text())["sites"]
+        self.assertEqual(list(parts()), ["offsite"])
+        self.assertEqual(sorted(parts()["offsite"]["hosts"]), ["10.0.0.5", "10.0.0.9"])
+        self.assertEqual(list(self.d.glob("discovery/network-*.json")), [])        # no site in a file name (#75)
         excl, _ = self.scan("--site", "home")
         self.assertEqual(excl, "10.0.0.1/32")
-        self.assertTrue((self.d / "discovery/network.json").exists())
+        self.assertEqual(sorted(parts()), ["home", "offsite"])
         excl, _ = self.scan()
         self.assertEqual(excl, "10.0.0.1/32,10.0.0.5/32")                           # no --site: fail-safe
         hosts = self.d / "ansible/inventory/managed/hosts.yml"
@@ -3017,7 +3078,7 @@ class SshProbeTests(unittest.TestCase):  # issue 25
             kh = next(o for o in c if o.startswith("UserKnownHostsFile="))
             self.assertNotIn(".ssh", kh)                                            # throwaway known_hosts
             self.assertEqual(c[c.index("-l") + 1], "admin")                          # defaults.admin_user
-        net = json.loads((self.d / "discovery/network.json").read_text())["hosts"]
+        net = json.loads((self.d / "discovery/network.json").read_text())["sites"]["default"]["hosts"]
         self.assertEqual(net["10.0.20.20"]["device_type_guess"], "hypervisor")      # new host, from the probe
         self.assertEqual(net["10.0.20.11"]["ssh_probe"]["os_id"], "rocky")
         self.assertFalse(net["10.0.20.12"]["ssh_probe"]["ok"])
@@ -3192,7 +3253,7 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
 
     def test_templated_user_is_not_passed(self):
         sys.path.insert(0, str(SCRIPTS))
-        self.assertEqual(self.ra.group_hosts(self.d, "linux"), [("10.0.0.5", None, None)])  # all.yml's {{ … }}
+        self.assertEqual(self.ra.group_hosts(self.d, "linux"), [("10.0.0.5", None, None, None)])  # all.yml's {{ … }}
 
     def test_all_unreachable(self):
         r = self.audit("10.0.0.9", "--no-write")
