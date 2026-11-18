@@ -247,12 +247,12 @@ def _check_tls(cfg, px):
                  "detail": f"CA {name!r} is trusted in the macOS keychain ({kc}), but Python does not read the "
                            f"keychain. Export it and point ca_cert at it: mkdir -p ~/.config/homelab && "
                            f"security find-certificate -a -c \"{name}\" -p {kc} > ~/.config/homelab/{slug}.pem && "
-                           + (f"python3 $HM/scripts/config_set.py 'proxmox.ca_cert=~/.config/homelab/{slug}.pem'"
-                              if where == "proxmox" else f"set {where}.ca_cert to ~/.config/homelab/{slug}.pem")}]
+                           f"python3 $HM/scripts/config_set.py '{where}.ca_cert=~/.config/homelab/{slug}.pem'"}]
     issuer = f" (issuer {names[0]!r})" if names else ""
     return [{"check": check, "ok": False,
              "detail": f"certificate not trusted{issuer}: {err.verify_message}. Set {where}.ca_cert to the CA's PEM "
-                       "(Proxmox's own CA: /etc/pve/pve-root-ca.pem on a node) rather than verify_tls: false"}]
+                       "(Proxmox's own CA: /etc/pve/pve-root-ca.pem on a node) rather than verify_tls: false: "
+                       f"python3 $HM/scripts/config_set.py '{where}.ca_cert=~/.config/homelab/<ca>.pem'"}]
 
 
 def check_tofu_sites(cfg):

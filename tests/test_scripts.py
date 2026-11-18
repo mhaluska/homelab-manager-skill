@@ -2976,6 +2976,13 @@ class ProxmoxTlsAndPermissionTests(unittest.TestCase):
                 mock.patch.object(ce, "_keychain_ca_fix", return_value=None):
             r = ce.check_proxmox_tls(cfg)[0]
         self.assertIn("pve-root-ca.pem", r["detail"])
+        site_cfg = {"sites": [{"name": "home", "proxmox": cfg["proxmox"]},
+                              {"name": "far", "proxmox": {"endpoint": "https://pve2.example:8006"}}]}
+        with mock.patch.object(ce, "_handshake", return_value=err), \
+                mock.patch.object(ce, "_chain_names", return_value=["Home Root CA"]), \
+                mock.patch.object(ce, "_keychain_ca_fix", return_value=("Home Root CA", "/Library/Keychains/System.keychain")):
+            r = ce.check_proxmox_tls(site_cfg)[1]
+        self.assertIn("config_set.py 'sites[far].proxmox.ca_cert=~/.config/homelab/home-root-ca.pem'", r["detail"])
         self.assertEqual(ce.check_proxmox_tls({"proxmox": {"endpoint": "https://x", "verify_tls": False}})[0]["ok"], None)
         self.assertEqual(ce.check_proxmox_tls({}), [])
 
