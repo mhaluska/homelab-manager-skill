@@ -1634,6 +1634,27 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertNotIn("default_v8(", out)
         self.assertEqual(overview.os_top("x"), "x")
 
+    def test_every_nic_counts(self):  # GitHub issue #107: a router VM is on every VLAN it has a NIC in
+        d = Path(self.d)
+        run("config_set.py", "network.vlans+={id: 30, name: WAN, cidr: 10.9.30.0/24}", cwd=self.d)
+        snap = json.loads((d / "discovery/proxmox.json").read_text())
+        snap["guests"].append({"vmid": 103, "name": "rtr1", "type": "vm", "node": "pve1", "status": "running",
+                               "template": False, "config": {"net0": "virtio=x,bridge=vmbr0,tag=30",
+                                                             "net1": "virtio=y,bridge=vmbr0,tag=20",
+                                                             "net2": "virtio=z,bridge=vmbr0,tag=77",
+                                                             "net3": "virtio=w,bridge=vmbr9",
+                                                             "net4": "virtio=v,bridge=vmbr9",
+                                                             "ipconfig1": "ip=10.9.20.1/24"}})
+        (d / "discovery/proxmox.json").write_text(json.dumps(snap))
+        md = run("overview.py", "--no-ansible", "--out", "-", cwd=self.d).stdout
+        self.assertIn("| 20 | DMZ | 10.9.20.0/24 | 10.9.20.1 | 3 |", md)
+        self.assertIn("| 30 | WAN | 10.9.30.0/24 | – | 1 |", md)
+        self.assertIn('pve1 (3 guests)"]', md)
+        self.assertIn('default_n0 -->|"1"| default_v30', md)
+        self.assertIn('default_v77(["VLAN 77 (not in network.vlans)"])', md)
+        self.assertIn('default_n0 -->|"1 untagged"| default_untagged_vmbr9(["untagged on vmbr9"])', md)
+        self.assertIn("| 103 | rtr1 | vm | pve1 | running | – | – | – | VLAN 20 DMZ | 10.9.20.1 |", md)   # one NIC here
+
     def test_wording(self):  # GitHub issue #109
         sys.path.insert(0, str(SCRIPTS))
         import overview

@@ -163,6 +163,17 @@ def guest_net(g: dict, cfg: dict, site_name: str, prefer_ip: str | None = None,
     return ip or "", tag, hmlib.vlan_label(cfg, tag, ip, site_name) if (tag is not None or ip) else ""
 
 
+def guest_links(g: dict) -> list[tuple[int | None, str]]:
+    """(VLAN tag, bridge) of every NIC of a guest, each once (GitHub issue #107): a router VM counts on every VLAN it
+    has a NIC in. The bridge is kept only for untagged NICs; a guest without NIC config: its primary NIC's tag."""
+    out = []
+    for n in hmlib.guest_nics(g):
+        key = (n["tag"], "" if n["tag"] is not None else n["bridge"])
+        if key not in out:
+            out.append(key)
+    return out or [(g.get("_tag"), "")]
+
+
 def onboot(g: dict) -> str:
     v = (g.get("config") or {}).get("onboot")
     return "–" if v is None else ("yes" if str(v) in ("1", "true", "True") else "no")
@@ -396,11 +407,12 @@ def site_map(st: dict, px: dict, vl: list[dict], guests_by: dict, gateways: dict
     per_node = {}
     tags_used = set()
     for n in sorted(px.get("nodes") or [], key=lambda n: n.get("node") or ""):
-        per_vlan: dict = {}
+        per_vlan: dict = {}   # (tag, bridge of an untagged NIC) → guests with a NIC there (GitHub issue #107)
         for g in guests_by.get(n.get("node"), []):
-            per_vlan[g["_tag"]] = per_vlan.get(g["_tag"], 0) + 1
+            for key in g.get("_links") or [(g["_tag"], "")]:
+                per_vlan[key] = per_vlan.get(key, 0) + 1
         per_node[n.get("node")] = per_vlan
-        tags_used |= set(per_vlan)
+        tags_used |= {tag for tag, _ in per_vlan if tag is not None}
     dev_by_vlan: dict = {}
     for d in devices:
         vid = next((v["id"] for v in vl if d["address"] and in_net(d["address"], v.get("cidr"))), None)
@@ -423,10 +435,12 @@ def site_map(st: dict, px: dict, vl: list[dict], guests_by: dict, gateways: dict
     known = {v["id"] for v in vl}
     for i, n in enumerate(sorted(px.get("nodes") or [], key=lambda n: n.get("node") or "")):
         per_vlan = per_node[n.get("node")]
-        lines.append(f'  {p}_n{i}["Proxmox {label(n.get("node"))} ({sum(per_vlan.values())} guests)"]')
-        for tag, count in sorted(per_vlan.items(), key=lambda x: (x[0] is None, x[0] or 0)):
+        lines.append(f'  {p}_n{i}["Proxmox {label(n.get("node"))} ({len(guests_by.get(n.get("node"), []))} guests)"]')
+        for (tag, bridge), count in sorted(per_vlan.items(), key=lambda x: (x[0][0] is None, x[0][0] or 0, x[0][1])):
             if tag is None:
-                lines.append(f'  {p}_n{i} -->|"{count} untagged"| {p}_untagged(["untagged / native"])')
+                ref = f"{p}_untagged" + ("_" + re.sub(r"\W", "_", bridge) if bridge else "")
+                lines.append(f'  {p}_n{i} -->|"{count} untagged"| {ref}(["untagged'
+                             + (f' on {label(bridge)}"])' if bridge else ' / native"])'))
             else:
                 if tag not in known:
                     lines.append(f'  {p}_v{tag}(["VLAN {tag} (not in network.vlans)"])')
@@ -472,6 +486,7 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known) -
     for g in guests:
         prefer = str((managed.get(g.get("name")) or {}).get("ansible_host") or "") or None
         g["_ip"], g["_tag"], g["_vlan"] = guest_net(g, cfg, st["name"], prefer if is_ip(prefer) else None, vl)
+        g["_links"] = guest_links(g)
         guests_by.setdefault(g.get("node"), []).append(g)
     devices = device_rows(cfg, st, docs, managed, net, unifi)
     stats = {"nodes": len(px.get("nodes") or []), "guests": len(guests), "vlans": len(vl), "warnings": []}
@@ -506,8 +521,8 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known) -
         except ValueError:
             size = None
         rows.append([v["id"], v.get("name"), v.get("cidr"), v.get("gw"),
-                     len([g for g in guests if g["_tag"] == v["id"] or (g["_tag"] is None and g["_ip"]
-                                                                          and in_net(g["_ip"], v.get("cidr")))]),
+                     len([g for g in guests if v["id"] in {t for t, _ in g["_links"]}   # every NIC (GitHub issue #107)
+                          or (g["_tag"] is None and g["_ip"] and in_net(g["_ip"], v.get("cidr")))]),
                      f"{len(addrs)}/{size}" if size else len(addrs)])
     gateways = {v["id"]: (known.addr.get(v["gw"], ("", ""))[0] if known.addr.get(v["gw"], ("", ""))[1] != "gateway"
                           else "") or v["gw"] if is_ip(v.get("gw")) else v.get("gw") for v in vl if v.get("gw")}

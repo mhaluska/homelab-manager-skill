@@ -882,7 +882,7 @@ def rank_guest_addresses(g: dict, ranges: list | None = None) -> list[dict]:
 
 def guest_nics(g: dict) -> list[dict]:
     """A guest's NICs from its snapshot config (--details) in netN order (net2 before net10), each
-    {idx, tag, mac, ips}: ips are the NIC's static IPv4/IPv6 (LXC `ip=`, VM `ipconfigN`) and the addresses the
+    {idx, tag, bridge, mac, ips}: ips are the NIC's static IPv4/IPv6 (LXC `ip=`, VM `ipconfigN`) and the addresses the
     guest agent / LXC interfaces report for its MAC (GitHub issue #97: VLAN and IP of the same NIC)."""
     conf = g.get("config") or {}
     nics = []
@@ -890,9 +890,10 @@ def guest_nics(g: dict) -> list[dict]:
         v, idx = str(conf[k]), int(k[3:])
         mac = _MAC_RE.search(v)
         tag = re.search(r"(?<![\w-])tag=(\d+)", v)
+        bridge = re.search(r"(?<![\w-])bridge=([^,\s]+)", v)
         ips = re.findall(r"(?<![\w])ip6?=([0-9A-Fa-f.:]+)(?:/\d+)?", v)
         ips += re.findall(r"(?<![\w])ip6?=([0-9A-Fa-f.:]+)(?:/\d+)?", str(conf.get(f"ipconfig{idx}") or ""))
-        nics.append({"idx": idx, "tag": int(tag.group(1)) if tag else None,
+        nics.append({"idx": idx, "tag": int(tag.group(1)) if tag else None, "bridge": bridge.group(1) if bridge else "",
                      "mac": mac.group(0).lower() if mac else "", "ips": [i.lower() for i in ips]})
     for a in g.get("ips") or []:
         ip, mac = str(a.get("ip") or "").lower(), str(a.get("mac") or "").lower()
