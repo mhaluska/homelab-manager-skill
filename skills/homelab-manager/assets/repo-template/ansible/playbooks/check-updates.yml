@@ -7,8 +7,10 @@
 # autoremove_packages lists what patch-linux.yml's autoremove would remove; autoremove_protected the ones
 # matching autoremove_protect (patch-linux.yml skips autoremove on such a host: review them first).
 # Windows hosts (-e windows_target=…): a search only. QNAP NAS (-e qnap_target=…): firmware and app versions.
+# With -e target=X every play keeps to X (GitHub issue #92): the Linux play skips windows/appliances/qnap hosts in X,
+# the Windows and QNAP plays run only on X's windows/qnap hosts unless windows_target/qnap_target are given.
 - name: Pending updates on Linux
-  hosts: "{{ target | default('linux') }}"
+  hosts: "{{ target | default('linux') }}:!windows:!appliances:!qnap"
   gather_facts: false
   become: true
   vars:
@@ -159,7 +161,7 @@
               or ansible_failed_result.msg | default('failed')) | trim | truncate(200) }}
 
 - name: Pending updates on Windows (search only, installs nothing)
-  hosts: "{{ windows_target | default('windows') }}"
+  hosts: "{{ windows_target | default((target ~ ':&windows') if target is defined else 'windows') }}"
   gather_facts: false
   tasks:
     - name: Mark as checked
@@ -191,7 +193,7 @@
 # (QPKG) with a newer version in App Center's catalogue as QTS last cached it (/tmp/rssdoc, refreshed by QTS;
 # gone after a reboot until App Center refreshes it). Installs nothing: updates stay in the QTS UI.
 - name: Firmware and app versions on QNAP NAS (reads files only)
-  hosts: "{{ qnap_target | default('qnap') }}"
+  hosts: "{{ qnap_target | default((target ~ ':&qnap') if target is defined else 'qnap') }}"
   gather_facts: false
   tasks:
     - name: Mark as checked
@@ -281,7 +283,7 @@
 # Runs on the checked hosts, writing once on this Mac: a `hosts: localhost` play would be skipped by
 # --limit (-l <host>), losing the result (GitHub issue #48).
 - name: Write discovery/updates.json
-  hosts: "{{ target | default('linux') }}:{{ windows_target | default('windows') }}:{{ qnap_target | default('qnap') }}"
+  hosts: "{{ target | default('linux:windows:qnap') }}{{ (':' ~ windows_target) if windows_target is defined else '' }}{{ (':' ~ qnap_target) if qnap_target is defined else '' }}"
   gather_facts: false
   become: false
   vars:
