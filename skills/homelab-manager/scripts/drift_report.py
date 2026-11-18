@@ -2,7 +2,7 @@
 """Compare what is running against what Git declares.
 
     drift_report.py [--env homelab] [--tofu-json FILE] [--no-tofu] [--out discovery/drift.md]
-    drift_report.py --stale        # is discovery/drift.md older than its inputs? exit 0 fresh, 1 stale, 2 missing
+    drift_report.py --stale        # is discovery/drift.md (or OVERVIEW.md) out of date? exit 0 fresh, 1 stale, 2 missing
 
 Sources (all read-only):
   live      discovery/proxmox.json   (proxmox_inventory.py)  and discovery/network.json (nmap_scan.py;
@@ -303,7 +303,14 @@ def main():
         newer = newest_inputs(root, report.stat().st_mtime)
         print(f"stale: changed since the report: {', '.join(newer)} — regenerate it before using it" if newer
               else "fresh: no input changed since the report")
-        return 1 if newer else 0
+        overview_stale = False
+        if (root / "OVERVIEW.md").is_file():   # GitHub issue #89: the overview page too, when the repo has one
+            import overview
+            managed, note = load_ansible(root)
+            overview_stale = (root / "OVERVIEW.md").read_text() != overview.render(cfg, managed, note)
+            if overview_stale:
+                print("stale: OVERVIEW.md differs from the repository data — run overview.py (after drift_report.py)")
+        return 1 if newer or overview_stale else 0
 
     try:
         all_sites = hmlib.sites(cfg)

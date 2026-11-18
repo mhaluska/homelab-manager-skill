@@ -877,6 +877,13 @@ class DriftExtraIpsTests(unittest.TestCase):
         r = run("drift_report.py", "--stale", cwd=self.d)
         self.assertEqual(r.returncode, 1)
         self.assertIn("ansible/inventory", r.stdout)
+        os.utime(drift, (time.time() + 60, time.time() + 60))           # GitHub issue #89: OVERVIEW.md too
+        run("overview.py", cwd=self.d)
+        self.assertEqual(run("drift_report.py", "--stale", cwd=self.d).returncode, 0)
+        Path(self.d, "OVERVIEW.md").write_text("old")
+        r = run("drift_report.py", "--stale", cwd=self.d)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("OVERVIEW.md differs", r.stdout)
 
 
 class GuestNetworkMappingTests(unittest.TestCase):

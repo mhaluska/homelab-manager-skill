@@ -187,7 +187,8 @@ critical host plus any host with something pending (stale data marked), inventor
 health, RouterOS findings and updates, capacity and backup warnings, a one-line drift summary; and when each source
 was collected. With several sites, a sites diagram first.
 - Regenerate it after every verified change (operating loop step 9) and commit it with that change. The output is
-  deterministic (no "generated at" time), so the diff shows what changed. `--check` exits 1 when it is stale.
+  deterministic (no "generated at" time), so the diff shows what changed. `--check` exits 1 when it is stale; so
+  does `drift_report.py --stale` when the repo has an OVERVIEW.md.
 - Refresh the sources first when they are old (Sources table); the page states nothing live.
 - `overview.redact: true` in homelab.yaml (a shared or public repo) masks IPv4 addresses, MACs, the domain and the
   Proxmox endpoint hosts. Off by default: the repo is private. Never put secrets in it; it holds none.
