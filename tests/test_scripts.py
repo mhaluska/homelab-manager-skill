@@ -3034,6 +3034,45 @@ class ConfigSetTests(unittest.TestCase):
         run("config_set.py", "vmid_scheme={vlan}{octet:03d}", cwd=self.d)          # not a flow map: a string
         self.assertEqual(json.loads(yq(".vmid_scheme", self.f)), "{vlan}{octet:03d}")
 
+    def test_list_entry_selectors(self):  # issue 99
+        self.f.write_text(
+            "network:\n  vlans:\n    - {id: 10, name: LAN, cidr: 10.0.10.0/24}\n"
+            "    - id: 20      # dmz\n      name: DMZ\n      cidr: 10.0.20.0/24\n"
+            "  authorized_ranges: [10.0.0.0/16]\n"
+            "sites:\n  - name: home\n  - name: offsite\n    label: Rented   # far away\n"
+            "    proxmox:\n      endpoint: https://pve.example.test:8006\n      verify_tls: true\n")
+        before = self.f.read_text()
+        r = run("config_set.py", "sites[offsite].proxmox.ca_cert=/ca.pem", "sites[home].label=Home",
+                "network.vlans[20].gw=10.0.20.1", "network.vlans[LAN].gw=10.0.10.1",
+                "sites[offsite].ranges+=10.9.0.0/24", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        doc = json.loads(yq(".", self.f))
+        self.assertEqual(doc["sites"][1]["proxmox"]["ca_cert"], "/ca.pem")
+        self.assertEqual(doc["sites"][1]["ranges"], ["10.9.0.0/24"])
+        self.assertEqual(doc["sites"][0]["label"], "Home")
+        self.assertEqual([v.get("gw") for v in doc["network"]["vlans"]], ["10.0.10.1", "10.0.20.1"])
+        text = self.f.read_text()
+        self.assertIn("    label: Rented   # far away\n", text)               # untouched lines stay as they were
+        self.assertIn("    - id: 20      # dmz\n", text)
+        r = run("config_set.py", "--delete", "network.vlans[DMZ].id", "--delete", "sites[offsite].proxmox.verify_tls",
+                cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        doc = json.loads(yq(".", self.f))
+        self.assertEqual(doc["network"]["vlans"][1], {"name": "DMZ", "cidr": "10.0.20.0/24", "gw": "10.0.20.1"})
+        self.assertNotIn("verify_tls", doc["sites"][1]["proxmox"])
+        r = run("config_set.py", "--delete", "network.vlans[DMZ]", "network.authorized_ranges[10.0.0.0/16]=10.1.0.0/16",
+                cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        doc = json.loads(yq(".", self.f))
+        self.assertEqual([v["name"] for v in doc["network"]["vlans"]], ["LAN"])
+        self.assertEqual(doc["network"]["authorized_ranges"], ["10.1.0.0/16"])
+        for bad in ("sites[moon].label=x", "network.vlans[LAN].cidr[x]=y"):
+            r = run("config_set.py", bad, cwd=self.d)
+            self.assertEqual(r.returncode, 1, bad)
+        self.assertIn("no entry with name or id 'moon' (entries: home, offsite)",
+                      run("config_set.py", "sites[moon].label=x", cwd=self.d).stderr)
+        self.assertNotEqual(self.f.read_text(), before)
+
     def test_list_append_keeps_comment_on_its_key(self):
         r = run("config_set.py", "network.authorized_ranges+=10.0.10.0/24", "network.authorized_ranges+=10.0.10.0/24",
                 cwd=self.d)

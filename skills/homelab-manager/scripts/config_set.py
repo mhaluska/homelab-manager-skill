@@ -6,6 +6,8 @@
     config_set.py 'sites+={name: offsite, label: Rented server, proxmox: {endpoint: https://…:8006}}'
     config_set.py 'network.excluded_hosts-=10.0.10.1'          # remove from a list
     config_set.py 'defaults.ssh_public_keys=["ssh-ed25519 AAAA… me@mac"]'
+    config_set.py 'sites[offsite].proxmox.ca_cert=~/.config/homelab/ca.pem'   # a list entry by name (or id)
+    config_set.py 'network.vlans[20].gw=10.0.20.1'
     config_set.py --delete discovery.ignore_unmanaged
     config_set.py --dry-run …                                  # print the diff, write nothing
 
@@ -187,8 +189,172 @@ def _replace_value(lines, i, value, comment=None, keep_quotes=True):
     lines[i:end] = [head + new_val + tail + "\n"]
 
 
+_SEG = re.compile(r"([A-Za-z0-9_-]+)(?:\[([^\]]*)\])?(?:\.|$)")
+_PATH = r"[A-Za-z0-9_-]+?(?:\[[^\]=]*\])?(?:\.[A-Za-z0-9_-]+?(?:\[[^\]=]*\])?)*?"
+
+
+def segments(path: str) -> list[tuple[str, str | None]]:
+    """'sites[offsite].proxmox.ca_cert' -> [('sites', 'offsite'), ('proxmox', None), ('ca_cert', None)]."""
+    segs = [(m.group(1), m.group(2)) for m in _SEG.finditer(path)]
+    if not segs or "".join(f"{k}[{s}]." if s is not None else f"{k}." for k, s in segs)[:-1] != path:
+        raise EditError(f"can't parse path {path!r}")
+    return segs
+
+
+def select(items, sel: str, where: str) -> int:
+    """Index of the one list entry a selector names (GitHub issue #99): its name, else its id, else the item itself
+    for a list of scalars."""
+    if not isinstance(items, list):
+        raise EditError(f"{where} is not a list")
+    for field in ("name", "id"):
+        hits = [i for i, x in enumerate(items) if isinstance(x, dict) and field in x and str(x[field]) == sel]
+        if hits:
+            break
+    else:
+        hits = [i for i, x in enumerate(items) if not isinstance(x, (dict, list)) and str(x) == sel]
+    if len(hits) != 1:
+        names = [str(x.get("name", x.get("id"))) if isinstance(x, dict) else str(x) for x in items]
+        raise EditError(f"{where}[{sel}]: {'no entry' if not hits else f'{len(hits)} entries'} with name or id "
+                        f"{sel!r} (entries: {', '.join(names) or 'none'})")
+    return hits[0]
+
+
+def _expect(want: dict, kind: str, segs, value) -> list | None:
+    """Apply one operation to the expected document; return the concrete path (keys and list indexes), or None
+    when there is nothing to do (deleting a missing key)."""
+    path, parent, where = [], want, ""
+    for n, (key, sel) in enumerate(segs):
+        last = n == len(segs) - 1
+        where = f"{where}.{key}" if where else key
+        if not isinstance(parent, dict):
+            raise EditError(f"{where}: parent is not a mapping")
+        if last and sel is None:
+            path.append(key)
+            break
+        if sel is None:
+            if kind == "delete" and not isinstance(parent.get(key), dict):
+                return None
+            if parent.get(key) is None:
+                parent[key] = {}
+            parent, path = parent[key], path + [key]
+            continue
+        idx = select(parent.get(key), sel, where)
+        where += f"[{sel}]"
+        path += [key, idx]
+        if last:
+            break
+        parent = parent[key][idx]
+    leaf = path[-1]
+    container = _get(want, path[:-1])
+    if kind == "set":
+        container[leaf] = value
+    elif kind in ("add", "remove"):
+        cur = container[leaf] if isinstance(leaf, int) else container.get(leaf)
+        cur = [] if cur is None else cur
+        if not isinstance(cur, list):
+            raise EditError(f"{where} is not a list")
+        if kind == "add" and value not in cur:
+            cur = cur + [value]
+        elif kind == "remove":
+            cur = [x for x in cur if x != value]
+        container[leaf] = cur
+    elif kind == "delete":
+        if isinstance(leaf, int):
+            del container[leaf]
+        elif leaf in container:
+            del container[leaf]
+        else:
+            return None
+    else:
+        raise EditError(f"unknown operation {kind}")
+    return path
+
+
+def _list_items(lines: list[str], start: int, end: int) -> list[int]:
+    """Line numbers of the `- ` entries of the block list in lines[start:end]."""
+    ind = _child_indent(lines, start, end, 0)
+    return [k for k in range(start, end) if _significant(lines[k]) and _indent(lines[k]) == ind
+            and (lines[k].lstrip().startswith("- ") or lines[k].strip() == "-")]
+
+
+def _edit_text(lines: list[str], path: list, kind: str, root, comment, top: int = 0) -> None:
+    """Change the text of lines to match the expected value at path (keys and list indexes) under root, the
+    expected value these lines hold. top: indent of their keys when none is found (a list entry's body)."""
+    start, end, line_no, depth, base_indent = 0, len(lines), None, 0, -2
+    for d, p in enumerate(path):
+        if isinstance(p, int):                    # an entry of the list whose key is on line_no
+            line = lines[line_no].rstrip("\n")
+            if _split_comment(line[_KEY.match(line).end():])[0].strip():   # flow list: re-render it whole
+                _replace_value(lines, line_no, _get(root, path[:d]), None)
+                return
+            items = _list_items(lines, start, end)
+            a = items[p]
+            b = items[p + 1] if p + 1 < len(items) else end
+            ind = " " * _indent(lines[a])
+            rest, item = path[d + 1:], (None if kind == "delete" and d == len(path) - 1 else _get(root, path[:d + 1]))
+            body = lines[a].lstrip()[1:].lstrip(" ")
+            if not rest or not isinstance(item, dict) or body.startswith("{") or not _KEY.match(body):
+                lines[a:b] = [] if item is None else [f"{ind}- {render(item)}\n"]
+                return
+            pad = ind + "  "
+            sub = [pad + body] + lines[a + 1:b]
+            _edit_text(sub, rest, kind, item, comment, len(pad))
+            k = next((k for k, x in enumerate(sub) if _significant(x)), None)
+            if k is None:
+                sub = [f"{ind}- {{}}\n"]
+            else:
+                sub[k] = f"{ind}- {sub[k][len(pad):]}"
+            lines[a:b] = sub
+            return
+        j = _find(lines, p, start, end)
+        if j is None:
+            break
+        line_no, depth = j, d + 1
+        start, end = j + 1, _block_end(lines, j)
+        base_indent = _indent(lines[j])
+    if depth == len(path):
+        if kind == "delete":
+            del lines[line_no:_block_end(lines, line_no)]
+        else:
+            _replace_value(lines, line_no, _get(root, path), comment)
+        return
+    if line_no is not None:
+        line = lines[line_no].rstrip("\n")
+        m = _KEY.match(line)
+        val, cmt = _split_comment(line[m.end():])
+        val = val.strip()
+        if val.startswith("{"):               # inline mapping: re-render it whole
+            _replace_value(lines, line_no, _get(root, path[:depth]), None)
+            return
+        if val in ("~", "null"):              # empty value becomes a block mapping
+            lines[line_no] = line[:m.end()] + cmt + "\n"
+            start = end = line_no + 1
+        elif val:
+            raise EditError(f"{'.'.join(map(str, path[:depth]))} is not a mapping")
+    if kind == "delete":
+        return
+    # insert the missing chain at the end of the deepest existing block
+    ind = _child_indent(lines, start, end, base_indent) if line_no is not None else top
+    at = end if line_no is not None else len(lines)
+    new, rest = [], path[depth:]
+    for k, p in enumerate(rest):
+        pad = " " * (ind + 2 * k)
+        if k < len(rest) - 1:
+            new.append(f"{pad}{p}:\n")
+        else:
+            body = f"{pad}{p}: {render(_get(root, path))}"
+            c = ""
+            if comment:   # line the comment up with the sibling above, if it has one
+                prev = lines[at - 1] if at else ""
+                col = prev.find(" #") + 1 if _KEY.match(prev) and " #" in prev else 0
+                c = " " * max(2, col - len(body)) + f"# {comment}"
+            new.append(f"{body}{c}\n")
+    lines[at:at] = new
+
+
 def apply_ops(text: str, doc: dict, ops: list[tuple]) -> tuple[str, dict]:
     """ops: ("set", path, value[, comment]) | ("add"|"remove", path, item) | ("delete", path).
+    A path segment may select a list entry by name or id: sites[offsite].proxmox.ca_cert (GitHub issue #99).
 
     Returns (new text, expected document). Raises EditError when it can't edit safely.
     """
@@ -197,89 +363,10 @@ def apply_ops(text: str, doc: dict, ops: list[tuple]) -> tuple[str, dict]:
         lines[-1] += "\n"
     want = copy.deepcopy(doc)
     for op in ops:
-        kind, path = op[0], op[1].split(".")
-        # expected document
-        parent = want
-        for p in path[:-1]:
-            if not isinstance(parent, dict):
-                raise EditError(f"{'.'.join(path)}: {p} is not a mapping")
-            if kind == "delete":
-                parent = parent.get(p) or {}
-                continue
-            if parent.get(p) is None:
-                parent[p] = {}
-            parent = parent[p]
-        if not isinstance(parent, dict):
-            raise EditError(f"{'.'.join(path)}: parent is not a mapping")
-        leaf = path[-1]
-        comment = None
-        if kind == "set":
-            parent[leaf] = op[2]
-            comment = op[3] if len(op) > 3 else None
-        elif kind in ("add", "remove"):
-            cur = parent.get(leaf)
-            cur = [] if cur is None else cur
-            if not isinstance(cur, list):
-                raise EditError(f"{'.'.join(path)} is not a list")
-            if kind == "add" and op[2] not in cur:
-                cur = cur + [op[2]]
-            elif kind == "remove":
-                cur = [x for x in cur if x != op[2]]
-            parent[leaf] = cur
-        elif kind == "delete":
-            if leaf not in parent:
-                continue
-            del parent[leaf]
-        else:
-            raise EditError(f"unknown operation {kind}")
-
-        # text: deepest existing block key on the path
-        start, end, line_no, depth, base_indent = 0, len(lines), None, 0, -2
-        for d, p in enumerate(path):
-            j = _find(lines, p, start, end)
-            if j is None:
-                break
-            line_no, depth = j, d + 1
-            start, end = j + 1, _block_end(lines, j)
-            base_indent = _indent(lines[j])
-        if depth == len(path):
-            if kind == "delete":
-                del lines[line_no:_block_end(lines, line_no)]
-            else:
-                _replace_value(lines, line_no, _get(want, path), comment)
-            continue
-        if line_no is not None:
-            line = lines[line_no].rstrip("\n")
-            m = _KEY.match(line)
-            val, cmt = _split_comment(line[m.end():])
-            val = val.strip()
-            if val.startswith("{"):               # inline mapping: re-render it whole
-                _replace_value(lines, line_no, _get(want, path[:depth]), None)
-                continue
-            if val in ("~", "null"):              # empty value becomes a block mapping
-                lines[line_no] = line[:m.end()] + cmt + "\n"
-                start = end = line_no + 1
-            elif val:
-                raise EditError(f"{'.'.join(path[:depth])} is not a mapping")
-        if kind == "delete":
-            continue
-        # insert the missing chain at the end of the deepest existing block
-        ind = _child_indent(lines, start, end, base_indent) if line_no is not None else 0
-        at = end if line_no is not None else len(lines)
-        new, rest = [], path[depth:]
-        for k, p in enumerate(rest):
-            pad = " " * (ind + 2 * k)
-            if k < len(rest) - 1:
-                new.append(f"{pad}{p}:\n")
-            else:
-                body = f"{pad}{p}: {render(_get(want, path))}"
-                c = ""
-                if comment:   # line the comment up with the sibling above, if it has one
-                    prev = lines[at - 1] if at else ""
-                    col = prev.find(" #") + 1 if _KEY.match(prev) and " #" in prev else 0
-                    c = " " * max(2, col - len(body)) + f"# {comment}"
-                new.append(f"{body}{c}\n")
-        lines[at:at] = new
+        kind = op[0]
+        path = _expect(want, kind, segments(op[1]), op[2] if len(op) > 2 else None)
+        if path is not None:
+            _edit_text(lines, path, kind, want, op[3] if kind == "set" and len(op) > 3 else None)
     return "".join(lines), want
 
 
@@ -308,7 +395,7 @@ def edit_file(path: Path, ops: list[tuple], dry_run: bool = False) -> str:
     """Apply ops to a YAML file; verify with yq; return a unified diff ('' = no change)."""
     old = path.read_text()
     new, want = apply_ops(old, yq_json(old), ops)
-    if any(op[1].split(".")[0] in ("sites", "network", "opentofu", "discovery") for op in ops):
+    if any(segments(op[1])[0][0] in ("sites", "network", "opentofu", "discovery") for op in ops):
         try:   # site names become Ansible groups, VLAN sites must exist: refuse a bad edit before writing
             hmlib.sites(want)
         except hmlib.ConfigError as e:
@@ -347,7 +434,7 @@ def site_defaults(ops: list[tuple], doc: dict) -> list[str]:
 
 
 def parse_op(arg: str) -> tuple:
-    m = re.match(r"^([A-Za-z0-9_.-]+?)(\+=|-=|=)(.*)$", arg, re.S)
+    m = re.match(rf"^({_PATH})(\+=|-=|=)(.*)$", arg, re.S)
     if not m:
         raise EditError(f"can't parse {arg!r}: expected path=value, path+=item or path-=item")
     path, sign, value = m.groups()

@@ -233,7 +233,7 @@ Scripts (all in `$HM/scripts/`):
 | `ssh_probe.py [targets] [--user U] [--draft] [--site N]` | read-only SSH probe of discovered hosts: hostname, OS, usable Python, OS group | `discovery/network.json` |
 | `routeros_audit.py <hosts> [--group G] [--user U]` | read-only MikroTik RouterOS inspection + audit findings (Markdown report) | `discovery/routeros.json` |
 | `upgrade_notes.py [--all] [--json]` / `--decline ID…` / `--done ID…` | opt-in changes newer releases suggest for this repo (shown by `--sync-managed`); record the user's no / a manual step done | — |
-| `config_set.py 'path=value' 'list+=item' [--delete path] [--dry-run]` | edit homelab.yaml keeping comments and layout | `homelab.yaml` |
+| `config_set.py 'path=value' 'list+=item' [--delete path] [--dry-run]` | edit homelab.yaml keeping comments and layout; `sites[name].…`, `network.vlans[id].…` pick a list entry | `homelab.yaml` |
 | `issues.py add\|list\|show\|report\|resolve\|fixed` | note problems with / ideas for this skill; report them (sanitised) to the plugin repo | `skill_issues.md` |
 | `tofu_init.py [--site N] [--print]` | `tofu init` with the state backend from homelab.yaml (local or S3) | `.terraform/` |
 
