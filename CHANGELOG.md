@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.27.0 — 2026-11-18
+- Sites: network scans know their site ([#72](https://github.com/mhaluska/homelab-manager-skill/issues/72)). `nmap_scan.py --site NAME` and `ssh_probe.py --site NAME` write
+  `discovery/network-<name>.json` for a site other than the default (which keeps `network.json`) and warn about
+  targets outside that site's `ranges`. The drift report lists unmanaged devices per site, checked against that
+  site's inventory hosts, guests and ignores; `guest_map.py` and issue redaction read every site's file. The
+  guard knows `--site` takes a value.
+- Sites: `network.excluded_hosts` and `discovery.ignore_unmanaged` accept `{ip, site}` entries next to plain
+  addresses ([#66](https://github.com/mhaluska/homelab-manager-skill/issues/66)), for sites that reuse the same private ranges. A scan without `--site` applies every site's
+  exclusions, so it never excludes less than intended. `check_env.py` warns about plain entries inside ranges two
+  sites share.
+- Upgrade note (repos with two or more sites): rescan the other sites with `--site`.
+
 ## 0.26.0 — 2026-11-18
 - Sites: the default site is explicit from the start ([#65](https://github.com/mhaluska/homelab-manager-skill/issues/65)). New `init_repo.py --name-default-site NAME
   [--steps ranges,vlans,group] [--dry-run]` names `sites[0]`, proposes its `ranges` from `authorized_ranges` and
