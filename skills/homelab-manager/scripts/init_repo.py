@@ -70,7 +70,7 @@ COMPONENTS = {
     "appliances": ("Appliances: NAS, firewall, switches, BMCs (inventory + read-only checks)", ["ansible"],
                    ["ansible/inventory/managed/group_vars/appliances.yml", "ansible/inventory/managed/group_vars/bmc.yml",
                     "ansible/playbooks/bmc-info.yml", "ansible/inventory/managed/group_vars/unifi.yml",
-                    "ansible/playbooks/unifi-info.yml"]),
+                    "ansible/playbooks/unifi-info.yml", "ansible/playbooks/routeros-disable-services.yml"]),
     "kubernetes": ("Kubernetes clusters (rolling patching with drain/uncordon)", ["ansible"],
                    ["ansible/playbooks/hooks/k8s-drain.yml", "ansible/playbooks/hooks/k8s-uncordon.yml"]),
 }

@@ -515,6 +515,14 @@
       "text": "unifi-info.yml reads a self-hosted UniFi Network application without API keys through the classic API with a read-only local admin (unifi_auth: login, #77), into the per-site discovery/unifi.json, without device keys.",
       "edited": "This repo's copy has its own classic-API login.",
       "action": "Replace ansible/playbooks/unifi-info.yml with {template}, carrying over any local edits (show the user the diff first); set unifi_auth: login and unifi_controller_url (the controller's base URL, e.g. https://<host>:8443) in group_vars/unifi.yml, and map the keychain item the old copy used as secrets.unifi (kind user_password, env UNIFI). Run it with `with_secrets.py unifi -- ansible-playbook playbooks/unifi-info.yml` and check discovery/unifi.json."
+    },
+    {
+      "version": "0.30.0",
+      "id": "routeros-disable-services",
+      "kind": "template",
+      "when": {"component": "appliances", "file_missing": "ansible/playbooks/routeros-disable-services.yml"},
+      "text": "New playbooks/routeros-disable-services.yml disables the plain-text RouterOS IP services routeros_audit.py flags (api, www by default), check mode first; it changes nothing unless run with -e homelab_read_only=false (#79).",
+      "action": "Copy {template} into ansible/playbooks/ and add ansible.netcommon and community.routeros to ansible/requirements.yml if they are missing (`ansible-galaxy collection install -r requirements.yml`); see references/windows-appliances.md 'MikroTik RouterOS'."
     }
   ]
 }

@@ -3251,6 +3251,14 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         self.assertIn("RouterBOOT firmware 7.12 is behind 7.16.1", sw)
         self.assertIn("low free flash: 3.1MiB of 128.0MiB", sw)
         self.assertIn("default user `admin` is enabled", sw)
+        self.assertIn("- Fix: `ansible-playbook playbooks/routeros-disable-services.yml -l sw-rack "   # GitHub #79
+                      "-e '{\"routeros_disable_services\": [\"telnet\", \"www\"]}' --check`", sw)
+        self.assertIn("-l chr1 ", out[out.index("## 10.0.0.2"):])
+        self.assertNotIn("- Fix:", out[out.index("## 10.0.0.9"):])                   # not inspected
+        dev = {"services": [{"name": "api", "_flags": ""}, {"name": "ssh", "_flags": ""}]}
+        self.assertIn("add the device to the `routeros` group", self.ra.fix_hint(dev, None))
+        self.assertIn('["api"]', self.ra.fix_hint(dev, "r1"))
+        self.assertIsNone(self.ra.fix_hint({"services": [{"name": "api", "_flags": "X"}]}, "r1"))
         chr_ = out[out.index("## 10.0.0.2"):]
         self.assertIn("RouterOS 7.16.1 available on channel stable (installed 7.15.3", chr_)
         self.assertIn("CHR licence level `free`", chr_)

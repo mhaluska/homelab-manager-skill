@@ -1,0 +1,85 @@
+# Disable RouterOS IP services that routeros_audit.py flags (plain-text api, www, telnet, ftp), GitHub #79.
+#   ansible-playbook playbooks/routeros-disable-services.yml -l <host> --check            # what would change
+#   ansible-playbook playbooks/routeros-disable-services.yml -l <host> -e homelab_read_only=false   # apply
+# Appliances are read-only (group_vars/appliances.yml): without -e homelab_read_only=false (the user's yes) the
+# play only shows what it would disable. Disabling a service cuts off whoever uses it: ask who does first.
+# routeros_disable_services (default api, www) may add telnet, ftp, api-ssl, www-ssl or winbox; never ssh,
+# which Ansible needs. Reads the state, disables the listed services still enabled, then reads it again.
+- name: Disable RouterOS IP services
+  hosts: "{{ target | default('routeros') }}"
+  gather_facts: false
+  vars:
+    ansible_connection: ansible.netcommon.network_cli
+    ansible_network_os: community.routeros.routeros
+    known_services: [api, api-ssl, ftp, ssh, telnet, winbox, www, www-ssl]
+    services: "{{ routeros_disable_services | default(['api', 'www']) }}"
+    to_disable: "{{ services | select('in', enabled_services | default([])) | list }}"
+    service_state: >-
+      :foreach s in=[/ip service find] do={:put ([/ip service get $s name] . "=" . [/ip service get $s disabled])}
+  tasks:
+    - name: The service list is valid and keeps ssh
+      ansible.builtin.assert:
+        that:
+          - services is sequence and services is not string
+          - services | difference(known_services) | length == 0
+          - "'ssh' not in services"
+        fail_msg: >-
+          routeros_disable_services must be a list of {{ known_services | join(', ') }} without ssh
+          (Ansible needs it); got {{ services }}.
+      run_once: true
+
+    - name: Read the IP services
+      community.routeros.command:
+        commands: ["{{ service_state }}"]
+      register: before
+      changed_when: false
+      check_mode: false
+
+    - name: Work out what is still enabled
+      ansible.builtin.set_fact:
+        enabled_services: >-
+          {{ before.stdout_lines[0] | select('match', '^[a-z-]+=false$') | map('regex_replace', '=false$', '') | list }}
+
+    - name: What would change
+      ansible.builtin.debug:
+        msg: >-
+          {{ to_disable | join(', ') or 'nothing' }} to disable
+          ({{ services | reject('in', enabled_services) | join(', ') or 'none' }} already off or absent);
+          still enabled afterwards: {{ enabled_services | reject('in', services) | join(', ') }}
+
+    - name: Applying needs the user's yes
+      ansible.builtin.assert:
+        that: not (homelab_read_only | default(true) | bool)
+        fail_msg: >-
+          {{ inventory_hostname }} is an appliance (homelab_read_only). Nothing was changed. With the user's yes,
+          run again with -e homelab_read_only=false.
+      when:
+        - to_disable | length > 0
+        - not ansible_check_mode
+
+    - name: Disable the services
+      community.routeros.command:
+        commands: ["/ip service disable {{ to_disable | join(',') }}"]
+      when:
+        - to_disable | length > 0
+        - not ansible_check_mode
+      changed_when: true
+
+    - name: Read the IP services again
+      community.routeros.command:
+        commands: ["{{ service_state }}"]
+      register: after
+      changed_when: false
+      when:
+        - to_disable | length > 0
+        - not ansible_check_mode
+
+    - name: Every listed service is off
+      ansible.builtin.assert:
+        that: >-
+          to_disable | select('in', after.stdout_lines[0] | select('match', '^[a-z-]+=false$')
+          | map('regex_replace', '=false$', '') | list) | list | length == 0
+        fail_msg: "Still enabled on {{ inventory_hostname }}: {{ after.stdout_lines[0] | select('match', '=false$') | list }}"
+      when:
+        - to_disable | length > 0
+        - not ansible_check_mode

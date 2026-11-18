@@ -273,7 +273,26 @@ def version_drift(devs: list[dict]) -> dict[str, list[str]]:
     return versions if len(versions) > 1 else {}
 
 
-def report(devs: list[dict], today: dt.date | None = None) -> str:
+def plaintext_enabled(dev: dict) -> list[str]:
+    """Plain-text services enabled on a device, in RouterOS's order."""
+    return [r.get("name") for r in dev.get("services") or [] if r.get("name") in PLAINTEXT and enabled(r)]
+
+
+def fix_hint(dev: dict, name: str | None) -> str | None:
+    """The playbook command that disables a device's plain-text services (GitHub issue #79)."""
+    svc = plaintext_enabled(dev)
+    if not svc:
+        return None
+    if not name:
+        return ("- Fix: add the device to the `routeros` group of the managed inventory, then run "
+                "`playbooks/routeros-disable-services.yml` for it.")
+    cmd = (f"ansible-playbook playbooks/routeros-disable-services.yml -l {name} "
+           f"-e '{{\"routeros_disable_services\": {json.dumps(svc)}}}'")
+    return (f"- Fix: `{cmd} --check` shows it; with the user's yes, the same with `-e homelab_read_only=false` "
+            "instead of `--check` (ask first who still uses those services).")
+
+
+def report(devs: list[dict], today: dt.date | None = None, names: dict[str, str] | None = None) -> str:
     lines = ["# RouterOS audit", "", "| host | identity | board | RouterOS | RouterBOOT | free flash | findings |",
              "|---|---|---|---|---|---|---|"]
     order = {"high": 0, "medium": 1, "low": 2, "info": 3}
@@ -291,9 +310,13 @@ def report(devs: list[dict], today: dt.date | None = None) -> str:
     drift = version_drift(devs)
     if drift:
         lines += ["", "**Version drift:** " + "; ".join(f"{v}: {', '.join(h)}" for v, h in sorted(drift.items()))]
+    by_host = {d["host"]: d for d in devs}
     for host, f in per.items():
         if f:
             lines += ["", f"## {host}"] + [f"- **{s}** — {t}" for s, t in f]
+            hint = fix_hint(by_host[host], (names or {}).get(host))
+            if hint:
+                lines.append(hint)
     return "\n".join(lines) + "\n"
 
 
@@ -311,6 +334,13 @@ def group_hosts(root: Path, group: str) -> list[tuple[str, str | None, int | Non
             out.append((str(lit(v.get("ansible_host")) or name), lit(v.get("ansible_user")),
                         int(port) if port else None, (hmlib.host_sites(v.get("_groups_all")) or [None])[0]))
     return out
+
+
+def inventory_names(root: Path) -> dict[str, str]:
+    """address (ansible_host, else the name) → inventory name of the managed inventory's hosts."""
+    from drift_report import load_ansible
+    hosts, _ = load_ansible(root)
+    return {str(v.get("ansible_host") or n): n for n, v in hosts.items() if "{{" not in str(v.get("ansible_host"))}
 
 
 def main():
@@ -357,7 +387,7 @@ def main():
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(json.dumps(db, indent=2, sort_keys=True) + "\n")
         print(f"Merged into {f.relative_to(root)}", file=sys.stderr)
-    sys.stdout.write(report(devs))
+    sys.stdout.write(report(devs, names=inventory_names(root)))
     return 0 if any(d.get("reachable") for d in devs) else 2
 
 

@@ -85,6 +85,14 @@ the data in `discovery/routeros.json`. Fixing a finding is a change: `/system ro
 RouterOS upgrade need a reboot (approval), disabling a service can cut off whoever uses it — ask first.
 Use a dedicated user in group `read` for audits.
 
+Plain-text services the audit flags: `playbooks/routeros-disable-services.yml` (the report prints the command
+for each device in the inventory). `routeros_disable_services` (default `[api, www]`; may add `telnet`, `ftp`,
+`api-ssl`, `www-ssl`, `winbox`, never `ssh`) lists what to turn off. Run it with `-l <host> --check` first and
+show the user what it would disable; with their yes, run it again with `-e homelab_read_only=false` instead of
+`--check` (the guard asks). Without that it changes nothing: appliances are read-only. It reads the services
+again afterwards and fails if one is still enabled. It needs a user with write rights (group `full`), not the
+audit user.
+
 Ansible on RouterOS:
 - Use `community.routeros` over `ansible_connection: ansible.netcommon.network_cli` with
   `ansible_network_os: community.routeros.routeros` (needs `ansible-pylibssh` or paramiko; agent keys work)
