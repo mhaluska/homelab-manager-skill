@@ -1,0 +1,162 @@
+# Read-only: containers in QNAP Container Station (LXD and Docker), GitHub #78.
+#   ansible-playbook playbooks/qnap-containers.yml [-e target=<host>]
+# Hosts of the `qnap` group (group_vars/qnap.yml), over SSH with ansible.builtin.raw only. Finds Container Station
+# under /share/*/.qpkg/container-station, then lists LXD instances (lxc list) and Docker containers (docker inspect).
+# Writes discovery/qnap-containers.json in the layout of containers.json (docker-containers.yml), merged: hosts
+# not checked this run keep their last result; a NAS that fails or can't be reached gets `error`. The drift
+# report lists those addresses as containers. An LXD container patched as an ordinary host gets the host var
+# lxd_host: <this NAS> (references/patching.md, LXD/Incus instances). Nothing here changes a container.
+- name: Containers in QNAP Container Station
+  hosts: "{{ target | default('qnap') }}"
+  gather_facts: false
+  vars:
+    cs_glob: "{{ qnap_container_station | default('/share/*/.qpkg/container-station') }}"
+    container_station: |
+      CS=$(ls -d {{ cs_glob }} 2>/dev/null | head -n 1)
+      [ -n "$CS" ] || { echo "Container Station not found ({{ cs_glob }})" >&2; exit 3; }
+      PATH="$CS/bin:$CS/usr/bin:$CS/usr/local/container-station/lxd/bin:$PATH"; export PATH
+  tasks:
+    - name: Mark as checked (runs locally, also for hosts that turn out unreachable)
+      ansible.builtin.set_fact:
+        hm_checked: true
+
+    - name: LXD instances
+      ansible.builtin.raw: |
+        {{ container_station }}
+        echo HM-BEGIN
+        if command -v lxc >/dev/null 2>&1; then lxc list --format json; else echo '[]'; fi
+        echo HM-END
+      register: hm_lxd
+      changed_when: false
+      check_mode: false
+      ignore_unreachable: true
+      ignore_errors: true
+
+    - name: Docker containers
+      ansible.builtin.raw: |
+        {{ container_station }}
+        echo HM-BEGIN
+        ids=; if command -v docker >/dev/null 2>&1; then ids=$(docker ps -aq); fi
+        if [ -z "$ids" ]; then echo '[]'; else docker inspect $ids; fi
+        echo HM-END
+      register: hm_docker
+      changed_when: false
+      check_mode: false
+      when: not (hm_lxd.unreachable | default(false)) and hm_lxd is not failed
+      ignore_errors: true
+
+    - name: Unreachable or failed
+      ansible.builtin.set_fact:
+        container_error: >-
+          {%- set r = hm_lxd if (hm_lxd.unreachable | default(false) or hm_lxd is failed) else hm_docker -%}
+          {{ 'unreachable' if r.unreachable | default(false) else 'container station' }}: {{
+             (r.stderr | default('', true) or r.stdout | default('', true) or r.msg | default('failed'))
+             | replace('\r', '') | trim | truncate(200) }}
+      when: hm_lxd.unreachable | default(false) or hm_lxd is failed or hm_docker is failed
+
+    - name: Summarise
+      when: container_error is not defined
+      block:
+        - name: Containers
+          ansible.builtin.set_fact:
+            container_summary:
+              runtimes: "{{ (['lxd'] if lxd_list | length else []) + (['docker'] if docker_list | length else []) }}"
+              kubernetes: []
+              containers: >-
+                {%- set out = [] -%}
+                {%- for c in lxd_list -%}
+                  {%- set addrs = [] -%}
+                  {%- for nic in ((c.state | default({}, true)).network | default({}, true)).values() -%}
+                    {%- for a in nic.addresses | default([]) if a.family | default('') == 'inet' and a.scope | default('') == 'global' -%}
+                      {%- set _ = addrs.append(a.address) -%}
+                    {%- endfor -%}
+                  {%- endfor -%}
+                  {%- set cfg = c.config | default({}, true) -%}
+                  {%- set _ = out.append({'name': c.name | default(''), 'runtime': 'lxd',
+                        'image': cfg['image.description'] | default(cfg['image.os'] | default('')),
+                        'state': c.status | default('') | lower,
+                        'restart': 'autostart' if cfg['boot.autostart'] | default('') in ['true', '1'] else '',
+                        'network_mode': '', 'networks': ((c.state | default({}, true)).network | default({}, true)).keys() | reject('equalto', 'lo') | list,
+                        'ips': addrs | unique, 'ports': [], 'compose_project': none, 'auto_update': none}) -%}
+                {%- endfor -%}
+                {%- for c in docker_list -%}
+                  {%- set nets = c.NetworkSettings.Networks | default({}, true) -%}
+                  {%- set labels = c.Config.Labels | default({}, true) -%}
+                  {%- set ports = [] -%}
+                  {%- for p, binds in (c.NetworkSettings.Ports | default({}, true)).items() -%}
+                    {%- for b in binds or [] -%}
+                      {%- set _ = ports.append((b.HostIp ~ ':' if b.HostIp not in ['', '0.0.0.0', '::'] else '')
+                                               ~ b.HostPort ~ '->' ~ p) -%}
+                    {%- endfor -%}
+                  {%- endfor -%}
+                  {%- set _ = out.append({
+                        'name': c.Name | default('') | regex_replace('^/', ''),
+                        'runtime': 'docker',
+                        'image': c.Config.Image | default(''),
+                        'state': c.State.Status | default(''),
+                        'restart': c.HostConfig.RestartPolicy.Name | default(''),
+                        'network_mode': c.HostConfig.NetworkMode | default(''),
+                        'networks': nets.keys() | list,
+                        'ips': nets.values() | map(attribute='IPAddress') | select | list | unique,
+                        'ports': ports | unique,
+                        'compose_project': labels['com.docker.compose.project'] | default(none),
+                        'auto_update': labels['com.centurylinklabs.watchtower.enable'] | default(none)}) -%}
+                {%- endfor -%}
+                {{ out | sort(attribute='name') }}
+          vars:
+            lxd_list: "{{ hm_lxd.stdout | replace('\r', '') | split('HM-BEGIN') | last | split('HM-END') | first | trim | from_json }}"
+            docker_list: "{{ hm_docker.stdout | replace('\r', '') | split('HM-BEGIN') | last | split('HM-END') | first | trim | from_json }}"
+      rescue:
+        - name: Record the failure
+          ansible.builtin.set_fact:
+            container_error: "{{ ansible_failed_task.name }}: {{ ansible_failed_result.msg | default('failed') | trim | truncate(200) }}"
+
+- name: Write discovery/qnap-containers.json
+  hosts: localhost
+  gather_facts: false
+  vars:
+    containers_file: "{{ playbook_dir }}/../../discovery/qnap-containers.json"
+    checked: "{{ groups['all'] | map('extract', hostvars) | selectattr('hm_checked', 'defined') | list }}"
+    reported: >-
+      {{ checked | selectattr('container_summary', 'defined') | rejectattr('container_error', 'defined')
+         | map(attribute='inventory_hostname') | list }}
+    failed: "{{ checked | map(attribute='inventory_hostname') | reject('in', reported) | list }}"
+  tasks:
+    - name: Read the previous results
+      ansible.builtin.stat:
+        path: "{{ containers_file }}"
+      register: prev_containers
+
+    - name: Merge with this run
+      ansible.builtin.set_fact:
+        containers_merged: >-
+          {%- set prev = (lookup('ansible.builtin.file', containers_file) | from_json) if prev_containers.stat.exists else {} -%}
+          {%- set hosts = {} -%}
+          {%- for name, entry in (prev.hosts | default({})).items() if name in groups['all'] -%}
+            {%- set _ = hosts.update({name: entry}) -%}
+          {%- endfor -%}
+          {%- for name in reported -%}
+            {%- set _ = hosts.update({name: hostvars[name].container_summary | combine({'collected_at': now_utc})}) -%}
+          {%- endfor -%}
+          {%- for name in failed -%}
+            {%- set _ = hosts.update({name: (hosts.get(name, {}) | combine({'error': hostvars[name].container_error
+                                             | default('failed (see the play output)'), 'collected_at': now_utc}))}) -%}
+          {%- endfor -%}
+          {%- for name in hosts | list -%}   {# each host's site: its site_<name> group (GitHub #75) #}
+            {%- set _ = hosts.update({name: hosts[name] | combine({'site': hostvars[name].group_names | select('match', '^site_')
+                                            | map('regex_replace', '^site_', '') | first | default(none)})}) -%}
+          {%- endfor -%}
+          {{ {'collected_at': now_utc, 'hosts': hosts} }}
+      vars:
+        now_utc: "{{ now(utc=true).isoformat() }}"
+
+    - name: Write
+      ansible.builtin.copy:
+        dest: "{{ containers_file }}"
+        content: "{{ containers_merged | to_nice_json }}\n"
+        mode: "0644"
+
+    - name: Hosts without a result
+      ansible.builtin.debug:
+        msg: "{% for h in failed %}{{ h }}: {{ hostvars[h].container_error | default('failed') }}{{ '; ' if not loop.last }}{% endfor %}"
+      when: failed | length > 0

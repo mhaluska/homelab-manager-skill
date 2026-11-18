@@ -1,0 +1,6 @@
+# QNAP NAS (QTS / QuTS hero): a child group of `appliances`, so read-only (homelab_read_only). QTS has no Python
+# Ansible can use and its tools are off the default PATH: plays use ansible.builtin.raw only, without facts.
+# Never configure QTS from Ansible (its own UI and config tools own it). Containers: playbooks/qnap-containers.yml.
+ansible_python_interpreter: /bin/false   # only ansible.builtin.raw works
+# ansible_user: admin                    # the SSH user (an administrator: Container Station needs one)
+# qnap_container_station: /share/CACHEDEV1_DATA/.qpkg/container-station   # when not under /share/*/.qpkg

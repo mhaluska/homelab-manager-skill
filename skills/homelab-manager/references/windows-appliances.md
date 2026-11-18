@@ -26,6 +26,19 @@ Default stance: **inventory and read-only checks**.
 - NAS hosting LXD/Incus containers: `lxd_snapshots: true` in its host vars (the user's yes) is the one
   exception — it allows instance snapshots with `lxd_snapshot.py` (references/patching.md), nothing else.
 
+## QNAP NAS (QTS, QuTS hero)
+
+Add the NAS to the `qnap` group (child of `appliances`, `group_vars/qnap.yml`) with `ansible_host` and an
+administrator as `ansible_user` (SSH must be enabled in QTS; Container Station needs an administrator).
+QTS has no Python Ansible can use and its tools are off the default PATH: only `ansible.builtin.raw`, no facts.
+Never configure QTS from Ansible or over SSH: its UI owns the configuration.
+- Containers: `ansible-playbook playbooks/qnap-containers.yml` (read-only) finds Container Station under
+  `/share/*/.qpkg/container-station` (`qnap_container_station` when it is elsewhere) and lists its LXD
+  instances and Docker containers into `discovery/qnap-containers.json`, the layout of `containers.json`
+  (references/discovery.md, Containers). The drift report lists those addresses as containers.
+- An LXD container running an ordinary Linux is still managed as a host of its own (its OS group, for patching)
+  with `lxd_host: <the NAS>`; snapshots: references/patching.md "LXD/Incus instances".
+
 ## BMCs (HPE iLO, Dell iDRAC, Supermicro, Lenovo XCC) over Redfish
 
 Read-only health and firmware from this Mac over HTTPS; no ipmitool, no SSH into the BMC.

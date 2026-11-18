@@ -6,8 +6,8 @@
 # state, restart policy, network mode, networks with addresses (macvlan/ipvlan ones are on the LAN and
 # match scanned IPs in the drift report), published ports, compose project and auto-update labels
 # (Watchtower, Podman auto-update). Root's containers only: rootless Podman per user is not listed.
-# Nothing here changes a container. Containers hosted elsewhere (a NAS) can be recorded by hand in
-# discovery/<name>-containers.json with the same layout (references/discovery.md, Containers).
+# Nothing here changes a container. A QNAP NAS: qnap-containers.yml. Containers hosted elsewhere (another NAS)
+# can be recorded by hand in discovery/<name>-containers.json with the same layout (references/discovery.md).
 - name: Containers on Linux hosts
   hosts: "{{ target | default('linux') }}"
   gather_facts: false

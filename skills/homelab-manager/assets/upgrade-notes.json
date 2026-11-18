@@ -523,6 +523,14 @@
       "when": {"component": "appliances", "file_missing": "ansible/playbooks/routeros-disable-services.yml"},
       "text": "New playbooks/routeros-disable-services.yml disables the plain-text RouterOS IP services routeros_audit.py flags (api, www by default), check mode first; it changes nothing unless run with -e homelab_read_only=false (#79).",
       "action": "Copy {template} into ansible/playbooks/ and add ansible.netcommon and community.routeros to ansible/requirements.yml if they are missing (`ansible-galaxy collection install -r requirements.yml`); see references/windows-appliances.md 'MikroTik RouterOS'."
+    },
+    {
+      "version": "0.30.0",
+      "id": "qnap-containers",
+      "kind": "template",
+      "when": {"component": "appliances", "file_missing": "ansible/playbooks/qnap-containers.yml"},
+      "text": "New qnap group (group_vars/qnap.yml) and read-only playbooks/qnap-containers.yml: Container Station's LXD instances and Docker containers on a QNAP NAS go into discovery/qnap-containers.json, so the drift report lists them as containers (#78).",
+      "action": "Only for a QNAP NAS: copy {template} into ansible/playbooks/ and {HM}/assets/repo-template/ansible/inventory/managed/group_vars/qnap.yml into group_vars/, put the NAS in the qnap group (child of appliances) and run it; a hand-written discovery/<nas>-containers.json for it can then go (`git rm`, after checking the new file has its containers). See references/windows-appliances.md 'QNAP NAS'."
     }
   ]
 }

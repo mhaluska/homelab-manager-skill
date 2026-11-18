@@ -18,6 +18,7 @@ One part per site:
 Keyed by inventory host, each with its `site`:
 - `updates.json` — pending updates per host (`check-updates.yml`)
 - `containers.json` — containers and Kubernetes per host (`docker-containers.yml`)
+- `qnap-containers.json` — Container Station's LXD and Docker per QNAP NAS (`qnap-containers.yml`)
 - `<name>-containers.json` — the same layout recorded by hand, e.g. for a NAS
 - `bmc.json` — health and firmware of every BMC over Redfish (`bmc-info.yml`)
 - `routeros.json` — RouterOS devices (`routeros_audit.py`)
