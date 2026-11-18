@@ -3121,6 +3121,34 @@ class SshProbeTests(unittest.TestCase):  # issue 25
         data = json.loads(subprocess.run(["yq", "-o=json", "."], input=r.stdout, capture_output=True, text=True).stdout)
         self.assertEqual(sorted(data["all"]["children"]), ["el8", "proxmox_nodes"])
 
+    def test_site_and_user_from_inventory(self):  # issue 82
+        r = run("config_set.py", "network.authorized_ranges+=10.0.30.0/24", "sites+={name: home}",
+                "sites+={name: offsite, ranges: [10.0.30.0/24]}", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        net = self.d / "discovery/network.json"
+        home = json.loads(net.read_text())
+        off = {"hosts": {"10.0.30.5": {"ip": "10.0.30.5", "ports": [], "last_profile": "services"}},
+               "updated_at": "2026-11-01T00:00:00+00:00", "note": "x"}
+        net.write_text(json.dumps({"sites": {"home": home, "offsite": off}}))
+        (self.d / "ansible/inventory/managed/hosts.yml").write_text(
+            "all:\n  children:\n    linux:\n      hosts:\n"
+            "        known:\n          ansible_host: 10.0.20.17\n"
+            "        far:\n          ansible_host: 10.0.30.5\n          ansible_user: ops\n"
+            "    site_offsite:\n      hosts:\n        far:\n")
+        r = self.probe("10.0.30.5", "10.0.20.11", "--include-managed")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("at site offsite as ops", r.stderr)
+        self.assertIn("at site home as admin", r.stderr)
+        users = {c[-3]: c[c.index("-l") + 1] for c in map(json.loads, self.log.read_text().splitlines())}
+        self.assertEqual(users, {"10.0.30.5": "ops", "10.0.20.11": "admin"})   # inventory ansible_user, default
+        parts = json.loads(net.read_text())["sites"]
+        self.assertEqual(sorted(parts), ["home", "offsite"])
+        self.assertEqual(parts["offsite"]["hosts"]["10.0.30.5"]["ssh_probe"]["user"], "ops")
+        self.assertNotIn("ssh_probe", parts["home"]["hosts"]["10.0.30.5"])      # not filed under the default site
+        self.assertIn("ssh_probe", parts["home"]["hosts"]["10.0.20.11"])
+        r = self.probe("10.0.30.5", "--include-managed", "--site", "home", "--user", "root", "--no-write")
+        self.assertIn("at site home as root", r.stderr)                         # --site and --user still win
+
     def test_scope(self):
         r = self.probe("10.0.30.0/24")
         self.assertEqual(r.returncode, 4)

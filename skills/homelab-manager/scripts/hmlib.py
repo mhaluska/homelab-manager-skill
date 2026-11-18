@@ -510,6 +510,24 @@ def site_of_address(cfg: dict, ip: str) -> dict | None:
     return next((s for s in sites(cfg) if any(addr in n for n in s["ranges"])), None)
 
 
+def inventory_host(managed: dict, key: str) -> tuple[str, dict] | None:
+    """(name, vars) of the managed-inventory host whose name or ansible_host is key (drift_report.load_ansible)."""
+    if key in managed:
+        return key, managed[key]
+    return next(((n, v) for n, v in managed.items() if str(v.get("ansible_host") or "") == key), None)
+
+
+def target_site(cfg: dict, managed: dict, key: str) -> dict | None:
+    """The site of a host given by inventory name or address (GitHub issues #82, #83): its inventory
+    site_<name> group, else the site whose ranges hold its address; None when neither says."""
+    found = inventory_host(managed, key)
+    groups = (found[1].get("_groups_all") or found[1].get("groups")) if found else []
+    named = [s for s in sites(cfg) if s["name"] and s["name"] in host_sites(groups)]
+    if len(named) == 1:
+        return named[0]
+    return site_of_address(cfg, str((found[1].get("ansible_host") if found else None) or key))
+
+
 # --------------------------------------------------------------------------- scan scope
 
 def _networks(items) -> list:
