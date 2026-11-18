@@ -2308,6 +2308,29 @@ class DiscoveryLayoutTests(unittest.TestCase):  # GitHub issue #73
         self.assertNotIn("bmc-one-file", ids())
         self.assertIn("bmc-redfish", ids())
 
+    def test_bmc_playbook_without_vendor_workarounds_offered_the_template(self):  # GitHub issue #74
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        run("init_repo.py", str(d), "--components", "ansible,appliances", cwd=d)
+        ids = lambda: [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", "--all", cwd=d).stdout)]
+        self.assertNotIn("bmc-vendor-quirks", ids())
+        pb = d / "ansible/playbooks/bmc-info.yml"
+        pb.write_text(pb.read_text().replace("bmc_categories", "bmc_cats"))   # a 0.28.0 copy: one combined call
+        self.assertIn("bmc-vendor-quirks", ids())
+        pb.write_text(pb.read_text().replace("discovery/bmc.json", "discovery/bmc-{{ inventory_hostname }}.json"))
+        self.assertEqual([i for i in ids() if i.startswith("bmc-")], ["bmc-one-file"])   # one note, not two
+
+    def test_bmc_playbook_reads_one_category_per_call(self):  # GitHub issue #74
+        pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/bmc-info.yml").read_text()
+        self.assertIn('category: "{{ item.category }}"', pb)
+        self.assertIn("ignore_errors: true", pb)
+        for c in ("Systems", "Chassis", "Manager", "Update"):
+            self.assertIn(f"{{category: {c}, command:", pb)
+        self.assertIn("/Thermal", pb.replace("'Thermal'", "/Thermal"))
+        self.assertIn("PowerMetrics.AverageConsumedWatts", pb)
+        gv = (SCRIPTS.parent / "assets/repo-template/ansible/inventory/managed/group_vars/bmc.yml").read_text()
+        self.assertIn("bmc_secret_env ~ '_USER'", gv)
+
 
     def test_discovery_readme_lists_every_file_written_there(self):
         """Every discovery/ file a script or scaffolded playbook names matches an entry of discovery/README.md."""
