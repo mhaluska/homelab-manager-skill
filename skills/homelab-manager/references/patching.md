@@ -60,9 +60,14 @@ counts; the play's last task lists them. They are findings too: report them in t
    add `-e snapshot_missing=skip` (patched without a snapshot). Tell the user what the LXD snapshots won't
    contain (the run prints it: bind-mounted data, custom volumes).
    Clean-up: after the reboot (or when there is none) the run autoremoves packages nothing needs, so the old
-   kernel goes too (`-e autoremove=false` skips it). check-updates shows `autoremovable` and
-   `config_leftovers`; offer `-e purge=true` only when the user wants the configuration of removed
-   Debian packages gone as well.
+   kernel goes too (`-e autoremove=false` skips it). It simulates it first and skips it on a host (reported as
+   `autoremove skipped`, not a failure) when it would remove a package matching `autoremove_protect`
+   (authentication, NSS/PAM, sudo, SSH, systemd, networking) or more than `autoremove_max` (20) packages:
+   a removed `freeipa-client` leaves SSSD autoremovable, and removing it locks out an IPA `ansible_user`.
+   Before patching, review check-updates' `autoremove_protected` (and `autoremove_packages`): show the user
+   any host that has some, and leave it to them (a package to mark manual with `apt-mark manual`, or a
+   removal they want). check-updates also shows `config_leftovers`; offer `-e purge=true` only when the
+   user wants the configuration of removed Debian packages gone as well.
 4. Approval (the guard asks for any patch run outside `--check`).
 5. Run: `ansible-playbook playbooks/patch-linux.yml -e target=<group> [-e security_only=true]`.
    The playbook stops on the first failure (`max_fail_percentage: 0`) and checks failed

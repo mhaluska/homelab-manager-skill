@@ -4,10 +4,18 @@
 # (each host has its own collected_at). A host that fails or can't be reached gets an entry with `error`
 # (and `last_ok_at`, when its last good result was), so a gap is visible instead of silently missing.
 # Safe to run any time. A subset: -e target=<group|host> (or -l <host>: the result is still written).
+# autoremove_packages lists what patch-linux.yml's autoremove would remove; autoremove_protected the ones
+# matching autoremove_protect (patch-linux.yml skips autoremove on such a host: review them first).
 - name: Pending updates on Linux
   hosts: "{{ target | default('linux') }}"
   gather_facts: false
   become: true
+  vars:
+    # the same list as in patch-linux.yml; override with autoremove_protect in group_vars (GitHub issue #58)
+    hm_autoremove_protect: [sssd*, libsss*, libnss-*, libpam-*, nss-*, pam*, freeipa-*, ipa-*, krb5-*, libkrb5*,
+                            realmd, adcli, winbind*, oddjob*, openssh-*, ssh, sudo*, polkit*, systemd*, dbus*,
+                            network*, netplan*, ifupdown*, NetworkManager*, dhcp*, isc-dhcp-*, resolvconf,
+                            cloud-init, python3, python3-apt, python3-dnf*, chrony*, ntp*]
   tasks:
     - name: Mark as checked (runs locally, also for hosts that turn out unreachable)
       ansible.builtin.set_fact:
@@ -58,10 +66,17 @@
           changed_when: false
           when: ansible_facts.os_family == "Debian"
 
-        - name: Debian family — packages autoremove would remove, configuration left by removed packages
-          ansible.builtin.shell: |
-            apt-get -s -o Debug::NoLocking=1 autoremove | grep -c '^Remv' || true
-            dpkg-query -W -f='${db:Status-Abbrev}\n' | grep -c '^rc' || true
+        - name: Debian family — packages autoremove would remove
+          ansible.builtin.shell: >-
+            set -o pipefail; apt-get -s -o Debug::NoLocking=1 autoremove | awk '/^Remv /{sub(/:.*/, "", $2); print $2}'
+          args:
+            executable: /bin/bash
+          register: deb_autoremove
+          changed_when: false
+          when: ansible_facts.os_family == "Debian"
+
+        - name: Debian family — configuration left by removed packages
+          ansible.builtin.shell: dpkg-query -W -f='${db:Status-Abbrev}\n' | grep -c '^rc' || true
           register: deb_left
           changed_when: false
           when: ansible_facts.os_family == "Debian"
@@ -93,10 +108,24 @@
               reboot_reasons: "{{ reboot_reasons }}"
               restart_pending: "{{ restart_pending }}"
               # left over after patching (old kernels and dependencies); patch-linux.yml autoremoves them
-              autoremovable: >-
-                {{ (deb_left.stdout_lines[0] | default(0) | int) if ansible_facts.os_family == 'Debian'
-                   else (rh_left.stdout_lines | default([]) | length) }}
-              config_leftovers: "{{ (deb_left.stdout_lines[1] | default(0) | int) if ansible_facts.os_family == 'Debian' else 0 }}"
+              autoremovable: "{{ hm_removable | length }}"
+              autoremove_packages: "{{ hm_removable }}"
+              autoremove_protected: "{{ hm_protected }}"
+              config_leftovers: "{{ (deb_left.stdout | default(0) | int) if ansible_facts.os_family == 'Debian' else 0 }}"
+          vars:
+            hm_removable: >-
+              {{ ((deb_autoremove.stdout_lines | default([]))
+                  + (rh_left.stdout_lines | default([]) | map('regex_replace', '^(.+)-(\d+:)?[^-]+-[^-]+$', '\1')))
+                 | map('trim') | select | unique | list }}
+            hm_protected: >-
+              {%- set out = [] -%}
+              {%- for pkg in hm_removable -%}
+                {%- for pat in autoremove_protect | default(hm_autoremove_protect, true)
+                    if pkg is match('^' ~ (pat | regex_escape | replace('\*', '.*') | replace('\?', '.')) ~ '$') -%}
+                  {%- set _ = out.append(pkg) -%}
+                {%- endfor -%}
+              {%- endfor -%}
+              {{ out | unique | list }}
 
       rescue:
         - name: Record the failure

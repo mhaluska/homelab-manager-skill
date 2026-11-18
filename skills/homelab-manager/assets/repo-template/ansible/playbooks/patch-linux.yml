@@ -24,7 +24,10 @@
 # with pve_snapshot.py delete (the user's yes): they keep growing.
 # autoremove (default true): after the reboot (or when there is none) remove packages nothing needs any more
 # (apt/dnf autoremove). Only then can the kernel that was running during the update go, so old kernels
-# don't pile up. purge=true also removes the configuration left behind by removed Debian packages (`rc` in
+# don't pile up. It is simulated first and skipped on a host (reported, not failed) when it would remove a
+# package matching autoremove_protect (authentication, NSS/PAM, sudo, SSH, systemd, networking: e.g. the
+# SSSD stack left behind by a removed freeipa-client) or more than autoremove_max (default 20) packages;
+# set either in group_vars. purge=true also removes the configuration left behind by removed Debian packages (`rc` in
 # dpkg -l); off by default, those files may still be wanted.
 #
 # Clusters (`clusters:` in homelab.yaml): never in parallel, keep serial 1, pass the cluster's settings:
@@ -215,6 +218,12 @@
     snapshot_name: "prepatch-{{ now().strftime('%Y%m%d') }}"
     # never restarted automatically (a reboot or the user's own step instead): restarting these drops sessions
     restart_exclude: [dbus.service, dbus-broker.service, systemd-logind.service]
+    # autoremove never removes these (shell-style patterns) without a look first: losing them can lock Ansible
+    # out (GitHub issue #58). Override with autoremove_protect in group_vars; the same list is in check-updates.yml
+    hm_autoremove_protect: [sssd*, libsss*, libnss-*, libpam-*, nss-*, pam*, freeipa-*, ipa-*, krb5-*, libkrb5*,
+                            realmd, adcli, winbind*, oddjob*, openssh-*, ssh, sudo*, polkit*, systemd*, dbus*,
+                            network*, netplan*, ifupdown*, NetworkManager*, dhcp*, isc-dhcp-*, resolvconf,
+                            cloud-init, python3, python3-apt, python3-dnf*, chrony*, ntp*]
     # units that can't work in an LXC container (kernel modules, kernel filesystems, audit) and fail on every
     # boot there: not counted as new failures in LXC guests; add your own in group_vars failed_units_ignore
     lxc_failed_units_ignore: [auth-rpcgss-module.service, systemd-modules-load.service, systemd-binfmt.service,
@@ -347,17 +356,68 @@
           {{ [] if (rebooted.rebooted | default(false))
              else (restart_pending | intersect(restart_exclude) if restart_services | bool else restart_pending) }}
 
-    # After the reboot: the kernel that was running during the update is no longer protected (GitHub issue #46)
+    # After the reboot: the kernel that was running during the update is no longer protected (GitHub issue #46).
+    # Simulated first (GitHub issue #58): a package removed earlier (dpkg `rc`, e.g. freeipa-client) leaves its
+    # dependencies marked automatic, and autoremove would take the whole SSSD/NSS/PAM stack with it.
+    - name: What autoremove would remove (Debian family)
+      ansible.builtin.shell: >-
+        set -o pipefail; apt-get -s -o Debug::NoLocking=1 autoremove | awk '/^Remv /{sub(/:.*/, "", $2); print $2}'
+      args:
+        executable: /bin/bash
+      register: hm_autoremove_deb
+      changed_when: false
+      check_mode: false
+      when: autoremove | bool and ansible_facts.os_family == "Debian"
+
+    - name: What autoremove would remove (RHEL family)
+      ansible.builtin.command: dnf -q repoquery --unneeded   # name-[epoch:]version-release.arch (dnf 4 and 5)
+      register: hm_autoremove_rh
+      changed_when: false
+      check_mode: false
+      when: autoremove | bool and ansible_facts.os_family == "RedHat"
+
+    - name: Autoremove only when it touches nothing protected
+      ansible.builtin.set_fact:
+        hm_autoremove_skip: >-
+          {%- if hm_protected | length > 0 -%}
+            would remove protected packages {{ hm_protected | join(', ') }}
+          {%- elif hm_removable | length > (autoremove_max | default(20) | int) -%}
+            would remove {{ hm_removable | length }} packages (autoremove_max {{ autoremove_max | default(20) }})
+          {%- endif -%}
+        hm_autoremove_list: "{{ hm_removable }}"
+      vars:
+        hm_removable: >-
+          {{ ((hm_autoremove_deb.stdout_lines | default([]))
+              + (hm_autoremove_rh.stdout_lines | default([]) | map('regex_replace', '^(.+)-(\d+:)?[^-]+-[^-]+$', '\1')))
+             | map('trim') | select | unique | list }}
+        hm_protected: >-
+          {%- set out = [] -%}
+          {%- for pkg in hm_removable -%}
+            {%- for pat in autoremove_protect | default(hm_autoremove_protect, true)
+                if pkg is match('^' ~ (pat | regex_escape | replace('\*', '.*') | replace('\?', '.')) ~ '$') -%}
+              {%- set _ = out.append(pkg) -%}
+            {%- endfor -%}
+          {%- endfor -%}
+          {{ out | unique | list }}
+      when: autoremove | bool
+
+    - name: Autoremove skipped — review these packages before removing them by hand
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: autoremove skipped, it {{ hm_autoremove_skip }}: {{ hm_autoremove_list | join(' ') }}"
+      when: autoremove | bool and hm_autoremove_skip | length > 0
+
     - name: Remove packages nothing needs any more (Debian family)
       ansible.builtin.apt:
         autoremove: true
         purge: "{{ purge | bool }}"
-      when: autoremove | bool and ansible_facts.os_family == "Debian"
+      when: autoremove | bool and ansible_facts.os_family == "Debian" and hm_autoremove_skip | length == 0
+        and hm_autoremove_list | length > 0
 
     - name: Remove packages nothing needs any more (RHEL family)
       ansible.builtin.dnf:
         autoremove: true
-      when: autoremove | bool and ansible_facts.os_family == "RedHat"
+      when: autoremove | bool and ansible_facts.os_family == "RedHat" and hm_autoremove_skip | length == 0
+        and hm_autoremove_list | length > 0
 
     - name: Configuration left by removed packages (purge=true)
       ansible.builtin.command:
@@ -503,6 +563,7 @@
         msg: "{{ inventory_hostname }}: updated={{ (upd_rh.changed | default(false)) or (upd_deb.changed | default(false)) }},
               reboot_pending={{ needs_reboot and not (rebooted.rebooted | default(false)) }}
               {{ ('(' ~ reboot_reasons | join('; ') ~ ')') if needs_reboot and not (rebooted.rebooted | default(false)) else '' }},
-              restart_pending={{ restart_pending }}{{ (', no snapshot: ' ~ hm_snapshot_skip)
+              restart_pending={{ restart_pending }}{{ (', autoremove skipped: ' ~ hm_autoremove_skip)
+              if hm_autoremove_skip | default('') | length > 0 else '' }}{{ (', no snapshot: ' ~ hm_snapshot_skip)
               if snapshot | bool and hm_snapshot_skip | default('') | length > 0 else '' }}{{ ', containerd and docker restarted (containers were down)'
               if hm_docker_restarted is changed else '' }}"
