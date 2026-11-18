@@ -124,6 +124,9 @@ class GuardNmapTests(unittest.TestCase):
             self.assertEqual(decision(f"python3 {script} 10.0.10.5 --profile os", r), "ask")
             self.assertIsNone(decision(f"python3 {script} 10.0.10.0/24 --profile services --interface en0", r))
             self.assertIsNone(decision(f"python3 {script} 10.0.10.0/24 -e en0 --only-live", r))
+            self.assertIsNone(decision(f"python3 {script} 10.0.10.0/24 --site offsite", r))   # GitHub #72: a value
+            self.assertIsNone(decision(f"python3 {script} --site offsite 10.0.10.0/24", r))
+            self.assertEqual(decision(f"python3 {script} --site offsite 192.168.0.0/24", r), "deny")
 
     def test_ssh_probe_targets_are_scope_checked(self):  # issue 25
         with Repo() as r:
@@ -133,6 +136,8 @@ class GuardNmapTests(unittest.TestCase):
             self.assertEqual(decision(f"python3 {script} 192.168.0.5", r), "deny")
             self.assertEqual(decision(f"python3 {script} --jobs 4 10.0.10.5 192.168.0.0/24", r), "deny")
             self.assertEqual(decision(f"python3 {script} files.example.test", r), "deny")  # hostnames refused
+            self.assertIsNone(decision(f"python3 {script} --site offsite", r))      # GitHub #72: a value, not a target
+            self.assertEqual(decision(f"python3 {script} --site offsite 192.168.0.5", r), "deny")
 
     def test_nmap_option_values_not_targets(self):  # issue 19
         with Repo() as r:

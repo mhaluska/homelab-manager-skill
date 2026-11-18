@@ -119,9 +119,9 @@ NMAP_VALUE_OPTS = {"-p", "-oX", "-oN", "-oG", "-oA", "-oS", "-oM", "-iL", "--exc
                    "--script-args-file", "--script-help", "--scanflags", "--servicedb", "--versiondb", "--data",
                    "--data-string", "--ip-options"}
 # nmap_scan.py options whose next argument is a value, not a target
-NMAP_SCAN_VALUE_OPTS = {"--profile", "--ports", "--top-ports", "--out", "--interface", "-e"}
+NMAP_SCAN_VALUE_OPTS = {"--profile", "--ports", "--top-ports", "--out", "--interface", "-e", "--site"}
 # ssh_probe.py options whose next argument is a value, not a target
-SSH_PROBE_VALUE_OPTS = {"--user", "--port", "--timeout", "--jobs"}
+SSH_PROBE_VALUE_OPTS = {"--user", "--port", "--timeout", "--jobs", "--site"}
 
 SCRIPT_RUNNERS = {"bash", "sh", "zsh", "dash", "ksh", "python", "python3", "perl", "ruby", "node", "source", "."}
 PYTHON_RE = re.compile(r"^python[0-9.]*$")
