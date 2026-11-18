@@ -408,9 +408,10 @@ def build_known(cfg: dict, docs: dict, managed: dict, snaps: list[dict]) -> Know
             k.add(d.get("ipAddress"), d.get("name") or d.get("model"), "UniFi")
     for e in hmlib.routeros_addresses(cfg, managed):   # every interface address the audit read (GitHub #106)
         k.add(e["ip"], e["name"], "RouterOS")
-    for nas, d in (docs["qnap-containers.json"] or {}).items():
-        for c in (d or {}).get("lxd") or [] if isinstance(d, dict) else []:
-            k.add(str(c.get("ipv4") or "").split(" ")[0], f"{c.get('name')} (on {nas})", "NAS container")
+    for nas, cs in nas_containers(docs["qnap-containers.json"]).items():
+        for c in cs:
+            for ip in c.get("ips") or []:
+                k.add(ip, c.get("name"), f"NAS container on {nas}")
     named = hmlib.known_devices(cfg)   # discovery.ignore_unmanaged entries with a name (GitHub issue #100)
     for e in named:
         k.add(e["ip"], e["name"], "known device")
@@ -428,6 +429,23 @@ def build_known(cfg: dict, docs: dict, managed: dict, snaps: list[dict]) -> Know
                     k.add(ip, short, names[short])
                     break
     return k
+
+
+def nas_containers(doc: dict) -> dict[str, list[dict]]:
+    """{NAS: [container]} from qnap-containers.json. qnap-containers.yml writes the layout of containers.json
+    ({hosts: {nas: {containers: [{name, runtime, image, ips, networks, state, …}]}}}); the older {nas: {lxd, docker}}
+    is read too, as the same records."""
+    hosts = doc.get("hosts") if isinstance(doc.get("hosts"), dict) else doc
+    out = {}
+    for nas, d in sorted((hosts or {}).items()):
+        if not isinstance(d, dict):
+            continue
+        cs = [c for c in d.get("containers") or [] if isinstance(c, dict)]
+        cs += [{**c, "runtime": "lxd", "image": "", "ips": [str(c.get("ipv4") or "").split(" ")[0]],
+                "networks": [c["ipv4"]] if c.get("ipv4") else []} for c in d.get("lxd") or [] if isinstance(c, dict)]
+        cs += [{**c, "runtime": "docker"} for c in d.get("docker") or [] if isinstance(c, dict)]
+        out[nas] = sorted(cs, key=lambda c: (str(c.get("runtime")) != "docker", str(c.get("name"))))
+    return out
 
 
 def hmlib_parts(doc: dict) -> list[dict]:
@@ -796,16 +814,16 @@ def containers(cfg: dict, docs: dict, managed: dict) -> list[str]:
                          ports, compose(c)])
         for k in d.get("kubernetes") or []:
             rows.append([host, d.get("site"), "Kubernetes", k if isinstance(k, str) else json.dumps(k, sort_keys=True), "", ""])
-    for nas, d in sorted((docs["qnap-containers.json"] or {}).items()):   # GitHub issue #97
-        if not isinstance(d, dict):
-            continue
-        site = (hmlib.target_site(cfg, managed, nas) or {}).get("name") if managed else ""
-        for c in sorted(d.get("docker") or [], key=lambda c: str(c.get("name"))):
-            nets = c.get("networks")
-            rows.append([nas, site, c.get("name"), c.get("image"),
-                         nets, compose(c)])
-        for c in sorted(d.get("lxd") or [], key=lambda c: str(c.get("name"))):
-            rows.append([nas, site, c.get("name"), f"LXD ({c.get('state') or '?'})", c.get("ipv4"), ""])
+    qnap = docs["qnap-containers.json"]
+    for nas, cs in nas_containers(qnap).items():   # GitHub issue #97; the containers.json layout
+        d = (qnap.get("hosts") or {}).get(nas) or {} if isinstance(qnap.get("hosts"), dict) else {}
+        site = d.get("site") or ((hmlib.target_site(cfg, managed, nas) or {}).get("name") if managed else "")
+        for c in cs:
+            if c.get("runtime") == "lxd":
+                rows.append([nas, site, c.get("name"), "LXD" + (f": {c['image']}" if c.get("image") else "")
+                             + f" ({c.get('state') or '?'})", c.get("ips") if c.get("image") else c.get("networks"), ""])
+            else:
+                rows.append([nas, site, c.get("name"), c.get("image"), c.get("ports") or c.get("networks"), compose(c)])
     if not rows:
         return []
     return ["## Containers", ""] + fold(table(["Host", "Site", "Container", "Image", "Ports / network", "Compose"], rows),
