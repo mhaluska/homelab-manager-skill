@@ -262,11 +262,8 @@ def build_known(cfg: dict, docs: dict, managed: dict, snaps: list[dict]) -> Know
     for part in (hmlib_parts(docs["unifi.json"])):
         for d in part.get("devices") or []:
             k.add(d.get("ipAddress"), d.get("name") or d.get("model"), "UniFi")
-    for host, d in (docs["routeros.json"].get("devices") or {}).items():
-        ros_name = (hmlib.inventory_host(managed, host) or ((d.get("identity") or {}).get("name") or host,))[0]
-        k.add(host, ros_name, "RouterOS")
-        for a in d.get("addresses") or []:      # every interface address the audit read
-            k.add(a.get("address"), ros_name, "RouterOS")
+    for e in hmlib.routeros_addresses(cfg, managed):   # every interface address the audit read (GitHub #106)
+        k.add(e["ip"], e["name"], "RouterOS")
     for nas, d in (docs["qnap-containers.json"] or {}).items():
         for c in (d or {}).get("lxd") or [] if isinstance(d, dict) else []:
             k.add(str(c.get("ipv4") or "").split(" ")[0], f"{c.get('name')} (on {nas})", "NAS container")
@@ -596,20 +593,26 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known) -
         out += ["### Network devices", ""] + table(
             ["Kind", "Name", "Model", "Address", "Firmware", "State", "Last seen"],
             [[d["kind"], d["name"], d["model"], d["address"], d["firmware"], d["state"], d["seen"]] for d in devices]) + [""]
-    other = [(ip, h) for ip, h in scanned if ip not in guest_ips and not known.name(ip)]
-    named = [ip for ip, _ in scanned if ip not in guest_ips and known.name(ip)]
+    ignored = {ip for ip, _ in scanned if ip not in guest_ips and not known.name(ip)
+               and hmlib.ignored_address(cfg, ip, st["name"])}   # discovery.ignore_unmanaged (GitHub issue #106)
+    other = [(ip, h) for ip, h in scanned if ip not in guest_ips and not known.name(ip) and ip not in ignored]
+    named = [ip for ip, _ in scanned if ip not in guest_ips and (known.name(ip) or ip in ignored)]
+    if not other and named:
+        out += ["### Other scanned addresses", "", "Every address nmap found belongs to a known host.", ""]
     if other:
         out += ["### Other scanned addresses", "", "Addresses nmap found that nothing in this repository names"
-                + (f" ({len(named)} more belong to known hosts: Proxmox nodes, inventory hosts, guests, VIPs)"
-                   if named else "")
+                + (f" ({len(named)} more belong to known hosts: Proxmox nodes, inventory hosts, guests, VIPs, "
+                   "or are in `discovery.ignore_unmanaged`)" if named else "")
                 + ". A known host's address on another network goes into its `hm_extra_ips` host variable.", ""]
         out += table(["Address", "Name", "Looks like", "OS", "Open ports", "Last seen"],
                      [[ip, (h.get("ssh_probe") or {}).get("hostname") or ", ".join(h.get("hostnames") or []),
                        h.get("device_type_guess"), os_top(h.get("os")), len(h.get("ports") or []), stamp(h.get("last_seen"))]
                       for ip, h in other]) + [""]
     if named:   # which known host each of them was attributed to (GitHub issue #109)
-        out += [f"<details><summary>{plural(len(named), 'scanned address')} of known hosts</summary>", ""]
-        out += table(["Address", "Known as", "Source"], [[ip, *known.addr[ip]] for ip in named]) + ["", "</details>", ""]
+        out += [f"<details><summary>{plural(len(named), 'scanned address')} of known hosts or ignored</summary>", ""]
+        out += table(["Address", "Known as", "Source"],
+                     [[ip, *(known.addr.get(ip) or ("–", "discovery.ignore_unmanaged"))] for ip in named])
+        out += ["", "</details>", ""]
     return out, stats
 
 

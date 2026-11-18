@@ -1509,12 +1509,17 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
             "10.9.20.40": {"ip": "10.9.20.40", "device_type_guess": "camera"},
             "10.9.20.41": {"ip": "10.9.20.41", "mac": "aa:bb:cc:00:00:01", "device_type_guess": "water heater"},
             "10.9.20.42": {"ip": "10.9.20.42", "device_type_guess": "linux"},
+            "10.9.20.43": {"ip": "10.9.20.43", "device_type_guess": "network"},
             "10.9.20.60": {"ip": "10.9.20.60"}}}))
+        Path(self.d, "discovery/routeros.json").write_text(json.dumps({"devices": {"10.9.30.1": {   # GitHub #106
+            "identity": {"name": "rtr9"}, "addresses": [{"address": "10.9.20.43/24"}]}}}))
         r = run("drift_report.py", "--no-tofu", cwd=self.d)
         self.assertEqual(r.returncode, 0, r.stderr)
         sec = r.stdout[r.stdout.index("## Network devices not in managed inventory"):]
         self.assertIn("1 device(s)", sec)
         self.assertIn("- 10.9.20.42", sec)
+        self.assertNotIn("- 10.9.20.43 ", sec.split("RouterOS interface addresses")[0])          # #106: a router's
+        self.assertIn("RouterOS interface addresses (`discovery/routeros.json`, 1):\n\n- 10.9.20.43 → `rtr9`", sec)
         self.assertIn("routeros_audit.py --leases", sec)
         self.assertIn("Known unmanaged devices (`discovery.ignore_unmanaged`, 2 seen):\n\n"
                       "- 10.9.20.40 Living room TV\n- 10.9.20.50 EV charger (aa:bb:cc:00:00:01) — seen at 10.9.20.41\n",
@@ -1530,6 +1535,11 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertIn("| 10.9.20.42 |", other)
         self.assertNotIn("10.9.20.40", other)
         self.assertNotIn("10.9.20.41", other)
+        self.assertNotIn("10.9.20.43", other)                                                      # #106
+        self.assertNotIn("10.9.20.60", other)
+        listed = md.split("<details>")[1]
+        self.assertIn("| 10.9.20.43 | rtr9 | RouterOS |", listed)
+        self.assertIn("| 10.9.20.60 | – | discovery.ignore\\_unmanaged |", listed)
         for bad in ("{name: x}", "{ip: 10.9.20.7, site: moon}"):
             self.assertNotEqual(run("config_set.py", f"discovery.ignore_unmanaged+={bad}", cwd=self.d).returncode, 0)
 

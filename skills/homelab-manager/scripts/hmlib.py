@@ -638,6 +638,45 @@ def known_devices(cfg: dict) -> list[dict]:
     return out
 
 
+def ignored_address(cfg: dict, ip: str, site_name: str | None = None) -> bool:
+    """ip is in discovery.ignore_unmanaged at site_name, in any form: a plain address or network, {ip, site} or
+    {ip, name, mac} (GitHub issue #106: overview.py and drift_report.py agree)."""
+    try:
+        addr = ipaddress.ip_address(str(ip).split("/")[0])
+    except ValueError:
+        return False
+    return any(addr in n for n in site_entries(cfg, IGNORE_KEY, site_name) if n.version == addr.version)
+
+
+def routeros_addresses(cfg: dict, managed: dict | None = None) -> list[dict]:
+    """Every address of an audited RouterOS device (discovery/routeros.json: the audited address and each interface
+    address) as [{ip, name, site}] (GitHub issue #106): name is the inventory host, else the identity; site the one
+    the audit recorded, else the inventory host's, else the site whose ranges hold the address, else the default."""
+    try:
+        devs = json.loads(discovery_file(cfg["_root"], "routeros").read_text()).get("devices") or {}
+    except (OSError, ValueError, AttributeError):
+        return []
+    default, out = site(cfg)["name"], []
+    for host, d in sorted(devs.items()):
+        if not isinstance(d, dict):
+            continue
+        inv = inventory_host(managed or {}, host)
+        name = inv[0] if inv else (d.get("identity") or {}).get("name") or host
+        st = (d.get("site") or ((target_site(cfg, managed or {}, host) or {}).get("name") if inv else None)
+              or (site_of_address(cfg, host) or {}).get("name") or default)
+        seen = set()
+        for a in [host] + [x.get("address") for x in d.get("addresses") or [] if isinstance(x, dict)]:
+            ip = str(a or "").split("/")[0].strip()
+            try:
+                ipaddress.ip_address(ip)
+            except ValueError:
+                continue
+            if ip not in seen:
+                seen.add(ip)
+                out.append({"ip": ip, "name": str(name), "site": st})
+    return out
+
+
 def scan_scope(cfg: dict, site_name: str | None = None) -> tuple[list, list]:
     """(authorized ranges, excluded networks) for a scan at site_name; None: every site's exclusions."""
     allowed = _networks(get(cfg, "network.authorized_ranges", []))

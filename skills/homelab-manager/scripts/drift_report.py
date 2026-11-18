@@ -498,6 +498,7 @@ def main():
         belongs = lambda x, st: not multi or x == st["name"] or (st["default"] and x not in own_files)
         host_site = lambda v: (hmlib.host_sites(v.get("_groups_all") or v.get("groups")) or [default_name])[0]
         secondary = {ip: h for h, v in ans.items() for ip in extra_ips(v)}
+        router_ips = hmlib.routeros_addresses(cfg, ans)   # audited RouterOS interface addresses (GitHub issue #106)
         containers = container_ips(root)
         per_site = len(nets) > 1
         for st, db in nets:
@@ -513,9 +514,8 @@ def main():
                             if n.get("cidr"):
                                 known_ips.add(str(ipaddress.ip_interface(n["cidr"]).ip))
             known_ips |= set(containers)
-            ignore = ignores[st["name"]]
-            ignored = lambda ip: any(ipaddress.ip_address(ip) in n for n in ignore
-                                     if n.version == ipaddress.ip_address(ip).version)
+            known_ips |= {e["ip"] for e in router_ips if belongs(e["site"], st)}   # GitHub issue #106
+            ignored = lambda ip: hmlib.ignored_address(cfg, ip, st["name"])
             named = [e for e in known_devices if belongs(e["site"], st)]   # GitHub issue #100
             by_mac = {e["mac"]: e for e in named if e["mac"]}
             mac_of = lambda h: str(h.get("mac") or "").lower()
@@ -552,6 +552,14 @@ def main():
             L += [f"- {ip} → `{secondary[ip]}` (secondary)" for ip in seen_secondary]
             L.append("")
         inventory_ips = {v.get("ansible_host") for v in ans.values()} | set(matched) | set(secondary)
+        seen_routers = sorted({e["ip"]: e["name"] for e in router_ips
+                               if e["ip"] in net["hosts"] and e["ip"] not in inventory_ips}.items(),
+                              key=lambda x: ipaddress.ip_address(x[0]))
+        if seen_routers:
+            L += [f"RouterOS interface addresses (`discovery/routeros.json`, {len(seen_routers)}):", ""]
+            L += [f"- {ip} → `{name}`" + vlan_suffix(cfg, ip) for ip, name in seen_routers]
+            L.append("")
+        inventory_ips |= {ip for ip, _ in seen_routers}
         seen_containers = sorted((ip for ip in containers if ip in net["hosts"] and ip not in inventory_ips),
                                  key=ipaddress.ip_address)
         if seen_containers:
