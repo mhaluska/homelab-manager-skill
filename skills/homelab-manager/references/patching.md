@@ -170,7 +170,8 @@ site (`site_<name>` group): add `--site <name>` to both scripts; the playbook ta
    A standalone node (no cluster) has nowhere to move guests: every running one is down during the reboot —
    say so and agree a time with the user.
 2. Approval for the node and the plan.
-3. Upgrade only (guests keep running), reports `reboot_needed`:
+3. Upgrade only (guests keep running), reports `reboot_needed` and the plan as `planned_migrate` /
+   `planned_ha` / `planned_stop` (`migrated`, `ha` and `stopped_and_restored` stay empty: nothing moved):
    `ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=<host>`
 4. Reboot run, a separate approval: add `-e allow_reboot=true`. The playbook checks the plan against
    the live cluster (stale → refresh steps 1–2), records the guests in the node's plan (`state_before` in

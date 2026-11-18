@@ -8,7 +8,7 @@
 # Executes the node's plan in discovery/pve-patch.json (pve_node_plan.py; under its site, then node; show it to
 # the user first) after checking it
 # against the live cluster. Without allow_reboot=true it only upgrades packages (guests keep running) and
-# reports whether a reboot is pending. With it, and only when a reboot is needed:
+# reports whether a reboot is pending (the plan as planned_*; nothing is moved). With it, and only when a reboot is needed:
 #   migrate  → live (VM) / restart (LXC) migration to the planned node, back after the reboot
 #   ha       → HA node maintenance mode moves them off and back
 #   stop     → clean shutdown in reverse startup order (never forced; if one fails, the stopped ones are
@@ -250,11 +250,18 @@
       delay: 10
       when: needs_reboot | bool and allow_reboot | bool and not ansible_check_mode
 
+    # what was done only when the reboot block ran; otherwise the plan as planned_* (GitHub issue #86)
     - name: Result
       ansible.builtin.debug:
         msg: >-
           {{ pve_node }}: updated={{ pve_upgrade.changed }}, reboot_needed={{ needs_reboot }},
-          rebooted={{ needs_reboot | bool and allow_reboot | bool and not ansible_check_mode }},
-          migrated={{ by_action.migrate | default([]) | map(attribute='vmid') | list }},
-          ha={{ by_action.ha | default([]) | map(attribute='vmid') | list }},
-          stopped_and_restored={{ plan.stop_order }}
+          rebooted={{ did_reboot }},
+          migrated={{ planned_migrate if did_reboot | bool else [] }},
+          ha={{ planned_ha if did_reboot | bool else [] }},
+          stopped_and_restored={{ plan.stop_order if did_reboot | bool else [] }}
+          {%- if not did_reboot | bool %}, planned_migrate={{ planned_migrate }}, planned_ha={{ planned_ha }},
+          planned_stop={{ plan.stop_order }}{% endif %}
+      vars:
+        did_reboot: "{{ needs_reboot | bool and allow_reboot | bool and not ansible_check_mode }}"
+        planned_migrate: "{{ by_action.migrate | default([]) | map(attribute='vmid') | list }}"
+        planned_ha: "{{ by_action.ha | default([]) | map(attribute='vmid') | list }}"

@@ -2308,6 +2308,13 @@ class PveNodePlanTests(unittest.TestCase):  # issue 23
         plan, _ = self.p.make_plan({**self.inv, "details_at": "t1"}, "pve1")
         self.assertIn("guest config from t1", self.p.render(plan, []))
 
+    def test_upgrade_only_run_reports_plan_not_actions(self):  # GitHub issue #86
+        pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/patch-proxmox-node.yml").read_text()
+        result = pb[pb.index("- name: Result"):]
+        for k in ("migrated", "ha", "stopped_and_restored"):
+            self.assertRegex(result, rf"\b{k}={{{{ \S+ if did_reboot \| bool else \[\] }}}}")
+        self.assertIn("planned_stop={{ plan.stop_order }}", result)
+
     def test_cli_writes_plan_only_without_blockers(self):
         d = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, d)
