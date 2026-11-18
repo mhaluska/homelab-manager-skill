@@ -390,6 +390,15 @@ class GuardConfigTests(unittest.TestCase):
         self.assertIsNone(self.d("curl -sk -c c.txt -d '{}' https://ctl:8443/api/login"))
         self.assertIsNone(self.d("curl -sk -b c.txt https://ctl:8443/api/s/default/stat/device"))
 
+    def test_appliance_changes_ask(self):  # GitHub issue #79
+        pb = "ansible-playbook playbooks/routeros-disable-services.yml -l r1"
+        self.assertEqual(self.d(pb + " -e homelab_read_only=false"), "ask")
+        self.assertEqual(self.d(pb + " -e 'homelab_read_only=no'"), "ask")
+        self.assertEqual(self.d(pb + ' -e \'{"homelab_read_only": false}\''), "ask")
+        self.assertIsNone(self.d(pb + " --check -e homelab_read_only=false"))
+        self.assertIsNone(self.d(pb))                       # refuses by itself: appliances are read-only
+        self.assertIsNone(self.d(pb + " -e homelab_read_only=true"))
+
     def test_reboot_policy_asks(self):  # issue 39: reboot=always|if_required on any playbook
         self.assertEqual(self.d("ansible-playbook site.yml -e reboot=always"), "ask")
         self.assertEqual(self.d("ansible-playbook site.yml -e reboot=if_required"), "ask")
