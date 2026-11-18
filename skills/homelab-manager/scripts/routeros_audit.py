@@ -8,7 +8,9 @@ using each host's ansible_host / ansible_user / ansible_port). --user overrides 
 
 Runs only `print` commands, one `ssh -T` per command (no pty: RouterOS waits forever for a terminal that a
 pty-less tool never answers — why Ansible's `raw` hangs) with BatchMode (agent keys, no password prompt)
-and a hard timeout. Host keys are checked against ~/.ssh/known_hosts as usual. `/system routerboard` is
+and a hard timeout. Without a pty RouterOS wraps `print` output at a width of 1 character, so the login name
+carries console options (`<user>+ct512w`: no colours, no terminal detection, 512 columns; the user comes from
+`ssh -G` when not given), and the parser still joins wrapped value lines. Host keys are checked against ~/.ssh/known_hosts as usual. `/system routerboard` is
 skipped on CHR, and a command that fails doesn't stop the others.
 
 Collects identity, resource, routerboard, package update status, licence, interfaces, addresses, bridges
@@ -61,13 +63,20 @@ _TOKEN = re.compile(r'[\w.-]+=(?:"(?:[^"\\]|\\.)*"|\S*)|\S+')
 # --------------------------------------------------------------------------- parsing
 
 def parse_detail(out: str) -> dict:
-    """`print` of a single item: `   key: value` lines."""
-    d = {}
-    for line in out.splitlines():
-        m = re.match(r"^\s*([a-z][\w-]*):\s*(.*?)\s*$", line)
-        if m:
-            d[m.group(1)] = clean(m.group(2), 160)
-    return d
+    """`print` of a single item: `   key: value` lines. A value RouterOS wrapped (no pty: a terminal width of 1
+    character) continues on indented lines from the value's column; those are joined back (GitHub issue #70)."""
+    raw: dict[str, str] = {}
+    key, col = None, 0
+    for line in out.replace("\r", "").splitlines():
+        m = re.match(r"^\s*([a-z][\w-]*):\s?(.*)$", line)
+        if m and not (key and line[:col].strip() == ""):
+            key, col = m.group(1), m.start(2)
+            raw[key] = m.group(2)
+        elif key and len(line) > col and line[:col].strip() == "":   # a wrapped space is a line of spaces
+            raw[key] += line[col:]
+        elif line.strip():
+            key = None
+    return {k: clean(v.strip(), 160) for k, v in raw.items()}
 
 
 def parse_terse(out: str) -> list[dict]:
@@ -124,7 +133,23 @@ def enabled(row: dict) -> bool:
 
 # --------------------------------------------------------------------------- collecting
 
+CONSOLE_OPTS = "+ct512w"   # RouterOS login options: no colours, no terminal auto-detection, 512 columns
+
+
+def ssh_user(host: str, port: int) -> str | None:
+    """The user ssh would log in as (ssh config, else the local user): `ssh -G`, which connects to nothing."""
+    try:
+        p = subprocess.run([shutil.which("ssh") or "/usr/bin/ssh", "-G", "-p", str(port), host], capture_output=True,
+                           text=True, timeout=10, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return next((l.split(None, 1)[1].strip() for l in p.stdout.splitlines() if l.startswith("user ")), None)
+
+
 def ssh_run(host: str, user: str | None, port: int, timeout: int, command: str) -> tuple[bool, str]:
+    user = user or ssh_user(host, port)
+    if user and "+" not in user:
+        user += CONSOLE_OPTS
     cmd = [shutil.which("ssh") or "/usr/bin/ssh", "-T", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={timeout}",
            "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "LogLevel=ERROR", "-p", str(port),
            *(["-l", user] if user else []), host, command]
@@ -212,16 +237,30 @@ def findings(dev: dict, today: dt.date | None = None) -> list[tuple[str, str]]:
         level = lic.get("level", "?")
         if level == "free":
             out.append(("info", "CHR licence level `free`: 1 Mbit/s per interface"))
-        renew = lic.get("next-renewal-at") or lic.get("deadline-at")
-        if renew:
-            d = parse_date(renew)
-            if d and (d - today).days <= 30:
-                out.append(("medium", f"CHR licence ({level}) renewal/deadline {renew}: within 30 days — the CHR "
-                                      "must reach MikroTik's licence server"))
-            elif not d:
-                out.append(("info", f"CHR licence ({level}) renewal/deadline {renew}"))
+        out += licence_findings(level, lic.get("deadline-at"), lic.get("next-renewal-at"), today)
     for section, err in dev.get("errors", {}).items():
         out.append(("info", f"{section}: {err}"))
+    return out
+
+
+def licence_findings(level: str, deadline: str | None, renewal: str | None, today: dt.date) -> list:
+    """CHR licence: `deadline-at` is the date the licence stops working; `next-renewal-at` only the next automatic
+    renewal attempt (about 30 days earlier), a problem only once it has passed (GitHub issue #71)."""
+    out = []
+    d, r = parse_date(deadline), parse_date(renewal)
+    if d and (d - today).days < 0:
+        out.append(("high", f"CHR licence ({level}) deadline {deadline} has passed — the CHR must reach MikroTik's "
+                            "licence server"))
+    elif d and (d - today).days <= 30:
+        out.append(("medium", f"CHR licence ({level}) deadline {deadline}: within 30 days — the CHR must reach "
+                              "MikroTik's licence server to renew"))
+    elif r and r < today:
+        out.append(("medium", f"CHR licence ({level}) renewal was due {renewal} and has not happened"
+                              + (f" (deadline {deadline})" if deadline else "")
+                              + " — check that the CHR reaches MikroTik's licence server"))
+    for label, s, parsed in (("deadline", deadline, d), ("next renewal", renewal, r)):
+        if s and not parsed:
+            out.append(("info", f"CHR licence ({level}) {label} {s}: date not understood"))
     return out
 
 

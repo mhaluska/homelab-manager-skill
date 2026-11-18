@@ -2725,6 +2725,8 @@ class SshProbeTests(unittest.TestCase):  # issue 25
 
 FAKE_ROS_SSH = r'''#!/usr/bin/env python3
 import json, os, sys
+if "-G" in sys.argv:                       # ssh -G: the user from ssh config
+    print("hostname " + sys.argv[-1] + "\nuser cfguser\nport 22"); sys.exit(0)
 host, cmd = sys.argv[-2], sys.argv[-1]
 with open(os.environ["FAKE_SSH_LOG"], "a") as f:
     f.write(json.dumps(sys.argv[1:]) + "\n")
@@ -2794,6 +2796,12 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
                                 {"name": "ssh", "comment": "a b=c", "_flags": ""}])
         self.assertEqual(self.ra.parse_detail("   board-name: CRS326\n  version: 7.16 (stable)\n"),
                          {"board-name": "CRS326", "version": "7.16 (stable)"})
+        wrapped = "  name: a\r\n        b\r\n        c\r\n        -\r\n        1\r\n"   # issue 70: no pty, width 1
+        self.assertEqual(self.ra.parse_detail(wrapped), {"name": "abc-1"})
+        wrapped = "  version: 7\n           .\n           1\n            \n           (\n  arch: arm\n"
+        self.assertEqual(self.ra.parse_detail(wrapped), {"version": "7.1 (", "arch": "arm"})
+        self.assertEqual(self.ra.parse_detail("                   uptime: 3w\n                  version: 7.16\n"),
+                         {"uptime": "3w", "version": "7.16"})
         self.assertEqual(self.ra.size_bytes("3.1MiB"), 3.1 * 2**20)
         self.assertEqual(self.ra.size_bytes("1024KiB"), 2**20)
         self.assertEqual(self.ra.parse_date("dec/01/2026 10:00:00"), self.ra.dt.date(2026, 12, 1))
@@ -2807,9 +2815,9 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
             self.assertIn("-T", c)                                                   # no pty: raw-style hang
             self.assertIn("BatchMode=yes", c)
             if c[-2] != "10.0.0.9":
-                self.assertEqual(c[c.index("-l") + 1], "auditor")                     # from group_vars/routeros.yml
+                self.assertEqual(c[c.index("-l") + 1], "auditor+ct512w")              # from group_vars/routeros.yml
             else:
-                self.assertNotIn("-l", c)                                             # given directly: ssh config
+                self.assertEqual(c[c.index("-l") + 1], "cfguser+ct512w")              # given directly: ssh -G
             self.assertRegex(c[-1], r"^/[a-z /-]+ print( terse)? without-paging$")    # read-only
         self.assertFalse(any(c[-2] == "10.0.0.2" and "routerboard" in c[-1] for c in calls))  # skipped on CHR
         out = r.stdout
@@ -2833,12 +2841,20 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         self.assertEqual(db["10.0.0.1"]["bridges"][0]["vlan-filtering"], "yes")      # comment didn't look like an error
         self.assertEqual(db["10.0.0.1"]["bridge_vlans"][0]["tagged"], "bridge,sfp1")
 
-    def test_licence_renewal_soon(self):
+    def test_licence_deadline(self):  # issue 71: next-renewal-at is only the next renewal attempt
         dev = {"reachable": True, "errors": {}, "resource": {"board-name": "CHR"},
-               "license": {"level": "p1", "next-renewal-at": "2026-12-01 10:00:00"}}
-        f = self.ra.findings(dev, self.ra.dt.date(2026, 11, 17))
-        self.assertIn("medium", [s for s, _ in f])
-        self.assertEqual(self.ra.findings(dev, self.ra.dt.date(2026, 6, 1)), [])
+               "license": {"level": "p10", "next-renewal-at": "2026-12-07 10:00:00", "deadline-at": "2027-01-06"}}
+        day = self.ra.dt.date
+        self.assertEqual(self.ra.findings(dev, day(2026, 11, 18)), [])                # renewal soon: healthy
+        f = self.ra.findings(dev, day(2026, 12, 20))
+        self.assertEqual([s for s, _ in f], ["medium"])
+        self.assertIn("deadline 2027-01-06: within 30 days", f[0][1])
+        self.assertEqual([s for s, _ in self.ra.findings(dev, day(2027, 1, 7))], ["high"])
+        f = self.ra.licence_findings("p10", "2027-03-01", "2026-12-07", day(2026, 12, 10))  # renewal passed, not moved
+        self.assertEqual([s for s, _ in f], ["medium"])
+        self.assertIn("renewal was due 2026-12-07", f[0][1])
+        dev["license"] = {"level": "p1", "next-renewal-at": "soon"}
+        self.assertEqual([s for s, _ in self.ra.findings(dev, day(2026, 11, 18))], ["info"])
 
     def test_templated_user_is_not_passed(self):
         sys.path.insert(0, str(SCRIPTS))
