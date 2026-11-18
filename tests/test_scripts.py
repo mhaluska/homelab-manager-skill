@@ -1245,7 +1245,7 @@ class UpgradeNotesTests(unittest.TestCase):
             self.assertLessEqual(upgrade_notes.vtuple(n["version"]), upgrade_notes.vtuple(have))
             self.assertIn(f"## {n['version']} ", changelog)
             self.assertTrue(set(n["when"]) <= {"component", "config_empty", "config_set", "file_lacks", "file_has", "file_missing",
-                                               "vmids_outside_ranges", "agent_ips_unread"}, n["id"])
+                                               "vmids_outside_ranges", "agent_ips_unread", "default_site_implicit"}, n["id"])
             if "after_replace" in n:      # only a note a file replacement can settle has a leftover step
                 self.assertTrue({"file_lacks", "file_has"} & set(n["when"]), n["id"])
             if "file_lacks" in n["when"] and n["kind"] == "template":

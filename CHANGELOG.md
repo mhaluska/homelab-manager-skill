@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.26.0 — 2026-11-18
+- Sites: the default site is explicit from the start ([#65](https://github.com/mhaluska/homelab-manager-skill/issues/65)). New `init_repo.py --name-default-site NAME
+  [--steps ranges,vlans,group] [--dry-run]` names `sites[0]`, proposes its `ranges` from `authorized_ranges` and
+  the VLAN CIDRs, tags VLANs without a site with it and adds `site_<name>` to `hosts.yml` with every inventory
+  host in no site group. Setup runs it; `--add-site` points at it when the default site isn't explicit yet.
+  `config_set.py 'network.vlans+=…'` tags a new VLAN with the only site, and asks for one when there are several.
+- Sites: with two or more, `check_env.py` (`sites:ambiguous`) and the drift report ("Site ambiguity") flag what
+  "no site" leaves open ([#63](https://github.com/mhaluska/homelab-manager-skill/issues/63)): VLANs without a site, a VLAN name shared by entries not all tied to one site,
+  overlapping or missing site `ranges`, inventory hosts in no site group (parent groups now count) and
+  `clusters:` groups across sites. `network.vlans` takes `site: all` for a VLAN every site has on purpose
+  (`all` is no longer a valid site name).
+- Upgrade note (repos with two or more sites): make the default site explicit with `--name-default-site`.
+
 ## 0.25.0 — 2026-11-18
 - `issues.py fixed --github` also lists reported entries whose GitHub issue was closed as not planned or as a
   duplicate ([#69](https://github.com/mhaluska/homelab-manager-skill/issues/69)), apart from the fixed ones, with the follow-up issues a maintainer named when closing
