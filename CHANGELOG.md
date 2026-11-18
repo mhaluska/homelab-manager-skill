@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.33.1 — 2026-11-18
+- `patch-proxmox-node.yml` no longer leaves a node's guests stopped ([#90](https://github.com/mhaluska/homelab-manager-skill/issues/90)): "Nothing runs on the node any
+  more" polls `/cluster/resources` (12 × 10 s; pvestatd lags ~10 s behind a shutdown) and shares a rescue with the
+  shutdowns. If either fails, the stopped guests are started again in startup order, HA maintenance is turned off
+  and the run stops before the reboot, naming what still runs.
+- `check-updates.yml -e target=X` keeps every play to X ([#92](https://github.com/mhaluska/homelab-manager-skill/issues/92)): the Linux play skips windows, appliances and qnap
+  hosts in X; the Windows and QNAP plays run only on X's windows/qnap hosts unless `windows_target` /
+  `qnap_target` are given. A single-host check no longer contacts every NAS.
+- Upgrade note (template, edited copies): `patch-proxmox-node-empty-rescue`.
+
 ## 0.33.0 — 2026-11-18
 - Overview page ([#87](https://github.com/mhaluska/homelab-manager-skill/issues/87)): `overview.py` writes `OVERVIEW.md` in the repository root, one readable page
   about the whole homelab from what the repo already holds (homelab.yaml, `discovery/*.json`, the managed
