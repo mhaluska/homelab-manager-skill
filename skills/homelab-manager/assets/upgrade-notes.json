@@ -389,7 +389,7 @@
         "component": "discovery",
         "multi_site": true
       },
-      "text": "Network scans know their site (#72): nmap_scan.py / ssh_probe.py --site <name> write discovery/network-<name>.json for a site other than the default, and network.excluded_hosts / discovery.ignore_unmanaged take {ip, site} entries (#66). discovery/network.json may still hold other sites' devices from earlier scans.",
+      "text": "Network scans know their site (#72): nmap_scan.py / ssh_probe.py --site <name> write that site's own results (since 0.29.0 its part of discovery/network.json), and network.excluded_hosts / discovery.ignore_unmanaged take {ip, site} entries (#66). discovery/network.json may still hold other sites' devices from earlier scans.",
       "action": "Ask the user which sites were scanned into discovery/network.json. Rescan each other site from there with `nmap_scan.py <its ranges> --site <name>`, then remove its addresses from network.json if the ranges don't overlap the default site's (with overlapping ranges, start network.json over with a scan at the default site). Turn excluded or ignored addresses that hold at one site only into {ip, site} entries; check_env.py lists the ones inside shared ranges."
     },
     {
@@ -437,6 +437,61 @@
       "text": "bmc-info.yml reads one Redfish category per call, so a BMC that refuses one (iLO 4 has no UpdateService, Supermicro X10 wants a DCMS licence for it) still reports the rest; it reads Thermal/Power directly when chassis data is unreadable, prefers PowerMetrics.AverageConsumedWatts, takes BMC and BIOS versions from Manager/System, and writes a fuller summary to discovery/bmc.json. group_vars/bmc.yml gains bmc_secret_env for BMCs with their own account (#74).",
       "action": "Replace ansible/playbooks/bmc-info.yml with {template}, carrying over any local edits (show the user the diff first; a local copy with its own vendor workarounds keeps what the template lacks), and add bmc_secret_env with the bmc_user/bmc_password lines from {HM}/assets/repo-template/ansible/inventory/managed/group_vars/bmc.yml. Run it for every BMC and check discovery/bmc.json.",
       "after_replace": "Add bmc_secret_env with the bmc_user/bmc_password lines from {HM}/assets/repo-template/ansible/inventory/managed/group_vars/bmc.yml unless group_vars/bmc.yml was replaced too. Run the playbook for every BMC and check discovery/bmc.json."
+    },
+    {
+      "version": "0.29.0",
+      "id": "pve-patch-one-file",
+      "kind": "template",
+      "when": {
+        "component": "ansible",
+        "file_lacks": [
+          "ansible/playbooks/patch-proxmox-node.yml",
+          "pve-patch.json"
+        ]
+      },
+      "text": "pve_node_plan.py writes every plan into discovery/pve-patch.json (under its site, then node) instead of pve-patch-[<site>-]<node>.json (#75). This repo's patch-proxmox-node.yml has local edits, so --sync-managed did not replace it, and it still looks for the old per-node files.",
+      "action": "Replace ansible/playbooks/patch-proxmox-node.yml with {template}, carrying over any local edits (show the user the diff first), and run `ansible-playbook --syntax-check` on it."
+    },
+    {
+      "version": "0.29.0",
+      "id": "unifi-per-site",
+      "kind": "template",
+      "when": {
+        "component": "appliances",
+        "file_lacks": [
+          "ansible/playbooks/unifi-info.yml",
+          "unifi_site"
+        ]
+      },
+      "text": "unifi-info.yml keeps each homelab site's controller data in discovery/unifi.json under that site (#75); the UniFi site list moved to unifi_sites. This repo's copy has local edits.",
+      "action": "Replace ansible/playbooks/unifi-info.yml with {template}, carrying over any local edits (show the user the diff first)."
+    },
+    {
+      "version": "0.29.0",
+      "id": "host-files-site-tag",
+      "kind": "template",
+      "when": {
+        "component": "ansible",
+        "file_lacks": [
+          "ansible/playbooks/check-updates.yml",
+          "GitHub #75"
+        ]
+      },
+      "text": "updates.json, containers.json and bmc.json give each host its site (from its site_<name> group, #75). This repo's check-updates.yml has local edits; docker-containers.yml and bmc-info.yml may too.",
+      "action": "In ansible/playbooks/check-updates.yml, docker-containers.yml and bmc-info.yml, add the loop marked `GitHub #75` from the same playbooks in {HM}/assets/repo-template/ansible/playbooks/ to the write step (show the user the diff first)."
+    },
+    {
+      "version": "0.29.0",
+      "id": "discovery-readme-sites-inside",
+      "kind": "template",
+      "when": {
+        "file_lacks": [
+          "discovery/README.md",
+          "never a site in its name"
+        ]
+      },
+      "text": "discovery/ has one file per kind with every site inside (#75); this repo's discovery/README.md is an older copy with local edits.",
+      "action": "Replace discovery/README.md with {template} (show the user the diff first; keep only a note the template has no equivalent for)."
     }
   ]
 }
