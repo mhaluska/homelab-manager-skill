@@ -6,6 +6,9 @@
   Pushing the tag runs `.github/workflows/release.yml`: it checks plugin.json matches the tag and
   publishes a GitHub release with that version's CHANGELOG section (`.github/release_notes.py`).
   Run the unit tests locally before tagging (they target macOS). Push at most 3 tags at once.
+- A release that changes `assets/repo-template/` regenerates `assets/template-history.json`
+  (`python3 .github/template_history.py`, needs the release tags locally) after the version bump; a test fails
+  until it is current. `--sync-managed` replaces repo files that match a released template with no local edits.
 - A release that adds something existing repos must adopt by hand (new homelab.yaml key, a section of a
   user-owned template doc, a snapshot format, a step on Proxmox) gets an entry in
   `skills/homelab-manager/assets/upgrade-notes.json`; changes `--sync-managed` can make itself go in

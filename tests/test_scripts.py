@@ -1248,6 +1248,20 @@ class UpgradeNotesTests(unittest.TestCase):
                               (SCRIPTS.parent / "assets/repo-template" / n["when"]["file_lacks"][0]).read_text())
 
 
+class TemplateHistoryTests(unittest.TestCase):  # GitHub issue #68
+    def test_history_has_every_current_template_file(self):
+        import hashlib
+        tree = SCRIPTS.parent / "assets/repo-template"
+        hist = json.loads((SCRIPTS.parent / "assets/template-history.json").read_text())["files"]
+        for f in sorted(tree.rglob("*")):
+            if not f.is_file() or f.name == ".DS_Store":
+                continue
+            rel, data = f.relative_to(tree).as_posix(), f.read_bytes()
+            h = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+            self.assertIn(h, hist.get(rel, {}),
+                          f"{rel} changed: run python3 .github/template_history.py and commit the result")
+
+
 FAKE_GH_CLOSED = """#!/usr/bin/env python3
 import json, sys
 if sys.argv[1:3] == ["issue", "list"]:
