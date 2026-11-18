@@ -17,6 +17,9 @@
   user's reported skill issues the installed release fixed. Suggestions are offered until each is applied or
   declined (upgrade_notes.py --decline); a real run with none left records the installed version in
   upgrades.reviewed.
+- --sync-managed replaces a template file the user never edited (it matches a released template byte for
+  byte, assets/template-history.json) with the current one, adding new files it names; edited files get
+  upgrade-note suggestions instead.
 - Records the choice under `components:` in homelab.yaml — the skill ignores disabled parts.
 - `git init -b main` if needed; core.hooksPath → scripts/git-hooks (blocks committing secrets).
 - Registers this plugin's marketplace in .claude/settings.json when its Git remote is known.
@@ -27,6 +30,7 @@ Does not commit: the skill reviews the result with the user and commits.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -71,6 +75,10 @@ MANAGED: list[str] = []
 # Were plugin-managed in older versions; removed by --sync-managed if still unedited-managed (header present).
 OBSOLETE = [".github/ISSUE_TEMPLATE/homelab-problem.yml", ".github/ISSUE_TEMPLATE/config.yml"]  # until 0.5.2
 MANAGED_MARK = "Managed by the homelab-manager plugin"
+# Template files --sync-managed never replaces even when unedited: config and data the scripts edit in place,
+# and docs whose changes come with steps on Proxmox that a silent replacement would hide.
+HISTORY = HERE.parent / "assets" / "template-history.json"
+NEVER_REPLACE = {"homelab.yaml", ".claude/settings.json", "skill_issues.md", "docs/proxmox-tokens.md"}
 OLD_CLAUDE_RULE = re.compile(r"^- Record problems you find.*?(?=^\S|\Z)", re.M | re.S)       # until 0.5.2
 NEW_CLAUDE_RULE = re.compile(r"^- Homelab problems .*?(?=^\S|\Z)", re.M | re.S)
 OLD_README_ROW = re.compile(r"^\| `ISSUES\.md` \| Problems found while managing the homelab.*$", re.M)  # until 0.5.2
@@ -112,9 +120,61 @@ def _prune(d: Path, stop: Path):
         d = d.parent
 
 
+def _blob(data: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()   # git's blob hash, as in the history
+
+
+def unedited_templates(target: Path) -> list[tuple[str, str, list[str]]]:
+    """Repo files that differ from the template but match a released one byte for byte (no local edits):
+    [(path, last release with that content, new template files it names that the repo lacks)] (GitHub issue #68).
+    New files an upgrade note offers (file_missing) stay opt-in."""
+    if not (target / "homelab.yaml").exists() or not HISTORY.exists():
+        return []
+    hist = json.loads(HISTORY.read_text())["files"]
+    comps = current_components(target) or list(COMPONENTS)   # no components: section = older repo: all
+    opt_in = {n["when"]["file_missing"] for n in upgrade_notes.all_notes() if "file_missing" in (n.get("when") or {})}
+    rels = [p.relative_to(TEMPLATE).as_posix() for p in sorted(TEMPLATE.rglob("*"))
+            if p.is_file() and p.name != ".DS_Store"]
+    vt = upgrade_notes.vtuple
+    out = []
+    for rel in rels:
+        if rel in NEVER_REPLACE or any(rel.startswith(m) for m in MANAGED) or not wanted(rel, comps):
+            continue
+        dst, src = target / rel, TEMPLATE / rel
+        if not dst.is_file():
+            continue
+        have = dst.read_bytes()
+        if have == src.read_bytes() or _blob(have) not in hist.get(rel, {}):
+            continue
+        since = hist[rel][_blob(have)][1]
+        text = src.read_text(errors="replace")
+        new = [c for c in rels if c not in opt_in and c not in NEVER_REPLACE and wanted(c, comps) and not (target / c).exists()
+               and not any(vt(a) <= vt(since) <= vt(b) for a, b in hist.get(c, {}).values())
+               and "/".join(c.split("/")[-2:]) in text]
+        out.append((rel, since, new))
+    return out
+
+
+def _note_file(n: dict) -> str | None:
+    w = n.get("when") or {}
+    return (w.get("file_lacks") or w.get("file_has") or [None])[0]
+
+
 def upgrades(target: Path) -> list[tuple[str, callable]]:
     """Changes that bring a repo set up by an older plugin version in line with this one: [(description, apply)]."""
     out = []
+    replaced, added = set(), set()
+    for rel, since, new in unedited_templates(target):
+        new = [c for c in new if c not in added]
+        added |= set(new)
+        replaced.add(rel)
+        def replace(rel=rel, new=new):
+            for r in [rel, *new]:
+                (target / r).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(TEMPLATE / r, target / r)
+        out.append((f"replace {rel} with the current template (no local edits since {since})"
+                    + (f"; add {', '.join(new)} (it uses them)" if new else ""), replace))
+    first = len(out)
     for src in sorted(TEMPLATE.rglob("*")):
         rel = src.relative_to(TEMPLATE).as_posix()
         if src.is_dir() or not any(rel.startswith(m) for m in MANAGED):
@@ -174,7 +234,8 @@ def upgrades(target: Path) -> list[tuple[str, callable]]:
     tokens = token_user_acls(target)
     if tokens:
         out.append(tokens)
-    return out
+    # a file replaced whole needs none of the older patches to it
+    return out[:first] + [o for o in out[first:] if not any(o[0].startswith(r + ":") for r in replaced)]
 
 
 TOKEN_ACL = re.compile(r"^pveum acl modify (\S+) --tokens '([^'!]+)![^']+' --roles (\S+)[ \t]*$", re.M)
@@ -240,16 +301,26 @@ def rename_issues_file(target: Path):
 
 
 def suggestions(target: Path) -> tuple[list[dict], list[tuple[dict, str]]]:
-    """(opt-in upgrade notes newer than upgrades.reviewed, reported skill issues fixed by this release)."""
+    """(opt-in upgrade notes newer than upgrades.reviewed and not settled — except those whose file
+    --sync-managed replaces with the template —, reported skill issues fixed by this release)."""
     if not (target / "homelab.yaml").exists():
         return [], []
     import issues  # noqa: E402
-    notes = upgrade_notes.pending(target)
+    replaced = {r for r, _, _ in unedited_templates(target)}
+    notes = [n for n in upgrade_notes.pending(target) if _note_file(n) not in replaced]
     try:
         fixed = issues.fixed_by_release(issues.load(issues.issues_path(issues.hmlib.load_config(target))))
     except issues.hmlib.ConfigError:
         fixed = []
     return notes, fixed
+
+
+def covered_notes(target: Path) -> list[dict]:
+    """Pending notes that replacing an unedited file with the template settles (call before applying)."""
+    if not (target / "homelab.yaml").exists():
+        return []
+    replaced = {r for r, _, _ in unedited_templates(target)}
+    return [n for n in upgrade_notes.pending(target) if _note_file(n) in replaced]
 
 
 def record_reviewed(target: Path):
@@ -268,6 +339,7 @@ def _reviewed_lags(target: Path) -> bool:
 
 def sync_managed(target: Path, dry_run: bool) -> int:
     steps = upgrades(target)
+    covered = covered_notes(target)
     notes, fixed = suggestions(target)
     lags = _reviewed_lags(target)
     if not (steps or notes or fixed or lags):
@@ -279,6 +351,12 @@ def sync_managed(target: Path, dry_run: bool) -> int:
         if not dry_run:
             apply()
         print("  " + ("would " if dry_run else "") + desc)
+    if covered:
+        print("  Those replacements bring in these changes of newer releases:")
+        for n in covered:
+            print(f"    [{n['version']} · {n['id']}] {n['text']}")
+            if n.get("after_replace"):
+                print(f"      → still to do: {n['after_replace']}")
     if notes:
         print("Suggested by newer releases (opt-in — not applied; ask the user for each):")
         print("\n".join("  " + upgrade_notes.describe(n) for n in notes))

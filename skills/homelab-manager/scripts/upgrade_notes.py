@@ -121,10 +121,12 @@ def pending(root: Path, everything: bool = False) -> list[dict]:
             continue
         ok, ph = _check(n, cfg, Path(root))
         if ok:
-            action = n.get("action", "")
-            for k, v in ph.items():
-                action = action.replace("{" + k + "}", v)
-            out.append({**n, "action": action})
+            n = dict(n)
+            for field in ("action", "after_replace"):
+                if field in n:
+                    for k, v in ph.items():
+                        n[field] = n[field].replace("{" + k + "}", v)
+            out.append(n)
     return out
 
 

@@ -5,13 +5,15 @@
     "init_repo.py --sync-managed [--dry-run] lists the ones that apply to the repo and are newer than its",
     "upgrades.reviewed version (homelab.yaml), as 'suggested, needs your yes'. Maintainers: add a note for",
     "every release that adds something an existing repo has to adopt by hand.",
-    "Fields: version, id, kind (config | template | regenerate | manual), text, action, when.",
+    "Fields: version, id, kind (config | template | regenerate | manual), text, action, when, after_replace.",
+    "A template note whose file (file_lacks/file_has) has no local edits is settled by --sync-managed replacing the",
+    "file with the template (template-history.json); after_replace is what is left to do then (optional).",
     "when (all must hold): component (enabled), config_empty (dotted key unset/empty), config_set (dotted key set),",
     "file_lacks [path, text] (file exists and lacks text), file_has [path, text] (file exists and has text),",
     "file_missing path (a file a release added is not in the repo; {template} is its template),",
     "vmids_outside_ranges (snapshot VMIDs don't fit), agent_ips_unread (discovery/proxmox.json says the guest",
     "agent IPs were not read: guest_ip_sources.agent present and not ok).",
-    "Placeholders in action: {HM} skill dir, {template} template file of file_lacks, {detail} computed hint."
+    "Placeholders in action and after_replace: {HM} skill dir, {template} template file of file_lacks, {detail} computed hint."
   ],
   "notes": [
     {
@@ -124,7 +126,8 @@
       "kind": "template",
       "when": {"component": "ansible", "file_lacks": ["ansible/playbooks/patch-linux.yml", "hm_patch_order"]},
       "text": "patch-linux.yml: reboot=never|if_required|always, VIP holder last (order=vip_holder_last), health_check hooks such as hooks/vrrp-health.yml (#39), Proxmox snapshots before each guest (-e snapshot=true, #37), restart_services, the restart check and ansible_facts (#35, #38).",
-      "action": "Replace ansible/playbooks/patch-linux.yml with {template} (re-apply any local edits) and copy ansible/playbooks/hooks/vrrp-health.yml and ansible/playbooks/tasks/restart-check.yml from the same template directory. Clusters in homelab.yaml can now name reboot, order, vip and health_check (see the commented example in the template homelab.yaml)."
+      "action": "Replace ansible/playbooks/patch-linux.yml with {template} (re-apply any local edits) and copy ansible/playbooks/hooks/vrrp-health.yml and ansible/playbooks/tasks/restart-check.yml from the same template directory. Clusters in homelab.yaml can now name reboot, order, vip and health_check (see the commented example in the template homelab.yaml).",
+      "after_replace": "Clusters in homelab.yaml can now name reboot, order, vip and health_check (see the commented example in {HM}/assets/repo-template/homelab.yaml)."
     },
     {
       "version": "0.16.0",
@@ -252,7 +255,8 @@
         ]
       },
       "text": "patch-linux.yml -e snapshot=true also snapshots LXD/Incus instances (e.g. containers on a NAS) with lxd_snapshot.py: hosts with the host var lxd_host (#44).",
-      "action": "Replace ansible/playbooks/patch-linux.yml with {template}, carrying over any local edits (show the user the diff first). To use it, follow references/patching.md 'LXD/Incus instances'."
+      "action": "Replace ansible/playbooks/patch-linux.yml with {template}, carrying over any local edits (show the user the diff first). To use it, follow references/patching.md 'LXD/Incus instances'.",
+      "after_replace": "To use it, follow references/patching.md 'LXD/Incus instances'."
     },
     {
       "version": "0.20.0",
@@ -294,7 +298,8 @@
         ]
       },
       "text": "The Packer template takes a site file per site (site-<name>.pkrvars.hcl) and refuses to build with another site's token (#52). Only needed with sites: in homelab.yaml.",
-      "action": "Replace packer/linux/linux.pkr.hcl with {template} and add the site and proxmox_site variables from the template's packer/linux/variables.pkr.hcl, carrying over any local edits (show the user the diff first); run packer validate."
+      "action": "Replace packer/linux/linux.pkr.hcl with {template} and add the site and proxmox_site variables from the template's packer/linux/variables.pkr.hcl, carrying over any local edits (show the user the diff first); run packer validate.",
+      "after_replace": "If packer/linux/variables.pkr.hcl was not replaced too (it has local edits), add the site and proxmox_site variables from {HM}/assets/repo-template/packer/linux/variables.pkr.hcl (show the user the diff first); run packer validate."
     },
     {
       "version": "0.22.0",
@@ -322,7 +327,8 @@
         ]
       },
       "text": "OpenTofu environments take an LXC storage (defaults.lxc_datastore) and storage per node (defaults.node_datastores, homelab.yaml proxmox.nodes) for a cluster without shared storage or a node with other disks; VMs may name template_node (#54). The drift report checks each node's storage.",
-      "action": "In each environment under tofu/environments/, bring the locals block and module arguments of main.tf and the defaults/vms types of variables.tf in line with {HM}/assets/repo-template/tofu/environments/homelab/ (show the user the diff first), then tofu validate and plan: expect no changes. Set proxmox.lxc_storage / proxmox.nodes only if the user's storage needs them (drift report, Storage section)."
+      "action": "In each environment under tofu/environments/, bring the locals block and module arguments of main.tf and the defaults/vms types of variables.tf in line with {HM}/assets/repo-template/tofu/environments/homelab/ (show the user the diff first), then tofu validate and plan: expect no changes. Set proxmox.lxc_storage / proxmox.nodes only if the user's storage needs them (drift report, Storage section).",
+      "after_replace": "Bring main.tf (unless it was replaced too) and every other environment under tofu/environments/ in line with {HM}/assets/repo-template/tofu/environments/homelab/ (show the user the diff first), then tofu validate and plan: expect no changes. Set proxmox.lxc_storage / proxmox.nodes only if the user's storage needs them (drift report, Storage section)."
     },
     {
       "version": "0.23.0",

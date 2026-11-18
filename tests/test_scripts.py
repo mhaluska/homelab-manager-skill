@@ -554,6 +554,7 @@ class UpgradeTests(unittest.TestCase):
         row = next(l for l in readme.read_text().splitlines() if l.startswith("| `skill_issues.md`"))
         readme.write_text(readme.read_text().replace(
             row, "| `ISSUES.md` | Problems found while managing the homelab; can be reported as GitHub issues |"))
+        readme.write_text(readme.read_text() + "\nOur notes.\n")   # edited: patched, not replaced (#68)
         form = self.d / ".github/ISSUE_TEMPLATE/homelab-problem.yml"
         form.parent.mkdir(parents=True)
         form.write_text("# Managed by the homelab-manager plugin — `init_repo.py --sync-managed` overwrites local edits.\nname: x\n")
@@ -692,6 +693,7 @@ class IdeasUpgradeTests(unittest.TestCase):
         claude.write_text(claude.read_text().replace("- Homelab problems" + rule + "\n", PREV_CLAUDE_RULE))
         readme.write_text(readme.read_text().replace(
             next(l for l in readme.read_text().splitlines() if l.startswith("| `skill_issues.md`")), PREV_README_ROW))
+        readme.write_text(readme.read_text() + "\nOur notes.\n")   # edited: patched, not replaced (#68)
         text = issues_md.read_text()
         issues_md.write_text("# Issues with the homelab-manager skill\n\nOld header.\n\n" + MARKER_LINES
                              + text[text.index("| ID |"):])
@@ -1243,6 +1245,8 @@ class UpgradeNotesTests(unittest.TestCase):
             self.assertIn(f"## {n['version']} ", changelog)
             self.assertTrue(set(n["when"]) <= {"component", "config_empty", "config_set", "file_lacks", "file_has", "file_missing",
                                                "vmids_outside_ranges", "agent_ips_unread"}, n["id"])
+            if "after_replace" in n:      # only a note a file replacement can settle has a leftover step
+                self.assertTrue({"file_lacks", "file_has"} & set(n["when"]), n["id"])
             if "file_lacks" in n["when"] and n["kind"] == "template":
                 self.assertIn(n["when"]["file_lacks"][1],
                               (SCRIPTS.parent / "assets/repo-template" / n["when"]["file_lacks"][0]).read_text())
@@ -1260,6 +1264,70 @@ class TemplateHistoryTests(unittest.TestCase):  # GitHub issue #68
             h = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
             self.assertIn(h, hist.get(rel, {}),
                           f"{rel} changed: run python3 .github/template_history.py and commit the result")
+
+
+class UneditedTemplateTests(unittest.TestCase):  # GitHub issue #68
+    TPL = "skills/homelab-manager/assets/repo-template/"
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d)
+        run("init_repo.py", str(self.d), "--components", "proxmox,ansible", cwd=self.d)
+        self.cfg = self.d / "homelab.yaml"
+
+    def old(self, tag, rel):
+        r = subprocess.run(["git", "show", f"{tag}:{self.TPL}{rel}"], cwd=ROOT, capture_output=True)
+        if r.returncode:
+            self.skipTest(f"release tag {tag} not available")
+        (self.d / rel).write_bytes(r.stdout)
+
+    def sync(self, *args):
+        return run("init_repo.py", str(self.d), "--sync-managed", *args, cwd=self.d)
+
+    def test_unedited_file_is_replaced_and_its_note_settled(self):
+        run("config_set.py", "upgrades.reviewed=0.22.0", cwd=self.d)
+        for rel in ("ansible/playbooks/patch-linux.yml", "ansible/playbooks/check-updates.yml"):
+            self.old("v0.22.0", rel)
+        out = self.sync("--dry-run").stdout
+        self.assertIn("would replace ansible/playbooks/patch-linux.yml with the current template "
+                      "(no local edits since 0.22.0)", out)
+        self.assertIn("[0.23.0 · patch-linux-autoremove-diskspace-lxc]", out)
+        self.assertNotIn("Suggested by newer releases", out)                 # nothing left to merge by hand
+        out = self.sync().stdout
+        for rel in ("ansible/playbooks/patch-linux.yml", "ansible/playbooks/check-updates.yml"):
+            self.assertEqual((self.d / rel).read_bytes(), (ROOT / self.TPL / rel).read_bytes())
+        self.assertIn("Recorded upgrades.reviewed", out)
+        self.assertIn("Up to date", self.sync("--dry-run").stdout)
+
+    def test_edited_file_stays_a_suggestion(self):
+        run("config_set.py", "upgrades.reviewed=0.22.0", cwd=self.d)
+        rel = "ansible/playbooks/patch-linux.yml"
+        self.old("v0.22.0", rel)
+        (self.d / rel).write_text((self.d / rel).read_text() + "# local edit\n")
+        before = (self.d / rel).read_text()
+        out = self.sync().stdout
+        self.assertNotIn(f"replace {rel}", out)
+        self.assertIn("patch-linux-autoremove-diskspace-lxc", out)
+        self.assertEqual((self.d / rel).read_text(), before)
+        self.assertEqual(yq(".upgrades.reviewed", self.cfg), '"0.22.0"')
+
+    def test_new_files_it_uses_are_added_opt_in_ones_are_not(self):
+        self.old("v0.15.0", "ansible/playbooks/check-updates.yml")      # before tasks/restart-check.yml (0.16.0)
+        (self.d / "ansible/playbooks/tasks/restart-check.yml").unlink()
+        (self.d / "ansible/playbooks/patch-proxmox-node.yml").unlink()     # offered by a file_missing note
+        out = self.sync().stdout
+        self.assertIn("add ansible/playbooks/tasks/restart-check.yml (it uses them)", out)
+        self.assertTrue((self.d / "ansible/playbooks/tasks/restart-check.yml").exists())
+        self.assertFalse((self.d / "ansible/playbooks/patch-proxmox-node.yml").exists())
+
+    def test_after_replace_step_is_shown_and_docs_with_proxmox_steps_are_kept(self):
+        run("config_set.py", "upgrades.reviewed=0.21.0", cwd=self.d)
+        self.old("v0.21.0", "tofu/environments/homelab/variables.tf")
+        self.old("v0.10.0", "docs/proxmox-tokens.md")
+        out = self.sync("--dry-run").stdout
+        self.assertIn("would replace tofu/environments/homelab/variables.tf", out)
+        self.assertIn("still to do: Bring main.tf", out)
+        self.assertNotIn("replace docs/proxmox-tokens.md", out)
 
 
 FAKE_GH_CLOSED = """#!/usr/bin/env python3
