@@ -102,7 +102,8 @@ python3 $HM/scripts/routeros_audit.py --group routeros     # hosts, users and po
 It prints a Markdown report (save it as `docs/security-audit-<date>.md` when the user wants one) and keeps
 the data in `discovery/routeros.json`. Fixing a finding is a change: `/system routerboard upgrade` and a
 RouterOS upgrade need a reboot (approval), disabling a service can cut off whoever uses it — ask first.
-Use a dedicated user in group `read` for audits.
+Use a dedicated user in group `read` for audits. `--leases` also reads DHCP leases and ARP and proposes names for
+unknown scanned addresses (references/discovery.md, drift report).
 
 Plain-text services the audit flags: `playbooks/routeros-disable-services.yml` (the report prints the command
 for each device in the inventory). `routeros_disable_services` (default `[api, www]`; may add `telnet`, `ftp`,

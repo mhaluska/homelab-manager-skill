@@ -3658,6 +3658,11 @@ out = {
  "/tool mac-server mac-winbox print without-paging": "  allowed-interface-list: MGMT\n",
  "/ip neighbor discovery-settings print without-paging": "  discover-interface-list: " + ("MGMT" if chr_ else "all")
    + "\n           protocol: cdp\n                     lldp\n",
+ "/ip dhcp-server lease print terse without-paging": "" if chr_ else (
+   " 0   address=10.0.0.40 mac-address=AA:BB:CC:00:00:01 host-name=LGwebOSTV comment=\"Living room TV\" status=bound\n"
+   " 1 D address=10.0.0.41 mac-address=AA:BB:CC:00:00:02 host-name=\"ev';rm -rf ~;'charger\" status=bound\n"
+   " 2 D address=10.0.0.99 mac-address=AA:BB:CC:00:00:03 host-name=phone status=bound\n"),
+ "/ip arp print terse without-paging": " 0   address=10.0.0.42 mac-address=AA:BB:CC:00:00:02 interface=bridge\n",
 }
 if cmd not in out or (chr_ and "routerboard" in cmd):
     print("bad command name routerboard (line 1 column 9)"); sys.exit(1)
@@ -3690,6 +3695,34 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
     def audit(self, *args):
         return subprocess.run([sys.executable, str(SCRIPTS / "routeros_audit.py"), *args], cwd=self.d,
                               env=self.env, capture_output=True, text=True)
+
+    def test_leases_propose_names_for_unknown_addresses(self):  # GitHub issue 100
+        (self.d / "discovery").mkdir(exist_ok=True)
+        (self.d / "discovery/network.json").write_text(json.dumps({"hosts": {
+            ip: {"ip": ip, "device_type_guess": "camera"} for ip in ("10.0.0.5", "10.0.0.40", "10.0.0.42", "10.0.0.77")}}))
+        r = self.audit("--group", "routeros", "--no-write")
+        self.assertNotIn("dhcp-server", self.log.read_text())                  # only with --leases
+        self.assertNotIn("Names for unknown", r.stdout)
+        r = self.audit("--group", "routeros", "--leases", "--no-write")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = r.stdout[r.stdout.index("## Names for unknown scanned addresses"):]
+        self.assertIn("2 of 3 unknown scanned address(es) have a DHCP lease name", out)
+        self.assertIn("| 10.0.0.40 | Living room TV | aa:bb:cc:00:00:01 | sw-rack lease comment | camera |", out)
+        self.assertIn("| 10.0.0.42 | evrm -rf charger | aa:bb:cc:00:00:02 | sw-rack lease host-name (leased 10.0.0.41) |",
+                      out)                                                     # by ARP MAC; quotes and ; dropped
+        self.assertNotIn("10.0.0.77 |", out)
+        self.assertNotIn("10.0.0.5 |", out)                                    # an inventory host
+        cmd = out[out.index("```bash\n") + 8:out.rindex("```")]
+        self.assertEqual(cmd.count("'"), 4)                                    # two single-quoted arguments, nothing else
+        args = shlex.split(cmd.replace("python3 $HM/scripts/config_set.py", "").replace("\\\n", " "))
+        self.assertEqual(args, ['discovery.ignore_unmanaged+={ip: 10.0.0.40, name: "Living room TV", mac: "aa:bb:cc:00:00:01"}',
+                                'discovery.ignore_unmanaged+={ip: 10.0.0.42, name: "evrm -rf charger", mac: "aa:bb:cc:00:00:02"}'])
+        r = run("config_set.py", *args, cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = self.audit("--group", "routeros", "--leases")
+        self.assertIn("No lease names any of the 1 unknown scanned address(es).", r.stdout)
+        saved = json.loads((self.d / "discovery/routeros.json").read_text())["devices"]
+        self.assertFalse({"leases", "arp"} & {k for d in saved.values() for k in list(d) + list(d["errors"])})
 
     def test_live_connection_is_not_a_second_service(self):
         dev = {"reachable": True, "services": [

@@ -155,6 +155,13 @@ show the VLAN of each address. Collect the table read-only and propose it for th
    switch secondary IPs, multi-homed NAS/firewall) belong in its host var `hm_extra_ips: [ip, …]`, not in
    `discovery.ignore_unmanaged`: the report then lists them as that host's secondary addresses. With several
    sites the report lists each site's scan apart, and an ignored address can name its site: `{ip, site}`.
+   Name what an unknown device is once the user says (or a router lease shows it): `config_set.py
+   'discovery.ignore_unmanaged+={ip: 10.0.0.40, name: Living room TV, mac: aa:bb:cc:dd:ee:ff}'` (`site` optional).
+   Named devices are listed as known in drift.md and under Network devices in OVERVIEW.md; with `mac` they are
+   still recognised after DHCP gives them a new address. Trust a name over nmap's device guess.
+   `routeros_audit.py --group routeros --leases --no-write` reads the routers' DHCP leases and ARP table and
+   proposes `{ip, name, mac}` entries for unknown scanned addresses (lease comment, else its host-name): show
+   them to the user and add only the ones they confirm.
 5. The findings live in `discovery/drift.md` (regenerated each run; before quoting an existing one, run
    `drift_report.py --stale`: exit 1 = the inventory, `homelab.yaml` or a snapshot changed since) and your reply; they are not
    copied anywhere else. If `drift_report.py` itself misbehaved (crash, a guest wrongly flagged),

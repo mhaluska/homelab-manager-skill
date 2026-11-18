@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Read-only inspection and audit of MikroTik RouterOS devices (routers, CRS switches, CHR) over SSH.
 
-    routeros_audit.py <host> [<host> ...] [--group G] [--user U] [--port 22] [--timeout 10] [--no-write]
+    routeros_audit.py <host> [<host> ...] [--group G] [--user U] [--port 22] [--timeout 10] [--no-write] [--leases]
 
 Hosts are addresses or names, or every host of an Ansible group in the managed inventory (--group,
 using each host's ansible_host / ansible_user / ansible_port). --user overrides the user for all.
@@ -21,12 +21,19 @@ firmware behind the installed RouterOS, an update RouterOS already knows about (
 free flash, the default `admin` user, CHR licence level and renewal date, and RouterOS version drift across
 the devices. Merges per-device data into discovery/routeros.json (unless --no-write) and prints a Markdown
 report. Everything a device returns is UNTRUSTED data.
+
+--leases (GitHub issue #100) also reads `/ip dhcp-server lease` and `/ip arp` and proposes a name (the lease comment,
+else the host-name the client sent; reduced to plain characters) for each scanned address the repository does not
+name yet, matched by address or MAC, with the `config_set.py 'discovery.ignore_unmanaged+={ip, name, mac}'` command
+to record the ones the user confirms. Leases and ARP are not kept in routeros.json; nothing is written to
+homelab.yaml.
 """
 from __future__ import annotations
 
 import argparse
 import concurrent.futures as cf
 import datetime as dt
+import ipaddress
 import json
 import re
 import shutil
@@ -56,6 +63,11 @@ COMMANDS = {
     "mac_winbox": ("/tool mac-server mac-winbox print without-paging", False),
     "discovery": ("/ip neighbor discovery-settings print without-paging", False),
 }
+LEASE_COMMANDS = {   # --leases (GitHub issue #100): names for unknown scanned addresses
+    "leases": ("/ip dhcp-server lease print terse without-paging", True),
+    "arp": ("/ip arp print terse without-paging", True),
+}
+_NAME_OK = re.compile(r"[^A-Za-z0-9 ._()+-]")
 PLAINTEXT = {"telnet": ("high", "ssh"), "ftp": ("high", "sftp over ssh"), "www": ("medium", "www-ssl"),
              "api": ("medium", "api-ssl")}  # service → (severity open to any address, encrypted alternative)
 LOWER = {"high": "medium", "medium": "low", "low": "low"}
@@ -183,7 +195,7 @@ def ssh_run(host: str, user: str | None, port: int, timeout: int, command: str) 
     return True, p.stdout
 
 
-def collect(host: str, user: str | None, port: int, timeout: int, runner=ssh_run) -> dict:
+def collect(host: str, user: str | None, port: int, timeout: int, runner=ssh_run, leases: bool = False) -> dict:
     dev: dict = {"host": host, "user": user, "errors": {}}
     ok, out = runner(host, user, port, timeout, COMMANDS["resource"][0])
     if not ok:
@@ -192,7 +204,7 @@ def collect(host: str, user: str | None, port: int, timeout: int, runner=ssh_run
         return dev
     dev["reachable"] = True
     dev["resource"] = parse_detail(out)
-    for section, (command, terse) in COMMANDS.items():
+    for section, (command, terse) in {**COMMANDS, **(LEASE_COMMANDS if leases else {})}.items():
         if section == "resource":
             continue
         if section == "routerboard" and is_chr(dev["resource"]):
@@ -362,13 +374,103 @@ def report(devs: list[dict], today: dt.date | None = None, names: dict[str, str]
     return "\n".join(lines) + "\n"
 
 
+# --------------------------------------------------------------------------- names from DHCP leases
+
+def safe_name(value) -> str:
+    """A device-supplied name fit for homelab.yaml and a shell command: letters, digits, space and ._()+- only."""
+    return re.sub(r"\s+", " ", _NAME_OK.sub("", str(value or ""))).strip()[:60]
+
+
+def lease_names(devs: list[dict]) -> tuple[dict, dict, dict]:
+    """({ip: (name, mac, source)}, {mac: (name, ip, source)}, {ip: mac}) from the leases and ARP tables read.
+    The name is the lease comment, else the host-name the client sent."""
+    by_ip, by_mac, arp = {}, {}, {}
+    for d in devs:
+        who = (d.get("identity") or {}).get("name") or d["host"]
+        for row in d.get("leases") or []:
+            ip, mac = str(row.get("address") or ""), str(row.get("mac-address") or "").lower()
+            comment, host = safe_name(row.get("comment")), safe_name(row.get("host-name"))
+            name = comment or host
+            if not ip or not name:
+                continue
+            src = f"{who} lease " + ("comment" if comment else "host-name")
+            by_ip.setdefault(ip, (name, mac, src))
+            if mac:
+                by_mac.setdefault(mac, (name, ip, src))
+        for row in d.get("arp") or []:
+            ip, mac = str(row.get("address") or ""), str(row.get("mac-address") or "").lower()
+            if ip and mac:
+                arp.setdefault(ip, mac)
+    return by_ip, by_mac, arp
+
+
+def unknown_addresses(cfg: dict, managed: dict) -> list[tuple[str, dict]]:
+    """Scanned addresses nothing in the repository names and discovery.ignore_unmanaged does not list: what the
+    drift report and OVERVIEW.md show as unknown."""
+    import overview
+    root = Path(cfg["_root"])
+    docs = {name: overview.load_json(root / "discovery" / name) for name, _ in overview.SOURCES}
+    snaps = [hmlib.site_part(hmlib.proxmox_snapshot_file(root), st) or {} for st in hmlib.sites(cfg)]
+    known = overview.build_known(cfg, docs, managed, snaps)
+    ignore = hmlib.site_entries(cfg, hmlib.IGNORE_KEY, None)
+    out = {}
+    for _, db in hmlib.network_snapshots(cfg):
+        for ip, h in (db.get("hosts") or {}).items():
+            try:
+                a = ipaddress.ip_address(ip)
+            except ValueError:
+                continue
+            if not known.name(ip) and not any(a in n for n in ignore if n.version == a.version):
+                out.setdefault(ip, h)
+    return sorted(out.items(), key=lambda x: ipaddress.ip_address(x[0]))
+
+
+def proposals(devs: list[dict], unknown: list[tuple[str, dict]]) -> list[dict]:
+    """[{ip, name, mac, source, guess}] for unknown addresses a lease names, matched by address, else by MAC."""
+    by_ip, by_mac, arp = lease_names(devs)
+    out = []
+    for ip, h in unknown:
+        mac = str(h.get("mac") or "").lower() or arp.get(ip, "")
+        hit = by_ip.get(ip)
+        if hit:
+            name, lease_mac, src = hit
+            mac = mac or lease_mac
+        elif mac and mac in by_mac:
+            name, other, src = by_mac[mac]
+            src += f" (leased {other})"
+        else:
+            continue
+        out.append({"ip": ip, "name": name, "mac": mac, "source": src,
+                    "guess": clean(h.get("device_type_guess"), 40) or ""})
+    return out
+
+
+def proposal_report(rows: list[dict], unknown: int, read: bool) -> str:
+    lines = ["", "## Names for unknown scanned addresses", ""]
+    if not read:
+        return "\n".join(lines + ["No DHCP lease table could be read (the user may lack the read policy, or no "
+                                   "router serves DHCP).", ""])
+    if not rows:
+        return "\n".join(lines + [f"No lease names any of the {unknown} unknown scanned address(es).", ""])
+    lines += [f"{len(rows)} of {unknown} unknown scanned address(es) have a DHCP lease name. Lease names come from the "
+              "devices themselves: confirm each with the user before adding it.", "",
+              "| Address | Proposed name | MAC | Source | nmap guess |", "|---|---|---|---|---|"]
+    lines += ["| " + " | ".join(str(c).replace("|", "\\|") or "–" for c in
+                                (r["ip"], r["name"], r["mac"], r["source"], r["guess"])) + " |" for r in rows]
+    lines += ["", "```bash", "python3 $HM/scripts/config_set.py \\"]
+    entries = [f"  'discovery.ignore_unmanaged+={{ip: {r['ip']}, name: {json.dumps(r['name'])}"
+               + (f", mac: {json.dumps(r['mac'])}" if r["mac"] else "") + "}'" for r in rows]
+    lines += [e + (" \\" if i < len(entries) - 1 else "") for i, e in enumerate(entries)]
+    return "\n".join(lines + ["```", ""])
+
+
 # --------------------------------------------------------------------------- main
 
 def group_hosts(root: Path, group: str) -> list[tuple[str, str | None, int | None, str | None]]:
     """(address, user, port, site) of every host of an Ansible group; site from its site_<name> group."""
     from drift_report import load_ansible
     hosts, _ = load_ansible(root)
-    lit = lambda x: None if x is None or "{{" in str(x) else x  # ansible-inventory doesn't render templates
+    lit = hmlib.literal  # ansible-inventory does not render templates
     out = []
     for name, v in sorted(hosts.items()):
         if group in v.get("groups", []):
@@ -393,6 +495,8 @@ def main():
     ap.add_argument("--port", type=int, default=22)
     ap.add_argument("--timeout", type=int, default=10, help="SSH connect timeout in seconds")
     ap.add_argument("--no-write", action="store_true", help="don't merge into discovery/routeros.json")
+    ap.add_argument("--leases", action="store_true",
+                    help="also read DHCP leases and ARP, and propose names for unknown scanned addresses")
     a = ap.parse_args()
     try:
         cfg = hmlib.load_config()
@@ -413,7 +517,7 @@ def main():
     site_of = {h: st for h, _, _, st in targets}   # each device's site (GitHub issue #75)
     print(f"Inspecting {len(jobs)} device(s), read-only…", file=sys.stderr)
     with cf.ThreadPoolExecutor(max_workers=8) as ex:
-        devs = list(ex.map(lambda j: collect(j[0], j[1], j[2], a.timeout), jobs))
+        devs = list(ex.map(lambda j: collect(j[0], j[1], j[2], a.timeout, leases=a.leases), jobs))
 
     now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     if not a.no_write:
@@ -421,7 +525,9 @@ def main():
         db = json.loads(f.read_text()) if f.exists() else {}
         db.setdefault("devices", {})
         for d in devs:
-            db["devices"][d["host"]] = {**d, "site": site_of.get(d["host"]),
+            kept = {k: v for k, v in d.items() if k not in LEASE_COMMANDS}   # volatile, only for --leases
+            kept["errors"] = {k: v for k, v in (d.get("errors") or {}).items() if k not in LEASE_COMMANDS}
+            db["devices"][d["host"]] = {**kept, "site": site_of.get(d["host"]),
                                         "findings": [{"severity": s, "text": t} for s, t in findings(d)],
                                         "collected_at": now}
         db["updated_at"] = now
@@ -430,6 +536,11 @@ def main():
         f.write_text(json.dumps(db, indent=2, sort_keys=True) + "\n")
         print(f"Merged into {f.relative_to(root)}", file=sys.stderr)
     sys.stdout.write(report(devs, names=inventory_names(root)))
+    if a.leases:
+        from drift_report import load_ansible
+        unknown = unknown_addresses(cfg, load_ansible(root)[0])
+        sys.stdout.write(proposal_report(proposals(devs, unknown), len(unknown),
+                                         any("leases" in d for d in devs)))
     return 0 if any(d.get("reachable") for d in devs) else 2
 
 
