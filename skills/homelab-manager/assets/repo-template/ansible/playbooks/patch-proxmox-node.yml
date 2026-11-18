@@ -166,29 +166,44 @@
             src: "{{ pve_node }}"
             dst: "{{ guest.target }}"
 
-        - name: Shut down pinned guests (reverse startup order, never forced)
+        # Shutdown and the emptiness check share one rescue: whatever fails before the reboot, the stopped guests
+        # are started again and HA maintenance is turned off, so a failed run never leaves the node's guests down
+        # (GitHub issue #90).
+        - name: Shut down pinned guests and confirm the node is empty
           block:
-            - name: Shutdown
+            - name: Shutdown (reverse startup order, never forced)
               ansible.builtin.command: >-
                 {{ 'qm' if (plan.guests | selectattr('vmid', 'equalto', item) | first).type == 'vm' else 'pct' }}
                 shutdown {{ item }} --timeout {{ pve_shutdown_timeout | default(180) }}
               loop: "{{ plan.stop_order }}"
+
+            # /cluster/resources comes from pvestatd and lags ~10 s behind a shutdown or migration: poll it
+            - name: Nothing runs on the node any more
+              ansible.builtin.command: pvesh get /cluster/resources --type vm --output-format json
+              register: pve_empty
+              changed_when: false
+              until: >-
+                pve_empty.stdout | from_json | selectattr('node', 'equalto', pve_node)
+                | selectattr('status', 'equalto', 'running') | list | length == 0
+              retries: 12
+              delay: 10
           rescue:
-            - name: Start again what was stopped
+            - name: Start again what was stopped (startup order)
               ansible.builtin.shell: >-
                 {{ 'qm' if (plan.guests | selectattr('vmid', 'equalto', item) | first).type == 'vm' else 'pct' }}
                 status {{ item }} | grep -q running || {{ 'qm' if (plan.guests | selectattr('vmid', 'equalto', item) | first).type == 'vm' else 'pct' }} start {{ item }}
               loop: "{{ plan.stop_order | reverse | list }}"
+            - name: HA node maintenance off (HA brings its guests back)
+              ansible.builtin.command: ha-manager crm-command node-maintenance disable {{ pve_node }}
+              when: by_action.ha | default([]) | length > 0
             - ansible.builtin.fail:
-                msg: "A guest did not shut down cleanly; started the stopped ones again, no reboot. Investigate first."
-
-        - name: Nothing runs on the node any more
-          ansible.builtin.command: pvesh get /cluster/resources --type vm --output-format json
-          register: pve_empty
-          changed_when: false
-          failed_when: >-
-            pve_empty.stdout | from_json | selectattr('node', 'equalto', pve_node)
-            | selectattr('status', 'equalto', 'running') | list | length > 0
+                msg: >-
+                  {{ ansible_failed_task.name }} failed, so the node was not rebooted: started the stopped guests
+                  again{{ ' and turned HA maintenance off' if by_action.ha | default([]) | length > 0 else '' }}.
+                  Migrated guests stay on their target node. Still running on {{ pve_node }}:
+                  {{ (pve_empty.stdout | default('[]') | from_json | selectattr('node', 'equalto', pve_node)
+                     | selectattr('status', 'equalto', 'running') | map(attribute='vmid') | list)
+                     if pve_empty is defined and pve_empty.stdout is defined else 'unknown' }}. Investigate first.
 
         - name: Reboot
           ansible.builtin.reboot:

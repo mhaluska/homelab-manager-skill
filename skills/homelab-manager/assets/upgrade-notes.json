@@ -572,6 +572,15 @@
       "when": {"config_empty": "overview.redact", "file_missing": "OVERVIEW.md"},
       "text": "New overview.py writes OVERVIEW.md in the repository root: one readable page about the whole homelab (every site, Mermaid maps, VLANs, nodes, storage, guests, backups, containers, Ansible groups, health), regenerated after every change (#87). New homelab.yaml key overview.redact.",
       "action": "Ask whether the repository is shared or public, then `python3 {HM}/scripts/config_set.py 'overview.redact=true'` (shared/public) or `'overview.redact=false'`. Then `python3 {HM}/scripts/overview.py`, show the user the result and commit OVERVIEW.md. See references/discovery.md \"Overview page\"."
+    },
+    {
+      "version": "0.33.1",
+      "id": "patch-proxmox-node-empty-rescue",
+      "kind": "template",
+      "when": {"component": "proxmox", "file_lacks": ["ansible/playbooks/patch-proxmox-node.yml", "GitHub issue #90"]},
+      "text": "patch-proxmox-node.yml polls the 'Nothing runs on the node any more' check (pvestatd lags ~10 s behind a shutdown) and shares a rescue with the shutdowns: if either fails, the stopped guests are started again and HA maintenance is turned off instead of leaving every pinned guest down (#90).",
+      "edited": "This repo's copy has local edits, so --sync-managed did not replace it.",
+      "action": "Replace ansible/playbooks/patch-proxmox-node.yml with {template}, carrying over any local edits (show the user the diff first), then `ansible-playbook playbooks/patch-proxmox-node.yml --syntax-check`."
     }
   ]
 }
