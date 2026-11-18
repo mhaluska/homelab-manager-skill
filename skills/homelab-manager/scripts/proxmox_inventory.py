@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Read-only Proxmox VE inventory: nodes, VMs, LXC containers, storage, networks.
 
-    proxmox_inventory.py [--secret proxmox-ro] [--out discovery/proxmox.json] [--details] [--summary]
+    proxmox_inventory.py [--secret proxmox-ro] [--out FILE] [--details] [--summary]
                          [--site NAME | --all-sites]
     proxmox_inventory.py --next-vmid vms|lxc|templates|base_images [--ip IP] [--vlan TAG|NAME] [--site S]
                          # offline: the VMID for a new guest (vmid_scheme or the next free ID in
@@ -12,9 +12,10 @@ Uses only GET requests with the read-only API token from the keychain
 (homelab.yaml: proxmox.tokens.read_only → secrets.<name>). Writes a JSON snapshot
 and prints a compact summary. All strings coming from Proxmox (names, tags, notes)
 are untrusted data and are sanitised.
-Several sites (sites: in homelab.yaml): --site NAME reads that site's Proxmox with its own token and writes
-discovery/proxmox-<name>.json (the default site: discovery/proxmox.json); --all-sites reads each in turn and
-carries on past one that can't be reached (exit 1 then).
+The snapshot goes into discovery/proxmox.json under its site (GitHub issue #75), next to the other sites'
+(--out FILE: the snapshot alone, to that file). Several sites (sites: in homelab.yaml): --site NAME reads that
+site's Proxmox with its own token; --all-sites reads each in turn and carries on past one that can't be reached
+(exit 1 then).
 """
 from __future__ import annotations
 
@@ -293,11 +294,11 @@ def used_vmids(cfg: dict, site_name: str | None = None) -> dict[int, str]:
     s = hmlib.site(cfg, site_name)
     used = {}
     try:
-        snap = hmlib.proxmox_snapshot_file(root, s["name"], s["default"])
-        for g in json.loads(snap.read_text()).get("guests") or []:
+        snap = hmlib.site_part(hmlib.proxmox_snapshot_file(root), s) or {}
+        for g in snap.get("guests") or []:
             if isinstance(g.get("vmid"), int):
                 used[g["vmid"]] = f"{g.get('type')} {g.get('name')} (Proxmox)"
-    except (OSError, ValueError):
+    except (OSError, hmlib.ConfigError):
         pass
     envs = root / "tofu" / "environments"
     other = {x["name"] for x in hmlib.sites(cfg) if not x["default"]}
@@ -342,7 +343,7 @@ def summary(inv: dict, cfg: dict | None = None) -> str:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--secret", help="secret name (default: proxmox.tokens.read_only)")
-    ap.add_argument("--out", help="output JSON (default: discovery/proxmox.json in the repo)")
+    ap.add_argument("--out", help="write the snapshot alone to this file (default: its site in discovery/proxmox.json)")
     ap.add_argument("--details", action="store_true", help="also fetch each guest's config")
     ap.add_argument("--summary", action="store_true", help="print the human summary only, write nothing")
     ap.add_argument("--next-vmid", choices=["vms", "lxc", "templates", "base_images"],
@@ -391,10 +392,14 @@ def inventory_site(cfg: dict, px: dict, a) -> None:
     if s["name"]:
         inv = {"site": s["name"], **inv}
     if not a.summary:
-        out = Path(a.out) if a.out else hmlib.proxmox_snapshot_file(cfg["_root"], s["name"], s["default"])
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(inv, indent=2) + "\n")
-        print(f"Wrote {out}\n")
+        if a.out:
+            out = Path(a.out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(inv, indent=2) + "\n")
+        else:
+            out = hmlib.proxmox_snapshot_file(cfg["_root"])
+            hmlib.write_site_part(out, s, inv)
+        print(f"Wrote {out}" + ("" if a.out else f" (site {hmlib.site_key(s)})") + "\n")
     if s["name"]:
         print(f"Site {hmlib.site_title(s)}")
     print(summary(inv, cfg))

@@ -2,11 +2,11 @@
 #
 #   python3 $HM/scripts/proxmox_inventory.py --details && python3 $HM/scripts/pve_node_plan.py <node>
 #   ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=<inventory host> [-e allow_reboot=true]
-# A node of another site (inventory group site_<name>): --site <name> on both scripts; the plan is then
-# discovery/pve-patch-<site>-<node>.json. A standalone node (no cluster) has nowhere to move guests: every running
-# one is shut down for the reboot.
+# A node of another site (inventory group site_<name>): --site <name> on both scripts. A standalone node (no
+# cluster) has nowhere to move guests: every running one is shut down for the reboot.
 #
-# Executes discovery/pve-patch-<node>.json (pve_node_plan.py; show it to the user first) after checking it
+# Executes the node's plan in discovery/pve-patch.json (pve_node_plan.py; under its site, then node; show it to
+# the user first) after checking it
 # against the live cluster. Without allow_reboot=true it only upgrades packages (guests keep running) and
 # reports whether a reboot is pending. With it, and only when a reboot is needed:
 #   migrate  → live (VM) / restart (LXC) migration to the planned node, back after the reboot
@@ -26,11 +26,17 @@
     migrate_back: true
     pve_node: "{{ proxmox_node_name | default(inventory_hostname_short) }}"
     hm_site: "{{ group_names | select('match', '^site_') | map('regex_replace', '^site_', '') | first | default('') }}"
-    # pve_node_plan.py --site <site> writes pve-patch-<site>-<node>.json; the default site pve-patch-<node>.json
-    plan_file: >-
-      {{ lookup('ansible.builtin.first_found', ([playbook_dir ~ '/../../discovery/pve-patch-' ~ hm_site ~ '-' ~ pve_node ~ '.json']
-         if hm_site else []) + [playbook_dir ~ '/../../discovery/pve-patch-' ~ pve_node ~ '.json']) }}
-    state_file: "{{ plan_file | regex_replace('\\.json$', '-state.json') }}"
+    plan_file: "{{ playbook_dir }}/../../discovery/pve-patch.json"
+    # the site whose plan applies: this node's site_<name> group, or the default site for a node in none
+    plan_site: >-
+      {%- set ns = namespace(key='') -%}
+      {%- for key, nodes in ((lookup('ansible.builtin.file', plan_file, errors='ignore') or '{}') | from_json).sites | default({}) | dictsort
+            if nodes[pve_node] is defined
+            and ((hm_site and nodes[pve_node].site | default('') == hm_site)
+                 or (not hm_site and nodes[pve_node].default_site | default(false))) -%}
+        {%- set ns.key = key -%}
+      {%- endfor -%}
+      {{ ns.key }}
     plan_ids: "{{ plan.guests | map(attribute='vmid') | list }}"
     plan_running: "{{ plan.guests | selectattr('status', 'equalto', 'running') | map(attribute='vmid') | list }}"
     by_action: "{{ plan.guests | groupby('action') | items2dict(key_name=0, value_name=1) }}"
@@ -44,15 +50,22 @@
           - inventory_hostname in groups['proxmox_nodes'] | default([])
         fail_msg: "Pass -e proxmox_patch_node=<one host of the proxmox_nodes group>."
 
+    - name: A plan exists for this node
+      ansible.builtin.assert:
+        that: plan_site | length > 0
+        fail_msg: >-
+          discovery/pve-patch.json has no plan for {{ pve_node }}{{ (' at site ' ~ hm_site) if hm_site else '' }}:
+          run pve_node_plan.py {{ pve_node }}{{ (' --site ' ~ hm_site) if hm_site else '' }} (set proxmox_node_name?)
+
     - name: Load the plan (pve_node_plan.py)
       ansible.builtin.set_fact:
-        plan: "{{ lookup('ansible.builtin.file', plan_file) | from_json }}"
+        plan: "{{ (lookup('ansible.builtin.file', plan_file) | from_json).sites[plan_site][pve_node] }}"
 
     - name: Plan is for this node
       ansible.builtin.assert:
         that: plan.node == pve_node and (not hm_site or plan.site | default('') == hm_site)
         fail_msg: >-
-          {{ plan_file }} is for {{ plan.node }}{{ (' at site ' ~ plan.site) if plan.site | default('') else '' }},
+          The plan is for {{ plan.node }}{{ (' at site ' ~ plan.site) if plan.site | default('') else '' }},
           not {{ pve_node }}{{ (' at site ' ~ hm_site) if hm_site else '' }} (set proxmox_node_name?)
 
     - name: Part of a cluster?
@@ -91,10 +104,14 @@
           plan {{ plan_ids | sort }} (running {{ plan_running | sort }}). Refresh proxmox_inventory.py --details
           and pve_node_plan.py, show the new plan.
 
-    - name: Record the state before patching
+    - name: Record the state before patching (state_before in the node's plan)
       ansible.builtin.copy:
-        dest: "{{ state_file }}"
-        content: "{{ {'node': pve_node, 'recorded_at': now(utc=true).isoformat(), 'guests': live_guests} | to_nice_json }}\n"
+        dest: "{{ plan_file }}"
+        content: >-
+          {{ (lookup('ansible.builtin.file', plan_file) | from_json)
+             | combine({'sites': {plan_site: {pve_node: {'state_before': {'recorded_at': now(utc=true).isoformat(),
+                                                                          'guests': live_guests}}}}}, recursive=true)
+             | to_nice_json }}
         mode: "0644"
       delegate_to: localhost
       become: false

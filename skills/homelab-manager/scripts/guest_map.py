@@ -3,8 +3,8 @@
 
     guest_map.py [--site NAME] [--out FILE|-] [--no-ansible]
 
-Reads what discovery already collected, contacts nothing: discovery/proxmox*.json (proxmox_inventory.py
---details, every site unless --site), network.vlans in homelab.yaml, discovery/network[-<site>].json (nmap_scan.py),
+Reads what discovery already collected, contacts nothing: discovery/proxmox.json (proxmox_inventory.py
+--details, every site unless --site), network.vlans in homelab.yaml, discovery/network.json (nmap_scan.py),
 discovery/routeros.json (routeros_audit.py: addresses of RouterOS guests such as a CHR, matched by MAC) and the
 managed Ansible inventory (`ansible-inventory --list`). Writes discovery/guest-map.md (--out - prints it).
 
@@ -223,7 +223,7 @@ def main() -> int:
               file=sys.stderr)
         return 4
     net_hosts = {}
-    try:   # every site's scan (network.json, network-<site>.json — GitHub #72), the default site's first
+    try:   # every site's scan in network.json (GitHub #72, #75), the default site's first
         for _, db in hmlib.network_snapshots(cfg):
             for ip, h in (db.get("hosts") or {}).items():
                 net_hosts.setdefault(ip, h)

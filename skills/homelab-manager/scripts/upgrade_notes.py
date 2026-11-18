@@ -105,15 +105,16 @@ def _check(note: dict, cfg: dict, root: Path) -> tuple[bool, dict]:
             return False, ph
     if w.get("agent_ips_unread"):
         try:
-            agent = (json.loads((root / "discovery" / "proxmox.json").read_text()).get("guest_ip_sources") or {}).get("agent")
-        except (OSError, ValueError):
+            snap = hmlib.site_part(hmlib.proxmox_snapshot_file(root), hmlib.site(cfg)) or {}
+            agent = (snap.get("guest_ip_sources") or {}).get("agent")
+        except (OSError, hmlib.ConfigError):
             return False, ph
         if not agent or agent == "ok" or agent == "not queried":
             return False, ph
     if w.get("vmids_outside_ranges"):
         try:
-            guests = json.loads((root / "discovery" / "proxmox.json").read_text()).get("guests") or []
-        except (OSError, ValueError):
+            guests = (hmlib.site_part(hmlib.proxmox_snapshot_file(root), hmlib.site(cfg)) or {}).get("guests") or []
+        except (OSError, hmlib.ConfigError):
             return False, ph
         fit = hmlib.vmid_fit(cfg, guests)
         if not fit:

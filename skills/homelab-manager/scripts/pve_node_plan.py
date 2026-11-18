@@ -11,12 +11,13 @@ Reads discovery/proxmox.json (refresh it first: `proxmox_inventory.py --details`
   stop         running but pinned to the node (local disks, passthrough, no room elsewhere, --no-migrate):
                shut down cleanly before the reboot, started again after it
   stays-stopped  stopped now, stays stopped (not moved)
-Writes discovery/pve-patch-<node>.json, which patch-proxmox-node.yml executes after checking it against
+Writes the plan into discovery/pve-patch.json (under its site, then node: GitHub issue #75), which
+patch-proxmox-node.yml executes after checking it against
 the live cluster, and prints the plan with each guest's autostart and storage. Exit 4 if the node can't be
 patched safely now (cluster not quorate, another node offline, unknown node, snapshot without --details).
-Another site (sites: in homelab.yaml): --site NAME reads discovery/proxmox-NAME.json and writes
-discovery/pve-patch-NAME-<node>.json (node names repeat across sites). A standalone node (no cluster) has no
-other node: every running guest is stopped for the reboot.
+Another site (sites: in homelab.yaml): --site NAME reads and writes that site's part of both files (node names
+repeat across sites). A standalone node (no cluster) has no other node: every running guest is stopped for the
+reboot.
 """
 from __future__ import annotations
 
@@ -183,23 +184,30 @@ def main():
         print(f"pve_node_plan: {e}", file=sys.stderr)
         return 3
     root = Path(cfg["_root"])
-    snap = hmlib.proxmox_snapshot_file(root, st["name"], st["default"])
-    if not snap.exists():
-        print(f"pve_node_plan: no {snap.relative_to(root)} — run proxmox_inventory.py --details"
-              + (f" --site {st['name']}" if not st["default"] else "") + " first.", file=sys.stderr)
+    try:
+        inv = hmlib.site_part(hmlib.proxmox_snapshot_file(root), st, "proxmox_inventory.py --details")
+    except hmlib.ConfigError as e:
+        print(f"pve_node_plan: {e}", file=sys.stderr)
+        return 3
+    if not inv:
+        print(f"pve_node_plan: no snapshot of site {hmlib.site_key(st)} in discovery/proxmox.json — run "
+              "proxmox_inventory.py --details" + (f" --site {st['name']}" if not st["default"] else "") + " first.",
+              file=sys.stderr)
         return 4
-    inv = json.loads(snap.read_text())
-    inv["site"] = st["name"]
+    inv = {**inv, "site": st["name"]}
     plan, blockers = make_plan(inv, a.node, a.max_mem_pct, not a.no_migrate)
     if not plan:
         print("pve_node_plan: " + "; ".join(blockers), file=sys.stderr)
         return 4
-    out = root / "discovery" / (f"pve-patch-{a.node}.json" if st["default"] else f"pve-patch-{st['name']}-{a.node}.json")
+    out = hmlib.discovery_file(root, "pve-patch")
     if not blockers:
-        out.write_text(json.dumps(plan, indent=2) + "\n")
+        plan["default_site"] = st["default"]   # patch-proxmox-node.yml: a node in no site_<name> group
+        plans = hmlib.site_part(out, st) or {}
+        plans[a.node] = plan
+        hmlib.write_site_part(out, st, plans)
     print(json.dumps({"plan": plan, "blockers": blockers}, indent=2) if a.json else render(plan, blockers))
     if not blockers and not a.json:
-        print(f"\nWrote {out.relative_to(root)}. Show it to the user; patch-proxmox-node.yml checks it against "
+        print(f"\nWrote {out.relative_to(root)} (site {hmlib.site_key(st)}, node {a.node}). Show it to the user; patch-proxmox-node.yml checks it against "
               "the live cluster before acting.")
     return 4 if blockers else 0
 

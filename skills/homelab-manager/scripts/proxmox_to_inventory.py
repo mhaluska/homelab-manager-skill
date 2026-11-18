@@ -129,13 +129,17 @@ def main():
         print(f"proxmox_to_inventory: {e}", file=sys.stderr)
         return 3
     root = Path(cfg["_root"])
-    snap = hmlib.proxmox_snapshot_file(root, site["name"], site["default"])
-    rel = snap.relative_to(root)
-    if not snap.exists():
+    snap = hmlib.proxmox_snapshot_file(root)
+    rel = f"{snap.relative_to(root)} (site {hmlib.site_key(site)})"
+    try:
+        inv = hmlib.site_part(snap, site, "proxmox_inventory.py --details")
+    except hmlib.ConfigError as e:
+        print(f"proxmox_to_inventory: {e}", file=sys.stderr)
+        return 3
+    if not inv:
         print(f"proxmox_to_inventory: no {rel} — run proxmox_inventory.py --details"
               + (f" --site {site['name']}" if site["name"] else "") + " first.", file=sys.stderr)
         return 4
-    inv = json.loads(snap.read_text())
     guests = inv.get("guests") or []
     if guests and not any("config" in g for g in guests):
         print(f"proxmox_to_inventory: {rel} has no guest config — refresh it with "

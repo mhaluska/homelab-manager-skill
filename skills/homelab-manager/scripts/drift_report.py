@@ -6,8 +6,8 @@
 
 Sources (all read-only):
   live      discovery/proxmox.json   (proxmox_inventory.py)  and discovery/network.json (nmap_scan.py;
-            another site's scan: network-<site>.json, its devices listed per site);
-            other sites (sites: in homelab.yaml): discovery/proxmox-<site>.json, reported per site
+            every site inside, another site's devices listed per site);
+            other sites (sites: in homelab.yaml): their part of discovery/proxmox.json, reported per site
   state     `tofu show -json` in tofu/environments/<env>  (run under with_secrets.py for the state backend)
             or a file passed with --tofu-json; another site: its own environment tofu/environments/<site>
   declared  ansible/inventory/managed via `ansible-inventory --list`
@@ -168,8 +168,8 @@ def compare_state(px: dict, state: dict, prefix: str = "") -> tuple[list[str], i
     return L, issues
 
 
-STALE_INPUTS = ["homelab.yaml", "ansible/inventory", "discovery/proxmox.json", "discovery/proxmox-*.json",
-                "discovery/network.json", "discovery/network-*.json", "discovery/containers.json"]
+STALE_INPUTS = ["homelab.yaml", "ansible/inventory", "discovery/proxmox.json", "discovery/network.json",
+                "discovery/containers.json"]
 
 
 def container_ips(root: Path) -> dict[str, str]:
@@ -308,7 +308,7 @@ def main():
     try:
         all_sites = hmlib.sites(cfg)
         snaps = hmlib.proxmox_snapshots(cfg)
-        nets = hmlib.network_snapshots(cfg)   # per site: network.json, network-<site>.json (GitHub #72)
+        nets = hmlib.network_snapshots(cfg)   # per site, from network.json (GitHub #72, #75)
         ignores = {st["name"]: hmlib.site_entries(cfg, "discovery.ignore_unmanaged", st["name"]) for st in all_sites}
     except hmlib.ConfigError as e:
         print(f"drift_report: {e}", file=sys.stderr)

@@ -124,6 +124,9 @@ def sites(cfg: dict) -> list[dict]:
                               f"(it becomes the Ansible group {SITE_GROUP_PREFIX}{name}).")
         if name in seen:
             raise ConfigError(f"site {name!r} is listed twice.")
+        if i > 0 and name == DEFAULT_SITE_KEY:
+            raise ConfigError(f"site name {name!r} is reserved for the default site (discovery files keep a repo's "
+                              "data under it before its default site has a name).")
         if name == EVERY_SITE:
             raise ConfigError(f"site name {name!r} is reserved (network.vlans site: {EVERY_SITE} = every site).")
         seen.add(name)
@@ -285,23 +288,76 @@ def site_of_secret(cfg: dict, secret: str) -> dict | None:
     return None
 
 
-def proxmox_snapshot_file(root: str | os.PathLike, site_name: str | None = None, default: bool = True) -> Path:
-    """discovery/proxmox.json for the default site, discovery/proxmox-<name>.json for the others."""
-    d = Path(root) / "discovery"
-    return d / "proxmox.json" if default or not site_name else d / f"proxmox-{site_name}.json"
+# discovery/ (GitHub issue #75): one file per kind, never a site in its name. A file whose source is one site
+# (proxmox, network, pve-patch, unifi) holds {"sites": {<site>: <that site's data>}}; files keyed by inventory host
+# tag each host with its site. A repo without sites: keeps its data under "default".
+DEFAULT_SITE_KEY = "default"
+SITE_FILES = ("proxmox", "network", "pve-patch", "unifi")
+
+
+def discovery_file(root: str | os.PathLike, kind: str) -> Path:
+    """The discovery file of one kind (proxmox → discovery/proxmox.json)."""
+    return Path(root, "discovery", kind + ".json")
+
+
+def site_key(st: dict) -> str:
+    """The key of site st in a per-site discovery file."""
+    return st["name"] or DEFAULT_SITE_KEY
+
+
+def site_parts(f: Path, rerun: str = "") -> dict:
+    """{site key: data} of a per-site discovery file ({} when missing). A file from before 0.29.0 (no "sites"
+    key) is the default site's data."""
+    if not f.is_file():
+        return {}
+    try:
+        doc = json.loads(f.read_text())
+    except ValueError:
+        raise ConfigError(f"{f.name} is not valid JSON" + (f": run {rerun} again." if rerun else "."))
+    if not isinstance(doc, dict):
+        raise ConfigError(f"{f.name} is not a JSON object.")
+    if not isinstance(doc.get("sites"), dict):   # (unifi.json before 0.29.0 had a list of UniFi sites there)
+        return {DEFAULT_SITE_KEY: doc} if doc else {}
+    return doc["sites"]
+
+
+def site_part(f: Path, st: dict, rerun: str = "") -> dict | None:
+    """Site st's data in a per-site discovery file, or None. The default site also finds data kept under
+    "default" from before it had a name."""
+    parts = site_parts(f, rerun)
+    if site_key(st) in parts:
+        return parts[site_key(st)]
+    return parts.get(DEFAULT_SITE_KEY) if st["default"] else None
+
+
+def write_site_part(f: Path, st: dict, data: dict, sort_keys: bool = False) -> None:
+    """Store site st's data in a per-site discovery file; the other sites' data stays."""
+    parts = site_parts(f)
+    if st["default"]:
+        parts.pop(DEFAULT_SITE_KEY, None)
+    parts[site_key(st)] = data
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"sites": parts}, indent=2, sort_keys=sort_keys) + "\n")
+
+
+def _snapshots(cfg: dict, kind: str, rerun: str) -> list[tuple[dict, dict]]:
+    f = discovery_file(cfg["_root"], kind)
+    out = []
+    for s in sites(cfg):
+        part = site_part(f, s, rerun)
+        if part:
+            out.append((s, part))
+    return out
+
+
+def proxmox_snapshot_file(root: str | os.PathLike) -> Path:
+    """discovery/proxmox.json: every site's Proxmox snapshot."""
+    return discovery_file(root, "proxmox")
 
 
 def proxmox_snapshots(cfg: dict) -> list[tuple[dict, dict]]:
-    """[(site, snapshot)] for every site whose snapshot file exists, the default site first."""
-    out = []
-    for s in sites(cfg):
-        f = proxmox_snapshot_file(cfg["_root"], s["name"], s["default"])
-        if f.is_file():
-            try:
-                out.append((s, json.loads(f.read_text())))
-            except ValueError:
-                raise ConfigError(f"{f.name} is not valid JSON: run proxmox_inventory.py again.")
-    return out
+    """[(site, snapshot)] for every site with a snapshot in discovery/proxmox.json, the default site first."""
+    return _snapshots(cfg, "proxmox", "proxmox_inventory.py")
 
 
 def host_sites(groups) -> list[str]:
@@ -497,10 +553,9 @@ def scan_scope(cfg: dict, site_name: str | None = None) -> tuple[list, list]:
     return allowed, excluded
 
 
-def network_file(root: str | os.PathLike, site_name: str | None = None, default: bool = True) -> Path:
-    """discovery/network.json for the default site, discovery/network-<name>.json for the others (GitHub #72)."""
-    d = Path(root) / "discovery"
-    return d / "network.json" if default or not site_name else d / f"network-{site_name}.json"
+def network_file(root: str | os.PathLike) -> Path:
+    """discovery/network.json: every site's scan results (GitHub #72, #75)."""
+    return discovery_file(root, "network")
 
 
 def scan_site(cfg: dict, name: str | None) -> dict | None:
@@ -509,16 +564,8 @@ def scan_site(cfg: dict, name: str | None) -> dict | None:
 
 
 def network_snapshots(cfg: dict) -> list[tuple[dict, dict]]:
-    """[(site, network db)] for every site whose network file exists, the default site first."""
-    out = []
-    for s in sites(cfg):
-        f = network_file(cfg["_root"], s["name"], s["default"])
-        if f.is_file():
-            try:
-                out.append((s, json.loads(f.read_text())))
-            except ValueError:
-                raise ConfigError(f"{f.name} is not valid JSON: run nmap_scan.py again.")
-    return out
+    """[(site, network db)] for every site with scan results in discovery/network.json, the default site first."""
+    return _snapshots(cfg, "network", "nmap_scan.py")
 
 
 def outside_site(cfg: dict, st: dict, targets: list[str]) -> list[str]:
