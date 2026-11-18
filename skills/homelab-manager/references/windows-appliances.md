@@ -36,6 +36,12 @@ Never configure QTS from Ansible or over SSH: its UI owns the configuration.
   `/share/*/.qpkg/container-station` (`qnap_container_station` when it is elsewhere) and lists its LXD
   instances and Docker containers into `discovery/qnap-containers.json`, the layout of `containers.json`
   (references/discovery.md, Containers). The drift report lists those addresses as containers.
+- Updates: `check-updates.yml` (read-only) also covers the `qnap` group (`-e qnap_target=<host>`): the installed
+  firmware (`firmware`: version, build, model, `last_check` — when QTS last looked for a new one) and every
+  installed app (`apps`) with `available` when App Center's catalogue, as QTS last cached it (`app_catalogue`,
+  gone after a reboot until App Center refreshes it), has a newer version for this platform; `pending` counts
+  those. The available firmware version is only in the QTS UI (QNAP's public feed is outdated): report the
+  installed one with `last_check`. Updating stays in the QTS UI, or needs the user's yes.
 - An LXD container running an ordinary Linux is still managed as a host of its own (its OS group, for patching)
   with `lxd_host: <the NAS>`; snapshots: references/patching.md "LXD/Incus instances".
 

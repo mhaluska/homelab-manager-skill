@@ -3,7 +3,7 @@
 ## "Find systems missing security updates" (read-only)
 
 ```bash
-cd ansible && ansible-playbook playbooks/check-updates.yml          # Linux + Windows
+cd ansible && ansible-playbook playbooks/check-updates.yml          # Linux, Windows, QNAP
 ansible-playbook playbooks/check-updates.yml -e target=rocky       # subset (prefer this to -l; both write)
 ```
 Merges into `discovery/updates.json`: a subset run updates only its hosts, the others keep their last
@@ -14,6 +14,7 @@ A reboot is due when a newer kernel than the running one is installed (plain Deb
 services whose processes still map deleted binaries or libraries: they run the old (maybe vulnerable) code.
 A host that failed or was unreachable gets `error` (the failing step and reason) and `last_ok_at` instead of
 counts; the play's last task lists them. They are findings too: report them in the table. Commit the JSON.
+QNAP NAS entries carry `firmware` and `apps` instead of package counts (references/windows-appliances.md, QNAP NAS).
 
 ## "Patch all Linux servers"
 

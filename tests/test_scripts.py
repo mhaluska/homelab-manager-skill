@@ -2434,6 +2434,17 @@ class DiscoveryLayoutTests(unittest.TestCase):  # GitHub issue #73
         self.assertIn("default", hmlib.site_parts(f))
         self.assertEqual(hmlib.site_part(f, home), {"hosts": {"10.0.0.2": {}}})     # its own key wins
 
+    def test_check_updates_covers_qnap_read_only(self):  # GitHub issue #81
+        pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/check-updates.yml").read_text()
+        play = pb.split("- name: Firmware and app versions on QNAP NAS")[1].split("\n- name:")[0]
+        self.assertIn("qnap_target | default('qnap')", play)
+        self.assertIn("{{ qnap_target | default('qnap') }}\"", pb.split("- name: Write discovery/updates.json")[1])
+        self.assertNotIn("become", play)                                         # raw only, as the NAS user
+        modules = set(re.findall(r"^\s+(ansible\.builtin\.\w+):", play, re.M))
+        self.assertEqual(modules, {"ansible.builtin.raw", "ansible.builtin.set_fact"})
+        self.assertNotRegex(play, r"curl|wget|qpkg_cli|live_update|update\.qnap")  # asks no server, changes nothing
+        self.assertIn("version_type='loose'", play)                              # newer only, not just different
+
     def test_bmc_playbook_reads_one_category_per_call(self):  # GitHub issue #74
         pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/bmc-info.yml").read_text()
         self.assertIn('category: "{{ item.category }}"', pb)

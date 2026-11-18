@@ -6,6 +6,7 @@
 # Safe to run any time. A subset: -e target=<group|host> (or -l <host>: the result is still written).
 # autoremove_packages lists what patch-linux.yml's autoremove would remove; autoremove_protected the ones
 # matching autoremove_protect (patch-linux.yml skips autoremove on such a host: review them first).
+# Windows hosts (-e windows_target=…): a search only. QNAP NAS (-e qnap_target=…): firmware and app versions.
 - name: Pending updates on Linux
   hosts: "{{ target | default('linux') }}"
   gather_facts: false
@@ -185,10 +186,102 @@
           reboot_required: "{{ win_upd.reboot_required | default(false) }}"
       when: update_error is not defined
 
+# QNAP NAS (group qnap, raw only, GitHub issue #81): the firmware installed and when QTS last checked for a new
+# one (QTS fetches the available firmware version itself; nothing here asks QNAP's servers), and installed apps
+# (QPKG) with a newer version in App Center's catalogue as QTS last cached it (/tmp/rssdoc, refreshed by QTS;
+# gone after a reboot until App Center refreshes it). Installs nothing: updates stay in the QTS UI.
+- name: Firmware and app versions on QNAP NAS (reads files only)
+  hosts: "{{ qnap_target | default('qnap') }}"
+  gather_facts: false
+  tasks:
+    - name: Mark as checked
+      ansible.builtin.set_fact:
+        hm_checked: true
+
+    - name: Versions
+      ansible.builtin.raw: |
+        PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/local/bin:$PATH; export PATH
+        U=/etc/config/uLinux.conf; X=/tmp/rssdoc/qpkgcenter_eng.xml
+        echo HM-BEGIN
+        echo "fw|$(getcfg System Version -f $U)|$(getcfg System 'Build Number' -f $U)|$(getcfg System Model -f $U)|$(getcfg System 'Latest Check Live Update' -f $U)"
+        if command -v zpool >/dev/null 2>&1; then echo "product|QuTS hero"; else echo "product|QTS"; fi
+        P=$(head -n 1 /etc/config/BOOT.conf 2>/dev/null | tr -d ' \r'); echo "platform|$P"
+        if [ -r "$X" ]; then echo "catalogue|$(sed -n 's:.*<cachechk>\([^<]*\)</cachechk>.*:\1:p' "$X" | head -n 1)"; else echo "catalogue|"; fi
+        awk '/^\[/{s=substr($0, 2, length($0) - 2)} /^Version = /{v[s]=$3} /^Enable = /{e[s]=$3}
+             END{for (n in v) print "app|" n "|" v[n] "|" e[n]}' /etc/config/qpkg.conf
+        [ -r "$X" ] && awk -v p="$P" '/<item>/{n=""; v=""; ok=0} /<internalName>/{gsub(/.*<internalName>|<\/internalName>.*/, ""); n=$0}
+             /<version>/{gsub(/.*<version>|<\/version>.*/, ""); v=$0} /<platformID>/{if (index($0, ">" p "<")) ok=1}
+             /<\/item>/{if (ok && n != "" && v != "") print "avail|" n "|" v}' "$X"
+        echo HM-END
+      register: hm_qnap
+      changed_when: false
+      check_mode: false
+      ignore_unreachable: true
+      ignore_errors: true
+
+    - name: Record a failure
+      ansible.builtin.set_fact:
+        update_error: >-
+          {{ 'unreachable: ' if hm_qnap.unreachable | default(false) else 'Versions: ' }}{{
+             (hm_qnap.stderr | default('', true) or hm_qnap.msg | default('failed')).splitlines() | join(' ')
+             | trim | truncate(200) }}
+      when: hm_qnap.unreachable | default(false) or hm_qnap is failed
+
+    - name: Summarise
+      ansible.builtin.set_fact:
+        update_summary:
+          os: "{{ (hm_q.product | default(['QTS']))[0] }} {{ fw[0] | default('?') }}"
+          firmware:
+            version: "{{ fw[0] | default(none) }}"
+            build: "{{ fw[1] | default(none) }}"
+            model: "{{ fw[2] | default(none) }}"
+            last_check: "{{ fw[3] | default(none, true) }}"
+          # pending: apps with a newer version in the catalogue; firmware updates are only shown in the QTS UI
+          pending: "{{ hm_apps | selectattr('available') | list | length }}"
+          security: null
+          reboot_required: null
+          apps: "{{ hm_apps }}"
+          app_catalogue: "{{ (hm_q.catalogue | default(['']))[0] or none }}"
+      vars:
+        lines: >-
+          {%- set ns = namespace(on=false, out=[]) -%}
+          {%- for l in hm_qnap.stdout.splitlines() | map('trim') -%}
+            {%- if l == 'HM-END' -%}{%- set ns.on = false -%}
+            {%- elif ns.on and l -%}{%- set ns.out = ns.out + [l] -%}
+            {%- elif l == 'HM-BEGIN' -%}{%- set ns.on = true -%}{%- endif -%}
+          {%- endfor -%}
+          {{ ns.out }}
+        hm_q: >-
+          {%- set out = {} -%}
+          {%- for l in lines if l.split('|')[0] in ['fw', 'product', 'platform', 'catalogue'] -%}
+            {%- set _ = out.update({l.split('|')[0]: l.split('|')[1:]}) -%}
+          {%- endfor -%}
+          {{ out }}
+        fw: "{{ hm_q.fw | default([]) }}"
+        hm_apps: >-
+          {%- set avail = {} -%}
+          {%- for l in lines if l.startswith('avail|') -%}
+            {%- set f = l.split('|') -%}
+            {%- set _ = avail.update({f[1]: avail.get(f[1], []) + [f[2]]}) -%}
+          {%- endfor -%}
+          {%- set out = [] -%}
+          {%- for l in lines if l.startswith('app|') -%}
+            {%- set f = l.split('|') -%}
+            {%- set newer = avail.get(f[1], []) | select('version', f[2], '>', version_type='loose') | list -%}
+            {%- set ns = namespace(top=none) -%}
+            {%- for v in newer if ns.top is none or v is version(ns.top, '>', version_type='loose') -%}
+              {%- set ns.top = v -%}
+            {%- endfor -%}
+            {%- set _ = out.append({'name': f[1], 'installed': f[2], 'enabled': f[3] | default('') == 'TRUE',
+                                    'in_catalogue': f[1] in avail, 'available': ns.top}) -%}
+          {%- endfor -%}
+          {{ out | sort(attribute='name') }}
+      when: update_error is not defined
+
 # Runs on the checked hosts, writing once on this Mac: a `hosts: localhost` play would be skipped by
 # --limit (-l <host>), losing the result (GitHub issue #48).
 - name: Write discovery/updates.json
-  hosts: "{{ target | default('linux') }}:{{ windows_target | default('windows') }}"
+  hosts: "{{ target | default('linux') }}:{{ windows_target | default('windows') }}:{{ qnap_target | default('qnap') }}"
   gather_facts: false
   become: false
   vars:
