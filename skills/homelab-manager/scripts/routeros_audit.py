@@ -14,7 +14,9 @@ carries console options (`<user>+ct512w`: no colours, no terminal detection, 512
 skipped on CHR, and a command that fails doesn't stop the others.
 
 Collects identity, resource, routerboard, package update status, licence, interfaces, addresses, bridges
-and VLANs, IP services and users. Flags: plain-text services enabled (telnet, ftp, www, api), RouterBOOT
+and VLANs, IP services, users, the MAC server and neighbour discovery. Flags: plain-text services enabled
+(telnet, ftp, www, api), ssh/winbox/www-ssl/api-ssl open to any address, the MAC server, MAC Winbox or
+neighbour discovery on all interfaces, RouterBOOT
 firmware behind the installed RouterOS, an update RouterOS already knows about (no check is triggered), low
 free flash, the default `admin` user, CHR licence level and renewal date, and RouterOS version drift across
 the devices. Merges per-device data into discovery/routeros.json (unless --no-write) and prints a Markdown
@@ -50,10 +52,17 @@ COMMANDS = {
     "vlans": ("/interface vlan print terse without-paging", True),
     "services": ("/ip service print terse without-paging", True),
     "users": ("/user print terse without-paging", True),
+    "mac_server": ("/tool mac-server print without-paging", False),
+    "mac_winbox": ("/tool mac-server mac-winbox print without-paging", False),
+    "discovery": ("/ip neighbor discovery-settings print without-paging", False),
 }
 PLAINTEXT = {"telnet": ("high", "ssh"), "ftp": ("high", "sftp over ssh"), "www": ("medium", "www-ssl"),
              "api": ("medium", "api-ssl")}  # service → (severity open to any address, encrypted alternative)
 LOWER = {"high": "medium", "medium": "low", "low": "low"}
+MANAGEMENT = ("ssh", "winbox", "www-ssl", "api-ssl")   # encrypted, but best reachable from the management network only
+INTERFACE_LISTS = (("mac_server", "allowed-interface-list", "medium", "MAC server (MAC Telnet)"),
+                   ("mac_winbox", "allowed-interface-list", "medium", "MAC Winbox"),
+                   ("discovery", "discover-interface-list", "low", "neighbour discovery (MNDP/CDP/LLDP)"))
 ROS_ERROR = re.compile(r"bad command name|syntax error|expected end of command|no such item|input does not match",
                        re.I)
 _KV = re.compile(r'([\w.-]+)=("(?:[^"\\]|\\.)*"|\S*)')
@@ -214,6 +223,12 @@ def findings(dev: dict, today: dt.date | None = None) -> list[tuple[str, str]]:
                         + (f"limited to {where}" if where else "from any address")
                         + f"): disable it and use {alt}" + ("" if where else ", or at least limit it to the "
                                                             "management network")))
+    for name in open_management(dev):
+        port = next((r.get("port", "?") for r in dev.get("services") or [] if r.get("name") == name), "?")
+        out.append(("low", f"`{name}` reachable from any address (port {port}): limit it to the management network"))
+    for section, key, sev, what in INTERFACE_LISTS:
+        if (dev.get(section) or {}).get(key) == "all":
+            out.append((sev, f"{what} on all interfaces: limit it to the management interface list"))
     rb = dev.get("routerboard") or {}
     cur, upg = rb.get("current-firmware"), rb.get("upgrade-firmware")
     if cur and upg and cur != upg:
@@ -278,18 +293,39 @@ def plaintext_enabled(dev: dict) -> list[str]:
     return [r.get("name") for r in dev.get("services") or [] if r.get("name") in PLAINTEXT and enabled(r)]
 
 
+def open_management(dev: dict) -> list[str]:
+    """Management services enabled without an address limit (GitHub issue #80); live connections (D) don't count."""
+    return [r.get("name") for r in dev.get("services") or [] if r.get("name") in MANAGEMENT and enabled(r)
+            and "D" not in r.get("_flags", "") and not r.get("address")]
+
+
+def wide_open(dev: dict) -> bool:
+    """Something routeros-restrict-management.yml would limit."""
+    return bool(open_management(dev)) or any((dev.get(s) or {}).get(k) == "all" for s, k, _, _ in INTERFACE_LISTS)
+
+
 def fix_hint(dev: dict, name: str | None) -> str | None:
-    """The playbook command that disables a device's plain-text services (GitHub issue #79)."""
-    svc = plaintext_enabled(dev)
-    if not svc:
+    """The playbook commands that fix a device's findings: plain-text services (GitHub issue #79), management
+    access from anywhere (GitHub issue #80)."""
+    svc, wide = plaintext_enabled(dev), wide_open(dev)
+    if not svc and not wide:
         return None
     if not name:
         return ("- Fix: add the device to the `routeros` group of the managed inventory, then run "
-                "`playbooks/routeros-disable-services.yml` for it.")
-    cmd = (f"ansible-playbook playbooks/routeros-disable-services.yml -l {name} "
-           f"-e '{{\"routeros_disable_services\": {json.dumps(svc)}}}'")
-    return (f"- Fix: `{cmd} --check` shows it; with the user's yes, the same with `-e homelab_read_only=false` "
-            "instead of `--check` (ask first who still uses those services).")
+                + " and ".join(f"`playbooks/{p}`" for p, on in (("routeros-disable-services.yml", svc),
+                                                                 ("routeros-restrict-management.yml", wide)) if on)
+                + " for it.")
+    out = []
+    if svc:
+        cmd = (f"ansible-playbook playbooks/routeros-disable-services.yml -l {name} "
+               f"-e '{{\"routeros_disable_services\": {json.dumps(svc)}}}'")
+        out.append(f"- Fix: `{cmd} --check` shows it; with the user's yes, the same with `-e homelab_read_only=false` "
+                   "instead of `--check` (ask first who still uses those services).")
+    if wide:
+        out.append(f"- Limit: `ansible-playbook playbooks/routeros-restrict-management.yml -l {name} --check` "
+                   "(network.management_ranges, routeros_management_interface_list); with the user's yes, "
+                   "`-e homelab_read_only=false` instead of `--check`.")
+    return "\n".join(out)
 
 
 def report(devs: list[dict], today: dt.date | None = None, names: dict[str, str] | None = None) -> str:

@@ -548,6 +548,14 @@
       "when": {"component": "ansible", "file_missing": "ansible/playbooks/dist-upgrade-debian.yml"},
       "text": "New playbooks/dist-upgrade-debian.yml upgrades a Debian host one release at a time (pre-flight with --check, snapshot, backup, sources rewritten, protected packages checked, sshd -t before the reboot, health afterwards) (#84).",
       "action": "Copy {template} and {HM}/assets/repo-template/ansible/playbooks/tasks/debian-sources.sh into ansible/playbooks/ (the script into tasks/); see references/patching.md \"Debian release upgrade\"."
+    },
+    {
+      "version": "0.31.0",
+      "id": "routeros-restrict-management",
+      "kind": "template",
+      "when": {"component": "appliances", "file_missing": "ansible/playbooks/routeros-restrict-management.yml"},
+      "text": "routeros_audit.py flags ssh/winbox/www-ssl/api-ssl open to any address and the MAC server, MAC Winbox or neighbour discovery on all interfaces; new playbooks/routeros-restrict-management.yml limits them to network.management_ranges and an interface list, check mode first, refusing a change that would lock Ansible out (#80).",
+      "action": "Only with RouterOS devices in the routeros group: copy {template} into ansible/playbooks/, add network.management_ranges to homelab.yaml with the user (`config_set.py \"network.management_ranges+=<cidr>\"`, including the network this Mac connects from) and set routeros_management_interface_list per device in host or group vars; see references/windows-appliances.md \"MikroTik RouterOS\"."
     }
   ]
 }

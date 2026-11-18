@@ -198,6 +198,9 @@ class GuardInfraTests(unittest.TestCase):
         dist = "ansible-playbook playbooks/dist-upgrade-debian.yml -e target=jump -e target_release=bookworm"
         self.assertEqual(decision(dist, self.d), "ask")                                  # GitHub issue #84
         self.assertIsNone(decision(dist + " --check", self.d))                           # the pre-flight
+        ros = "ansible-playbook playbooks/routeros-restrict-management.yml -l sw1"      # GitHub issue #80
+        self.assertIsNone(decision(ros + " --check", self.d))
+        self.assertEqual(decision(ros + " -e homelab_read_only=false", self.d), "ask")
         self.assertIsNone(decision("ansible-playbook playbooks/patch-linux.yml -e target=linux --check --diff", self.d))
         self.assertEqual(decision("ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=pve1", self.d), "ask")
         self.assertEqual(decision("ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=pve1 "

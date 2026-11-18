@@ -1,0 +1,200 @@
+# Limit RouterOS management access to the management network (GitHub #80), what routeros_audit.py flags:
+#   ansible-playbook playbooks/routeros-restrict-management.yml -l <host> --check                  # the plan
+#   ansible-playbook playbooks/routeros-restrict-management.yml -l <host> -e homelab_read_only=false  # apply
+# RouterOS 7. Appliances are read-only (group_vars/appliances.yml): without -e homelab_read_only=false (the
+# user's yes) the play only shows what it would change. Each part has its own switch (group or host vars):
+# - routeros_restrict_services (default ssh, winbox, www-ssl, api-ssl; [] = none): those still enabled get
+#   address=<routeros_management_ranges> (default network.management_ranges in homelab.yaml, IPv4 CIDRs).
+#   Refused unless every SSH session of this user on the device (that is, this Mac as the device sees it) comes
+#   from inside them: the change must not lock Ansible out. Whoever manages it from elsewhere loses access.
+# - routeros_restrict_mac_server (default true): MAC Telnet and MAC Winbox only on the interface list
+#   routeros_management_interface_list (a host or group var: lists differ per device, e.g. MANAGEMENT; it must
+#   exist and have members). Without it these parts are skipped and said so.
+# - routeros_restrict_discovery (default true): neighbour discovery only on that interface list.
+# Reads the state, changes only what differs, then reads it again and checks it.
+- name: Limit RouterOS management access
+  hosts: "{{ target | default('routeros') }}"
+  gather_facts: false
+  vars:
+    ansible_connection: ansible.netcommon.network_cli
+    ansible_network_os: community.routeros.routeros
+    hm_config: >-
+      {{ (lookup('ansible.builtin.file', playbook_dir ~ '/../../homelab.yaml', errors='ignore') or '{}') | from_yaml or {} }}
+    ranges: "{{ routeros_management_ranges | default((hm_config.network | default({}, true)).management_ranges | default([], true), true) }}"
+    services: "{{ routeros_restrict_services | default(['ssh', 'winbox', 'www-ssl', 'api-ssl']) }}"
+    iface_list: "{{ routeros_management_interface_list | default('') }}"
+    restrict_mac: "{{ routeros_restrict_mac_server | default(true) | bool and iface_list | length > 0 }}"
+    restrict_discovery: "{{ routeros_restrict_discovery | default(true) | bool and iface_list | length > 0 }}"
+    # one line per fact: svc|name|disabled|address, mac|list, macwinbox|list, disc|list, list|name|members,
+    # me|user|address (active SSH sessions)
+    state_script: >-
+      :foreach s in=[/ip service find where !dynamic] do={:put ("svc|" . [/ip service get $s name] . "|"
+      . [/ip service get $s disabled] . "|" . [:tostr [/ip service get $s address]])};
+      :put ("mac|" . [/tool mac-server get allowed-interface-list]);
+      :put ("macwinbox|" . [/tool mac-server mac-winbox get allowed-interface-list]);
+      :put ("disc|" . [/ip neighbor discovery-settings get discover-interface-list]);
+      :foreach l in=[/interface list find] do={:local n [/interface list get $l name];
+      :put ("list|" . $n . "|" . [:len [/interface list member find where list=$n]])};
+      :foreach u in=[/user active find where via=ssh] do={:put ("me|" . [/user active get $u name] . "|"
+      . [/user active get $u address])}
+  tasks:
+    - name: Settings are valid
+      ansible.builtin.assert:
+        that:
+          - services is sequence and services is not string
+          - services | difference(['ssh', 'winbox', 'www-ssl', 'api-ssl', 'api', 'www', 'telnet', 'ftp']) | length == 0
+          - services | length == 0 or (ranges is sequence and ranges is not string and ranges | length > 0)
+          - ranges | reject('match', '^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$') | list | length == 0
+        fail_msg: >-
+          routeros_restrict_services must be a list of IP service names (got {{ services }}), and limiting them
+          needs IPv4 CIDRs in network.management_ranges (homelab.yaml) or routeros_management_ranges (got
+          {{ ranges }}); include the network this Mac connects from.
+      run_once: true
+
+    - name: Read the state
+      community.routeros.command:
+        commands: ["{{ state_script }}"]
+      register: before
+      changed_when: false
+      check_mode: false
+
+    - name: Work out the plan
+      ansible.builtin.set_fact:
+        hm_plan: "{{ plan }}"
+        hm_any: "{{ plan.services | length > 0 or plan.mac | length > 0 or plan.discovery | bool }}"
+        hm_me: "{{ me }}"
+        hm_outside: "{{ outside }}"
+      vars:
+        lines: "{{ before.stdout_lines[0] | map('trim') | select | list }}"
+        svc: >-
+          {%- set out = {} -%}
+          {%- for l in lines if l.startswith('svc|') -%}
+            {%- set f = (l ~ '|').split('|') -%}
+            {%- set _ = out.update({f[1]: {'enabled': f[2] == 'false',
+                                            'address': f[3] | replace(';', ',') | split(',') | select | sort | list}}) -%}
+          {%- endfor -%}
+          {{ out }}
+        facts: >-
+          {%- set out = {'list': {}} -%}
+          {%- for l in lines -%}
+            {%- set f = l.split('|') -%}
+            {%- if f[0] in ['mac', 'macwinbox', 'disc'] -%}{%- set _ = out.update({f[0]: f[1] | default('')}) -%}
+            {%- elif f[0] == 'list' -%}{%- set _ = out.list.update({f[1]: f[2] | default(0) | int}) -%}{%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+        me: >-
+          {{ lines | select('match', '^me\|' ~ (ansible_user | default('') | regex_replace('\+.*$', '') | regex_escape) ~ '\|')
+             | map('split', '|') | map('last') | unique | list }}
+        outside: >-
+          {%- macro num(ip) -%}{%- set o = (ip ~ '.0.0.0').split('.') -%}{{
+            ((o[0] | int * 256 + o[1] | int) * 256 + o[2] | int) * 256 + o[3] | int }}{%- endmacro -%}
+          {%- set out = [] -%}
+          {%- for a in me -%}
+            {%- set ns = namespace(ok=false) -%}
+            {%- for c in ranges -%}
+              {%- set size = 2 ** (32 - (c.split('/')[1] | int)) -%}
+              {%- if (num(a) | int) // size == (num(c.split('/')[0]) | int) // size -%}{%- set ns.ok = true -%}{%- endif -%}
+            {%- endfor -%}
+            {%- if not ns.ok -%}{%- set _ = out.append(a) -%}{%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+        plan: >-
+          {%- set out = {'services': [], 'mac': [], 'discovery': false, 'skipped': []} -%}
+          {%- for name in services if name in svc and svc[name].enabled and svc[name].address != ranges | sort | list -%}
+            {%- set _ = out.services.append(name) -%}
+          {%- endfor -%}
+          {%- if restrict_mac | bool -%}
+            {%- if facts.mac | default('') != iface_list -%}{%- set _ = out.mac.append('mac-server') -%}{%- endif -%}
+            {%- if facts.macwinbox | default('') != iface_list -%}{%- set _ = out.mac.append('mac-winbox') -%}{%- endif -%}
+          {%- elif routeros_restrict_mac_server | default(true) | bool -%}
+            {%- set _ = out.skipped.append('MAC server: no routeros_management_interface_list') -%}
+          {%- endif -%}
+          {%- if restrict_discovery | bool -%}
+            {%- set _ = out.update({'discovery': facts.disc | default('') != iface_list}) -%}
+          {%- elif routeros_restrict_discovery | default(true) | bool -%}
+            {%- set _ = out.skipped.append('neighbour discovery: no routeros_management_interface_list') -%}
+          {%- endif -%}
+          {%- set _ = out.update({'list_members': facts.list.get(iface_list, -1) if iface_list else none,
+                                  'lists': facts.list.keys() | list}) -%}
+          {{ out }}
+
+    - name: The plan
+      ansible.builtin.debug:
+        msg:
+          limit_services_to: "{{ (hm_plan.services | join(', ') ~ ' → ' ~ ranges | join(',')) if hm_plan.services | length > 0 else 'nothing to change' }}"
+          interface_list: "{{ (hm_plan.mac + (['discovery'] if hm_plan.discovery else [])) | join(', ') ~ ' → ' ~ iface_list
+                              if hm_plan.mac | length > 0 or hm_plan.discovery | bool else 'nothing to change' }}"
+          skipped: "{{ hm_plan.skipped }}"
+          this_mac_seen_from: "{{ hm_me }}"
+
+    - name: Safe to apply (Ansible stays inside, the interface list exists)
+      ansible.builtin.assert:
+        that:
+          - hm_plan.services | length == 0 or (hm_me | length > 0 and hm_outside | length == 0)
+          - (hm_plan.mac | length == 0 and not hm_plan.discovery | bool) or (hm_plan.list_members | int) > 0
+        fail_msg: >-
+          {{ inventory_hostname }}: {{ ('this Mac reaches it from ' ~ (hm_outside or ['an unknown address']) | join(', ')
+          ~ ', outside ' ~ ranges | join(', ') ~ ': limiting ' ~ hm_plan.services | join(', ')
+          ~ ' would lock Ansible out. Add that network to network.management_ranges (or reach the device from inside it). ')
+          if hm_plan.services | length > 0 and (hm_outside | length > 0 or hm_me | length == 0) else '' }}{{ ('interface list ' ~ iface_list
+          ~ ' is missing or empty (lists: ' ~ hm_plan.lists | join(', ') ~ '). ')
+          if (hm_plan.mac | length > 0 or hm_plan.discovery | bool) and (hm_plan.list_members | int) <= 0 else '' }}Nothing was changed.
+
+    - name: Applying needs the user's yes
+      ansible.builtin.assert:
+        that: not (homelab_read_only | default(true) | bool)
+        fail_msg: >-
+          {{ inventory_hostname }} is an appliance (homelab_read_only). Nothing was changed. With the user's yes,
+          run again with -e homelab_read_only=false.
+      when:
+        - hm_any | bool
+        - not ansible_check_mode
+
+    - name: Limit the services to the management ranges
+      community.routeros.command:
+        commands: ["/ip service set [find where !dynamic and name=\"{{ item }}\"] address={{ ranges | join(',') }}"]
+      loop: "{{ hm_plan.services }}"
+      when: not ansible_check_mode
+      changed_when: true
+
+    - name: MAC server and MAC Winbox only on the management interface list
+      community.routeros.command:
+        commands: ["/tool mac-server{{ ' mac-winbox' if item == 'mac-winbox' else '' }} set allowed-interface-list={{ iface_list }}"]
+      loop: "{{ hm_plan.mac }}"
+      when: not ansible_check_mode
+      changed_when: true
+
+    - name: Neighbour discovery only on the management interface list
+      community.routeros.command:
+        commands: ["/ip neighbor discovery-settings set discover-interface-list={{ iface_list }}"]
+      when: hm_plan.discovery | bool and not ansible_check_mode
+      changed_when: true
+
+    - name: Read the state again
+      community.routeros.command:
+        commands: ["{{ state_script }}"]
+      register: after
+      changed_when: false
+      when: hm_any | bool and not ansible_check_mode
+
+    - name: Everything planned is in place
+      ansible.builtin.assert:
+        that: missing | length == 0
+        fail_msg: "Not applied on {{ inventory_hostname }}: {{ missing | join('; ') }}"
+      vars:
+        lines: "{{ after.stdout_lines[0] | map('trim') | select | list }}"
+        missing: >-
+          {%- set out = [] -%}
+          {%- for name in hm_plan.services -%}
+            {%- set row = lines | select('match', '^svc\|' ~ name ~ '\|') | first | default('') -%}
+            {%- if (row ~ '|').split('|')[3] | replace(';', ',') | split(',') | select | sort | list != ranges | sort | list -%}
+              {%- set _ = out.append(name ~ ': ' ~ row) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {%- for key, label in [['mac', 'mac-server'], ['macwinbox', 'mac-winbox'], ['disc', 'discovery']]
+              if (label in hm_plan.mac or (key == 'disc' and hm_plan.discovery))
+                 and ('|' ~ key ~ '|' ~ iface_list) not in ('|' ~ lines | join('|')) -%}
+            {%- set _ = out.append(label) -%}
+          {%- endfor -%}
+          {{ out }}
+      when: hm_any | bool and not ansible_check_mode

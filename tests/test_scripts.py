@@ -2492,6 +2492,18 @@ class DiscoveryLayoutTests(unittest.TestCase):  # GitHub issue #73
         self.assertIn("--force-confold", upgrade)
         self.assertIn("ansible/playbooks/dist-upgrade-debian.yml", (SCRIPTS / "init_repo.py").read_text())
 
+    def test_routeros_restrict_playbook(self):  # GitHub issue #80
+        pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/routeros-restrict-management.yml").read_text()
+        order = [pb.index(t) for t in ("- name: Read the state\n", "- name: Safe to apply", "- name: Applying needs the user's yes",
+                                       "- name: Limit the services", "- name: Read the state again", "- name: Everything planned")]
+        self.assertEqual(order, sorted(order))
+        self.assertIn("hm_me | length > 0 and hm_outside | length == 0", pb)           # never locks Ansible out
+        self.assertIn("homelab_read_only | default(true)", pb)
+        self.assertIn("find where !dynamic and name=", pb)                              # not the live connections
+        self.assertEqual(pb.count("when: not ansible_check_mode") + pb.count("and not ansible_check_mode"), 5)
+        self.assertIn("management_ranges: []", (SCRIPTS.parent / "assets/repo-template/homelab.yaml").read_text())
+        self.assertIn("ansible/playbooks/routeros-restrict-management.yml", (SCRIPTS / "init_repo.py").read_text())
+
     def test_check_updates_covers_qnap_read_only(self):  # GitHub issue #81
         pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/check-updates.yml").read_text()
         play = pb.split("- name: Firmware and app versions on QNAP NAS")[1].split("\n- name:")[0]
@@ -3303,6 +3315,10 @@ out = {
    " 0   name=telnet port=23 address=\"\" vrf=main\n 1 X name=ftp port=21 address=\"\"\n"
    " 2   name=www port=80 address=10.0.0.0/24\n 3   name=ssh port=22 address=\"\"\n"),
  "/user print terse without-paging": " 0   name=admin group=full\n 1   name=auditor group=read\n",
+ "/tool mac-server print without-paging": "  allowed-interface-list: " + ("MGMT" if chr_ else "all") + "\n",
+ "/tool mac-server mac-winbox print without-paging": "  allowed-interface-list: MGMT\n",
+ "/ip neighbor discovery-settings print without-paging": "  discover-interface-list: " + ("MGMT" if chr_ else "all")
+   + "\n           protocol: cdp\n                     lldp\n",
 }
 if cmd not in out or (chr_ and "routerboard" in cmd):
     print("bad command name routerboard (line 1 column 9)"); sys.exit(1)
@@ -3380,6 +3396,16 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         self.assertIn("- Fix: `ansible-playbook playbooks/routeros-disable-services.yml -l sw-rack "   # GitHub #79
                       "-e '{\"routeros_disable_services\": [\"telnet\", \"www\"]}' --check`", sw)
         self.assertIn("-l chr1 ", out[out.index("## 10.0.0.2"):])
+        self.assertIn("**low** — `ssh` reachable from any address (port 22): limit it", sw)          # GitHub #80
+        self.assertIn("**medium** — MAC server (MAC Telnet) on all interfaces", sw)
+        self.assertIn("**low** — neighbour discovery (MNDP/CDP/LLDP) on all interfaces", sw)
+        self.assertNotIn("MAC Winbox on all", sw)
+        self.assertIn("- Limit: `ansible-playbook playbooks/routeros-restrict-management.yml -l sw-rack --check`", sw)
+        self.assertNotIn("on all interfaces", out[out.index("## 10.0.0.2"):out.index("## 10.0.0.9")])
+        live = {"services": [{"name": "ssh", "_flags": "D", "remote": "10.0.0.7:5000"},
+                             {"name": "ssh", "_flags": "", "address": "10.0.99.0/24"},
+                             {"name": "winbox", "_flags": "", "address": ""}, {"name": "api-ssl", "_flags": "X"}]}
+        self.assertEqual(self.ra.open_management(live), ["winbox"])          # live connections and limited ones don't count
         self.assertNotIn("- Fix:", out[out.index("## 10.0.0.9"):])                   # not inspected
         dev = {"services": [{"name": "api", "_flags": ""}, {"name": "ssh", "_flags": ""}]}
         self.assertIn("add the device to the `routeros` group", self.ra.fix_hint(dev, None))

@@ -112,6 +112,17 @@ show the user what it would disable; with their yes, run it again with `-e homel
 again afterwards and fails if one is still enabled. It needs a user with write rights (group `full`), not the
 audit user.
 
+Management access from anywhere (`ssh`, `winbox`, `www-ssl`, `api-ssl` without an address limit; MAC server,
+MAC Winbox or neighbour discovery on all interfaces): `playbooks/routeros-restrict-management.yml` (RouterOS 7),
+same flow: `-l <host> --check` shows the plan, `-e homelab_read_only=false` applies it with the user's yes.
+- Services get `address=` the IPv4 CIDRs of `network.management_ranges` (homelab.yaml; or the group/host var
+  `routeros_management_ranges`). The play refuses when an SSH session of its user on the device comes from
+  outside them (the address the device sees, e.g. a VLAN other than MGMT): add that network first. Ask who
+  manages the device from elsewhere: they lose access. `routeros_restrict_services` picks the services.
+- MAC server, MAC Winbox and discovery move to the interface list `routeros_management_interface_list` (a host
+  or group var; names differ per device, the play lists the existing ones). Without it those parts are skipped.
+  `routeros_restrict_mac_server` / `routeros_restrict_discovery: false` leave them as they are.
+
 Ansible on RouterOS:
 - Use `community.routeros` over `ansible_connection: ansible.netcommon.network_cli` with
   `ansible_network_os: community.routeros.routeros` (needs `ansible-pylibssh` or paramiko; agent keys work)
