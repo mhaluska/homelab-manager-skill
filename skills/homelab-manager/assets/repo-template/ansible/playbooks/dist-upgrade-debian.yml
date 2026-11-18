@@ -7,7 +7,7 @@
 #       [-e reboot=false] [-e dist_upgrade_min_free_mb=2000] [-e debian_mirrors='http://cache.lan:3142/']
 #
 # --check (the guard lets it run without asking) is the pre-flight only, on every target, changing nothing but
-# the package lists: Debian (not Ubuntu: do-release-upgrade, references/patching.md), target_release the next
+# the package lists: Debian (Ubuntu: dist-upgrade-ubuntu.yml), target_release the next
 # release, not a Proxmox node (patch-proxmox-node.yml / the Proxmox upgrade guide), free space (default 2000 MB
 # on / and /var, 200 MB on /boot), the current release fully patched (patch-linux.yml first), dpkg consistent
 # (dpkg --audit), sshd -t passes, no held packages (held_ok=true: keep them held), and the APT sources:
@@ -54,7 +54,7 @@
           - "'proxmox_nodes' not in group_names"
         fail_msg: >-
           {{ inventory_hostname }}: {{ ansible_facts.distribution }} {{ hm_from }}{{
-          (' — only Debian (Ubuntu: do-release-upgrade, references/patching.md)') if ansible_facts.distribution != 'Debian'
+          (' — only Debian (Ubuntu: dist-upgrade-ubuntu.yml)') if ansible_facts.distribution != 'Debian'
           else (' — not a Proxmox node: patch-proxmox-node.yml and the Proxmox upgrade guide')
                if patch_requires_approval | default(false) | bool or 'proxmox_nodes' in group_names
           else (' — the next release is ' ~ (hm_next or 'unknown') ~ ', not ' ~ target_release ~ ' (one release per run)') }}

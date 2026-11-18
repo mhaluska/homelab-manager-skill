@@ -154,8 +154,34 @@ when (the services on it are down during the upgrade and the reboot).
    `#hm-disabled` and `Enabled: no` lines (deb822), and drop `.hm-disabled` from pin files; then `apt-get
    update`. Then `check-updates.yml`, patch-linux.yml for the autoremove, and the next release in a new run.
    Remove the snapshot after a good run (the user's yes).
-Rollback: the snapshot (`pve_snapshot.py rollback` / `lxd_snapshot.py restore`, the user's yes). Ubuntu
-(`do-release-upgrade`) is not covered: do it by hand with the same order of steps.
+Rollback: the snapshot (`pve_snapshot.py rollback` / `lxd_snapshot.py restore`, the user's yes). Ubuntu: the
+next section.
+
+## Ubuntu release upgrade (e.g. 22.04 → 24.04)
+
+`playbooks/dist-upgrade-ubuntu.yml` runs `do-release-upgrade`, one release per run, one host at a time; plan
+the order and time with the user as for Debian. Ubuntu decides the next release: `target_release` must be the
+one `do-release-upgrade -c` offers. With `Prompt=lts` (the default; the playbook sets it) that is the next LTS,
+offered only from its first point release (24.04.1): before that, wait, don't force it with `-d`.
+`allow_non_lts=true` (`Prompt=normal`) allows an interim release, only when the user wants one.
+1. Pre-flight, read-only: `ansible-playbook playbooks/dist-upgrade-ubuntu.yml -e target=<host>
+   -e target_release=<codename> -e hm_scripts=$HM/scripts --check`. It refuses Debian, Proxmox nodes, a missing
+   `do-release-upgrade`, short space (`dist_upgrade_min_free_mb`, default 3000), pending updates, `dpkg --audit`
+   problems, held packages (`held_ok=true`), a failing `sshd -t`, and, when `Prompt` already has the value the
+   run needs, an offer other than `target_release`.
+2. The upgrade (the guard asks): the same command without `--check`. It sets `Prompt` and checks the offer again
+   (puts the prompt back and stops on a mismatch), snapshots, backs up the configuration (as for Debian, plus
+   `/etc/update-manager` and `/etc/netplan`) and the installed package list to `/root/hm-dist-upgrade-<release>-
+   <date>.{tar.gz,packages}`, then runs `do-release-upgrade -f DistUpgradeViewNonInteractive` in the transient
+   unit `hm-dist-upgrade` (log `/var/log/hm-dist-upgrade.log` and `/var/log/dist-upgrade/`, `dist_upgrade_timeout`
+   default 5400 s). Run this way it opens no second sshd on port 1022 and needs no `screen`. It disables
+   third-party sources (PPAs) itself and keeps local configuration. There is no reliable dry run, so the run
+   compares the package list afterwards: a removed package matching `autoremove_protect` stops it before the
+   reboot (install the replacement, or roll back). Then `dpkg --audit`, `sshd -t`, the reboot, the new release,
+   `health_services` and no new failed units.
+3. Report `removed`, `sources_disabled` (re-enable each PPA once it has a build for the new release: uncomment
+   the line or drop `Enabled: no`, then `apt-get update`), `review_config` and `autoremovable`, as for Debian.
+   Remove the snapshot after a good run (the user's yes).
 
 ## Patch Proxmox nodes
 

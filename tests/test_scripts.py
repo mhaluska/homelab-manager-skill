@@ -2532,6 +2532,22 @@ class DiscoveryLayoutTests(unittest.TestCase):  # GitHub issue #73
         self.assertIn("--force-confold", upgrade)
         self.assertIn("ansible/playbooks/dist-upgrade-debian.yml", (SCRIPTS / "init_repo.py").read_text())
 
+    def test_dist_upgrade_ubuntu_playbook(self):  # GitHub issue #88
+        pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/dist-upgrade-ubuntu.yml").read_text()
+        pre, upgrade = pb.split("\n- name: Ubuntu release upgrade\n")
+        self.assertIn("any_errors_fatal: true", pre)
+        self.assertIn("hm_offered != target_release", pre)                        # Ubuntu decides the next release
+        self.assertIn("'normal' if allow_non_lts | default(false) | bool else 'lts'", pre)
+        self.assertIn("ansible.builtin.meta: end_play\n      when: ansible_check_mode", upgrade)
+        self.assertIn("serial: 1", upgrade)
+        order = [upgrade.index(t) for t in ("It offers {{ target_release }}", "- name: Snapshot\n",
+                                            "- name: Back up the configuration", "DistUpgradeViewNonInteractive",
+                                            "It removed nothing protected", "sshd configuration still valid",
+                                            "ansible.builtin.reboot")]
+        self.assertEqual(order, sorted(order))
+        self.assertIn("RELEASE_UPGRADER_NO_SCREEN=1", upgrade)
+        self.assertIn("ansible/playbooks/dist-upgrade-ubuntu.yml", (SCRIPTS / "init_repo.py").read_text())
+
     def test_routeros_restrict_playbook(self):  # GitHub issue #80
         pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/routeros-restrict-management.yml").read_text()
         order = [pb.index(t) for t in ("- name: Read the state\n", "- name: Safe to apply", "- name: Applying needs the user's yes",
