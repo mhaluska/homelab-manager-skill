@@ -1,56 +1,98 @@
 # Read-only status of controller-managed UniFi devices.
-#   python3 $HM/scripts/with_secrets.py unifi-api -- ansible-playbook playbooks/unifi-info.yml
-# 1. The controller's Integration API (X-API-KEY from UNIFI_API_KEY; secrets.unifi-api, kind env): application
-#    info, UniFi sites and every adopted device (model, firmware, state, IP, MAC) → discovery/unifi.json, under
-#    the homelab site of the first `unifi` host (its site_<name> group; none: "default"), next to other sites'.
+#   python3 $HM/scripts/with_secrets.py unifi-api -- ansible-playbook playbooks/unifi-info.yml   (unifi_auth: api_key)
+#   python3 $HM/scripts/with_secrets.py unifi -- ansible-playbook playbooks/unifi-info.yml       (unifi_auth: login)
+# 1. The controller (unifi_auth in group_vars/unifi.yml, GitHub #77):
+#    - api_key (default): the Integration API (X-API-KEY from UNIFI_API_KEY; secrets.unifi-api, kind env).
+#    - login: a self-hosted UniFi Network application without API keys: the classic API with a read-only local
+#      admin (UNIFI_USER/UNIFI_PASSWORD; secrets.unifi, kind user_password, env UNIFI), logged out at the end.
+#      Devices keep only the fields the Integration API reports, so no device secrets (x_authkey, …) are written.
+#    Application info, UniFi sites and every adopted device (model, firmware, state, IP, MAC) → discovery/unifi.json,
+#    under the homelab site of the first `unifi` host (its site_<name> group; none: "default"), next to other sites'.
 # 2. Devices in the `unifi` group, over SSH with the raw module: `mca-cli-op info` (version, uptime, inform URL,
 #    controller status). `info` is only an interactive shell alias, so it isn't used.
 # Never configures anything: changes go through the controller (its UI or API), with the user's yes.
-- name: UniFi controller (Integration API)
+- name: UniFi controller
   hosts: localhost
   gather_facts: false
   vars:
-    api: "{{ hostvars[groups['unifi'][0]].unifi_api_url if (groups['unifi'] | default([])) else unifi_api_url | default('') }}"
-    certs: "{{ hostvars[groups['unifi'][0]].unifi_validate_certs | default(false) if (groups['unifi'] | default([])) else false }}"
+    first: "{{ hostvars[groups['unifi'][0]] if (groups['unifi'] | default([])) else {} }}"
+    auth: "{{ first.unifi_auth | default(unifi_auth | default('api_key')) }}"
+    login: "{{ auth == 'login' }}"
+    api: "{{ first.unifi_api_url | default(unifi_api_url | default('')) }}"
+    controller: "{{ first.unifi_controller_url | default(unifi_controller_url | default('')) }}"
+    certs: "{{ first.unifi_validate_certs | default(unifi_validate_certs | default(false)) }}"
     key: "{{ lookup('ansible.builtin.env', 'UNIFI_API_KEY') }}"
+    user: "{{ lookup('ansible.builtin.env', 'UNIFI_USER') }}"
+    password: "{{ lookup('ansible.builtin.env', 'UNIFI_PASSWORD') }}"
+    headers: >-
+      {{ {'Cookie': unifi_login.cookies_string | default(''), 'Accept': 'application/json'} if login | bool
+         else {'X-API-KEY': key, 'Accept': 'application/json'} }}
     unifi_file: "{{ playbook_dir }}/../../discovery/unifi.json"
-    unifi_site: >-
-      {{ (hostvars[groups['unifi'][0]].group_names | select('match', '^site_') | map('regex_replace', '^site_', '')
-          | first | default('default')) if (groups['unifi'] | default([])) else 'default' }}
+    unifi_site: "{{ first.group_names | default([]) | select('match', '^site_') | map('regex_replace', '^site_', '') | first | default('default') }}"
   tasks:
-    - name: Controller URL and API key are set
+    - name: Controller URL and credentials are set
       ansible.builtin.assert:
-        that: api | length > 0 and key | length > 0
+        that: >-
+          (auth == 'api_key' and api | length > 0 and key | length > 0) or
+          (auth == 'login' and controller | length > 0 and user | length > 0 and password | length > 0)
         fail_msg: >-
-          Set unifi_api_url (group_vars/unifi.yml) and run under `with_secrets.py unifi-api --`
-          (secrets.unifi-api: {service: homelab/unifi-api, kind: env, env: UNIFI_API_KEY}).
+          unifi_auth: api_key (default) needs unifi_api_url (group_vars/unifi.yml) and a run under
+          `with_secrets.py unifi-api --` (secrets.unifi-api: {service: homelab/unifi-api, kind: env, env: UNIFI_API_KEY}).
+          unifi_auth: login needs unifi_controller_url and a run under `with_secrets.py unifi --`
+          (secrets.unifi: {service: homelab/unifi, kind: user_password, env: UNIFI}). unifi_auth is now '{{ auth }}'.
 
-    - name: Application info
-      ansible.builtin.uri:
-        url: "{{ api }}/info"
-        headers: {X-API-KEY: "{{ key }}", Accept: application/json}
-        validate_certs: "{{ certs | bool }}"
-      register: unifi_info
-      no_log: true
+    - name: Read the controller
+      block:
+        - name: Log in (read-only local admin)
+          ansible.builtin.uri:
+            url: "{{ controller }}/api/login"
+            method: POST
+            body_format: json
+            body: {username: "{{ user }}", password: "{{ password }}"}
+            validate_certs: "{{ certs | bool }}"
+          register: unifi_login
+          when: login | bool
+          no_log: true
 
-    - name: Sites
-      ansible.builtin.uri:
-        url: "{{ api }}/sites?limit=200"
-        headers: {X-API-KEY: "{{ key }}", Accept: application/json}
-        validate_certs: "{{ certs | bool }}"
-      register: unifi_sites
-      no_log: true
+        - name: Application info
+          ansible.builtin.uri:
+            url: "{{ (controller ~ '/status') if login | bool else (api ~ '/info') }}"
+            headers: "{{ headers }}"
+            validate_certs: "{{ certs | bool }}"
+          register: unifi_info
+          no_log: true
 
-    - name: Devices per site
-      ansible.builtin.uri:
-        url: "{{ api }}/sites/{{ item.id }}/devices?limit=200"
-        headers: {X-API-KEY: "{{ key }}", Accept: application/json}
-        validate_certs: "{{ certs | bool }}"
-      loop: "{{ unifi_sites.json.data | default([]) }}"
-      loop_control:
-        label: "{{ item.name | default(item.id) }}"
-      register: unifi_devices
-      no_log: true
+        - name: Sites
+          ansible.builtin.uri:
+            url: "{{ (controller ~ '/api/self/sites') if login | bool else (api ~ '/sites?limit=200') }}"
+            headers: "{{ headers }}"
+            validate_certs: "{{ certs | bool }}"
+          register: unifi_sites
+          no_log: true
+
+        - name: Devices per site
+          ansible.builtin.uri:
+            url: >-
+              {{ (controller ~ '/api/s/' ~ item.name ~ '/stat/device') if login | bool
+                 else (api ~ '/sites/' ~ item.id ~ '/devices?limit=200') }}
+            headers: "{{ headers }}"
+            validate_certs: "{{ certs | bool }}"
+          loop: "{{ unifi_sites.json.data | default([]) }}"
+          loop_control:
+            label: "{{ item.desc | default(item.name) | default(item.id) }}"
+          register: unifi_devices
+          no_log: true
+      always:
+        - name: Log out
+          ansible.builtin.uri:
+            url: "{{ controller }}/api/logout"
+            method: POST
+            headers: "{{ headers }}"
+            validate_certs: "{{ certs | bool }}"
+            status_code: [200, 401]
+          when: login | bool and unifi_login.cookies_string is defined
+          failed_when: false
+          no_log: true
 
     - name: Previous results
       ansible.builtin.stat:
@@ -63,18 +105,34 @@
         mode: "0644"
         content: >-
           {%- set prev = (lookup('ansible.builtin.file', unifi_file) | from_json) if prev_unifi.stat.exists else {} -%}
-          {%- set parts = dict(prev.sites) if prev.sites is mapping else {} -%}
-          {%- set _ = parts.update({unifi_site: {'collected_at': now(utc=true).isoformat(),
-              'application': unifi_info.json | default({}),
-              'unifi_sites': unifi_devices.results | map(attribute='item') | map(attribute='name', default='?') | list,
-              'devices': unifi_devices.results | map(attribute='json') | map(attribute='data', default=[]) | flatten}}) -%}
+          {%- set parts = dict(prev.sites | default({})) if prev.sites | default(none) is mapping else {} -%}
+          {%- if login | bool -%}
+            {%- set states = {0: 'OFFLINE', 1: 'ONLINE', 2: 'PENDING_ADOPTION', 4: 'UPDATING', 5: 'PROVISIONING',
+                              6: 'HEARTBEAT_MISSED', 11: 'ISOLATED'} -%}
+            {%- set app = {'applicationVersion': unifi_info.json.meta.server_version | default('?')} -%}
+            {%- set names = unifi_sites.json.data | default([]) | map(attribute='desc', default='?') | list -%}
+            {%- set devices = [] -%}
+            {%- for r in unifi_devices.results | default([]) -%}{%- for d in r.json.data | default([]) -%}
+              {%- set _ = devices.append({'id': d['_id'] | default(''), 'name': d.name | default(''),
+                  'model': d.model | default(''), 'macAddress': d.mac | default(''), 'ipAddress': d.ip | default(''),
+                  'firmwareVersion': d.version | default(''),
+                  'state': states[d.state] | default('STATE_' ~ (d.state | default('?')))}) -%}
+            {%- endfor -%}{%- endfor -%}
+          {%- else -%}
+            {%- set app = unifi_info.json | default({}) -%}
+            {%- set names = unifi_devices.results | default([]) | map(attribute='item') | map(attribute='name', default='?') | list -%}
+            {%- set devices = unifi_devices.results | default([]) | map(attribute='json') | map(attribute='data', default=[]) | flatten -%}
+          {%- endif -%}
+          {%- set _ = parts.update({unifi_site: {'collected_at': now(utc=true).isoformat(), 'application': app,
+              'unifi_sites': names, 'devices': devices}}) -%}
           {{ {'sites': parts} | to_nice_json }}
 
     - name: Result
       ansible.builtin.debug:
         msg: >-
-          UniFi Network {{ unifi_info.json.applicationVersion | default('?') }}:
-          {{ unifi_devices.results | map(attribute='json') | map(attribute='data', default=[]) | flatten | length }} device(s)
+          UniFi Network
+          {{ unifi_info.json.meta.server_version | default('?') if login | bool else unifi_info.json.applicationVersion | default('?') }}:
+          {{ unifi_devices.results | default([]) | map(attribute='json') | map(attribute='data', default=[]) | flatten | length }} device(s)
           in {{ unifi_sites.json.data | default([]) | length }} site(s)
 
 - name: UniFi devices (SSH, raw, read-only)

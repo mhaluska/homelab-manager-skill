@@ -52,15 +52,22 @@ Keep BMCs on a management network: the drift report flags BMCs found elsewhere.
 
 The UniFi Network controller owns their configuration: anything changed on the device itself is overwritten
 on the next provision, so never configure them over SSH or with Ansible modules. Read-only status only:
-1. Controller: the user creates an API key (Network → Settings → Control Plane → Integrations), stores it in
-   the keychain (`homelab/unifi-api`), and you map it:
-   `config_set.py 'secrets.unifi-api={service: homelab/unifi-api, kind: env, env: UNIFI_API_KEY}'`.
-   Set `unifi_api_url` in `group_vars/unifi.yml` (UniFi OS consoles: `https://<host>/proxy/network/integration/v1`;
-   with no hosts in the `unifi` group pass `-e unifi_api_url=…`).
+1. Controller, `unifi_auth` in `group_vars/unifi.yml` (with no hosts in the `unifi` group pass these as `-e`):
+   - `api_key` (default): the user creates an API key (Network → Settings → Control Plane → Integrations),
+     stores it in the keychain (`homelab/unifi-api`), and you map it:
+     `config_set.py 'secrets.unifi-api={service: homelab/unifi-api, kind: env, env: UNIFI_API_KEY}'`.
+     Set `unifi_api_url` (UniFi OS consoles: `https://<host>/proxy/network/integration/v1`).
+   - `login`: not every controller offers API keys (a self-hosted UniFi Network application often has no
+     Integrations page). The user creates a local admin with the View Only role and stores `user:password` in the
+     keychain (`homelab/unifi`); map it with
+     `config_set.py 'secrets.unifi={service: homelab/unifi, kind: user_password, env: UNIFI}'` and set
+     `unifi_controller_url` (`https://<host>:8443`). The playbook uses the classic API, logs out at the end and
+     keeps only the device fields the Integration API reports (no device keys).
 2. Devices (optional): add them to the `unifi` group (child of `appliances`) with the SSH user from the
    controller's device authentication settings. Only `ansible.builtin.raw` works (no Python on the device).
-3. `with_secrets.py unifi-api -- ansible-playbook playbooks/unifi-info.yml` → `discovery/unifi.json`
-   (controller version, sites, devices with model, firmware, state, IP) and each SSH device's status.
+3. `with_secrets.py unifi-api -- ansible-playbook playbooks/unifi-info.yml` (`login`: `with_secrets.py unifi --`)
+   → `discovery/unifi.json` (controller version, sites, devices with model, firmware, state, IP) and each SSH
+   device's status.
 4. Changes (adoption, `set-inform`, firmware upgrades, factory reset, port or WLAN settings) go through the
    controller — its UI by the user, or its API after the user's yes (the guard asks).
 Other controller-managed gear (Omada, Aruba Instant On, Meraki) follows the same rule: read from the

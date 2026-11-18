@@ -1,10 +1,16 @@
 # Controller-managed devices (UniFi APs and switches): their configuration belongs to the UniFi Network
 # controller and is overwritten on the next provision, so Ansible never changes them. Status only:
 #   - over SSH (the key the controller pushes), raw module only: busybox, no Python, no fact gathering
-#   - from the controller's Integration API: playbooks/unifi-info.yml (API key from the keychain)
+#   - from the controller: playbooks/unifi-info.yml (credentials from the keychain)
 ansible_python_interpreter: /bin/false   # no Python on the device: only ansible.builtin.raw works
+# How unifi-info.yml reads the controller:
+#   api_key  the Integration API with an API key (secrets.unifi-api); needs unifi_api_url
+#   login    a self-hosted UniFi Network application without an API-key page: the classic API with a read-only
+#            local admin (secrets.unifi, kind user_password); needs unifi_controller_url
+unifi_auth: api_key
 # Integration API base URL (no trailing slash):
 #   UniFi OS console (UDM, UCG, Cloud Key Gen2+, self-hosted UniFi OS Server): https://<host>/proxy/network/integration/v1
 #   self-hosted UniFi Network application: https://<host>:8443/integration/v1
 unifi_api_url: ""
+unifi_controller_url: ""                 # login: the application's base URL, e.g. https://<host>:8443
 unifi_validate_certs: false              # controllers mostly use self-signed certificates

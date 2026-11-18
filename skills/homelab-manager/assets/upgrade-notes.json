@@ -471,7 +471,7 @@
       },
       "text": "unifi-info.yml keeps each homelab site's controller data in discovery/unifi.json under that site (#75); the UniFi site list moved to unifi_sites.",
       "edited": "This repo's copy has local edits.",
-      "action": "Replace ansible/playbooks/unifi-info.yml with {template}, carrying over any local edits (show the user the diff first)."
+      "action": "Replace ansible/playbooks/unifi-info.yml with {template}, carrying over any local edits (show the user the diff first). A copy that logs in to the classic API (/api/login: a self-hosted controller without API keys) keeps that: set unifi_auth: login and unifi_controller_url in group_vars/unifi.yml and map the existing keychain item as secrets.unifi (kind user_password, env UNIFI); never switch it to an API key the controller can't create (#77)."
     },
     {
       "version": "0.29.0",
@@ -502,6 +502,19 @@
       "text": "discovery/ has one file per kind with every site inside (#75).",
       "edited": "This repo's discovery/README.md is an older copy with local edits.",
       "action": "Replace discovery/README.md with {template} (show the user the diff first; keep only a note the template has no equivalent for)."
+    },
+    {
+      "version": "0.29.1",
+      "id": "unifi-login-mode",
+      "kind": "template",
+      "when": {
+        "component": "appliances",
+        "file_has": ["ansible/playbooks/unifi-info.yml", "/api/login"],
+        "file_lacks": ["ansible/playbooks/unifi-info.yml", "unifi_auth"]
+      },
+      "text": "unifi-info.yml reads a self-hosted UniFi Network application without API keys through the classic API with a read-only local admin (unifi_auth: login, #77), into the per-site discovery/unifi.json, without device keys.",
+      "edited": "This repo's copy has its own classic-API login.",
+      "action": "Replace ansible/playbooks/unifi-info.yml with {template}, carrying over any local edits (show the user the diff first); set unifi_auth: login and unifi_controller_url (the controller's base URL, e.g. https://<host>:8443) in group_vars/unifi.yml, and map the keychain item the old copy used as secrets.unifi (kind user_password, env UNIFI). Run it with `with_secrets.py unifi -- ansible-playbook playbooks/unifi-info.yml` and check discovery/unifi.json."
     }
   ]
 }
