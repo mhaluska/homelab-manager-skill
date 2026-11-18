@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.32.0 — 2026-11-18
+- Ubuntu release upgrade ([#88](https://github.com/mhaluska/homelab-manager-skill/issues/88)): `playbooks/dist-upgrade-ubuntu.yml -e target=<host>
+  -e target_release=<codename>`, one release per run, one host at a time. `target_release` must be the release
+  `do-release-upgrade -c` offers with `Prompt=lts` (the next LTS, from its first point release;
+  `allow_non_lts=true`: `Prompt=normal`). With `--check` it is a read-only pre-flight (Ubuntu only, not a Proxmox
+  node, free space, the current release patched, `dpkg --audit`, held packages, `sshd -t`, the offered release).
+  The upgrade (the guard asks) sets the prompt and checks the offer (both put back on a mismatch), snapshots,
+  backs up the configuration and the installed package list, and runs `do-release-upgrade -f
+  DistUpgradeViewNonInteractive` in a transient systemd unit (no second sshd on port 1022, no `screen`). There is
+  no reliable dry run, so a removed package matching `autoremove_protect` stops the run before the reboot. Then
+  `sshd -t`, the reboot, the new release, `health_services` and failed units. references/patching.md "Ubuntu
+  release upgrade".
+- Upgrade note (opt-in): `dist-upgrade-ubuntu`.
+
 ## 0.31.1 — 2026-11-18
 - `pve_node_plan.py` refuses a snapshot without guest config before planning ([#85](https://github.com/mhaluska/homelab-manager-skill/issues/85)): it prints only "refresh with
   `proxmox_inventory.py --details`" instead of a table listing every guest as `migrate (shared storage only)`.
