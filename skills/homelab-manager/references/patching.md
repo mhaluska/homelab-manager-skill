@@ -8,7 +8,7 @@ ansible-playbook playbooks/check-updates.yml -e target=rocky       # subset (pre
 ```
 Merges into `discovery/updates.json`: a subset run updates only its hosts, the others keep their last
 result; check each host's `collected_at` before calling it current. Report a table: host, OS, security updates, total, reboot
-pending (with `reboot_reasons`), services to restart (`restart_pending`). Sort by security count.
+pending (with `reboot_reasons`), services to restart (`restart_pending`), `low_space`. Sort by security count.
 A reboot is due when a newer kernel than the running one is installed (plain Debian has no
 `/var/run/reboot-required`), `needs-restarting -r` says so (EL) or the flag file exists. `restart_pending` lists
 services whose processes still map deleted binaries or libraries: they run the old (maybe vulnerable) code.
@@ -64,6 +64,12 @@ counts; the play's last task lists them. They are findings too: report them in t
    `autoremove skipped`, not a failure) when it would remove a package matching `autoremove_protect`
    (authentication, NSS/PAM, sudo, SSH, systemd, networking) or more than `autoremove_max` (20) packages:
    a removed `freeipa-client` leaves SSSD autoremovable, and removing it locks out an IPA `ansible_user`.
+   Free space: before anything is snapshotted or patched the run checks every target for `patch_min_free_mb`
+   (500) free on `/` and `/var` and `patch_min_free_boot_mb` (100) on a separate `/boot`, and refuses with the
+   list (a full disk mid-batch leaves the batch's other hosts updated but not rebooted or checked).
+   check-updates shows `free_mb` and `low_space`: offer `-e clean_cache=true` (cleans the package cache on
+   those hosts first) or ask the user to free space. A run stopped part-way can be repeated with the same
+   `-e snapshot=true`: a guest that already has that day's `prepatch-<date>` snapshot keeps it.
    Before patching, review check-updates' `autoremove_protected` (and `autoremove_packages`): show the user
    any host that has some, and leave it to them (a package to mark manual with `apt-mark manual`, or a
    removal they want). check-updates also shows `config_leftovers`; offer `-e purge=true` only when the

@@ -3,8 +3,14 @@
 #   ansible-playbook playbooks/patch-linux.yml -e target=<group|host> [-e security_only=true]
 #       [-e reboot=never|if_required|always] [-e restart_services=true]
 #       [-e snapshot=true -e hm_scripts=$HM/scripts [-e snapshot_missing=skip]] [-e autoremove=false] [-e purge=true]
+#       [-e clean_cache=true] [-e patch_min_free_mb=500]
 #       [-e pre_hook=… -e post_hook=… -e health_check=…] [-e order=vip_holder_last -e vip=<ip>]
 #
+# Free space first (GitHub issue #57): before any host is snapshotted or patched, every target needs
+# patch_min_free_mb (default 500) free on / and /var and patch_min_free_boot_mb (default 100) on a separate
+# /boot, else the run stops listing them: a full disk would fail one host's update mid-batch and leave the
+# others updated but not rebooted or checked. -e clean_cache=true first cleans the package cache
+# (apt-get clean / dnf clean all) on hosts below it.
 # Safe defaults: stop at the first failure, NO reboots. Batch size: -e patch_serial=<n|n%>, else
 # ansible.patch_serial in homelab.yaml, else 1. Always one host at a time (and a larger -e patch_serial is
 # refused) when a target is in a `clusters:` group, has patch_requires_approval, or the run has cluster
@@ -90,6 +96,18 @@
         {%- set _ = out.update(r.not_a_guest | combine(r.no_snapshot)) -%}
       {%- endif -%}
       {{ out }}
+    # "<mount> <free> MB free, needs <min>" for each mount of /, /var and /boot short of space (df -Pm)
+    hm_low_space: >-
+      {%- set out = [] -%}
+      {%- for line in hm_df.stdout_lines | default([]) | unique if line.split() | length >= 6 -%}
+        {%- set f = line.split() -%}
+        {%- set need = (patch_min_free_boot_mb | default(100)) if f[5] == '/boot'
+                       else (patch_min_free_mb | default(500)) -%}
+        {%- if f[3] | int < need | int and f[5] not in out | map('split') | map('first') -%}
+          {%- set _ = out.append(f[5] ~ ' ' ~ f[3] ~ ' MB free, needs ' ~ need) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
     hm_cluster_run: "{{ pre_hook is defined or post_hook is defined or health_check is defined or order is defined }}"
     # hosts that must be patched one at a time: cluster members, guarded hosts, or any host of a cluster run
     hm_one_at_a_time: >-
@@ -110,6 +128,56 @@
         fail_msg: >-
           patch_serial={{ patch_serial | default('') }} with cluster or guarded hosts ({{ hm_one_at_a_time | unique | join(', ') }}):
           patch them in their own run with serial 1.
+      run_once: true
+
+    # Before any batch (GitHub issue #57): a host that runs out of space mid-update stops the run with the
+    # rest of its batch updated but not rebooted, restarted or checked
+    - name: Free space on /, /var and /boot (MB)
+      ansible.builtin.shell: &hm_df_cmd |
+        for d in / /var /boot; do [ -d "$d" ] && df -Pm "$d" | tail -n +2; done; true
+      register: hm_df
+      changed_when: false
+      check_mode: false
+
+    - name: Mounts short of space
+      ansible.builtin.set_fact:
+        hm_space_short: "{{ hm_low_space }}"
+
+    - name: Clean the package cache where space is short (clean_cache=true)
+      ansible.builtin.shell: |
+        if command -v apt-get >/dev/null 2>&1; then apt-get clean
+        elif command -v dnf >/dev/null 2>&1; then dnf clean all
+        elif command -v yum >/dev/null 2>&1; then yum clean all
+        fi
+      become: true
+      register: hm_cleaned
+      when: clean_cache | default(false) | bool and hm_space_short | length > 0
+
+    - name: Free space after cleaning
+      ansible.builtin.shell: *hm_df_cmd
+      register: hm_df
+      changed_when: false
+      check_mode: false
+      when: hm_cleaned is changed
+
+    - name: Mounts still short of space
+      ansible.builtin.set_fact:
+        hm_space_short: "{{ hm_low_space }}"
+      when: hm_cleaned is changed
+
+    - name: Refuse if a target is short of space (nothing was snapshotted or patched yet)
+      ansible.builtin.assert:
+        that: short | length == 0
+        fail_msg: >-
+          Not enough free space: {{ short | join('; ') }}. Nothing was snapshotted or patched. Free space there
+          (-e clean_cache=true cleans the package cache first), or leave these hosts out of the target.
+      vars:
+        short: >-
+          {%- set out = [] -%}
+          {%- for h in ansible_play_hosts if hostvars[h].hm_space_short | default([]) | length > 0 -%}
+            {%- set _ = out.append(h ~ ' (' ~ hostvars[h].hm_space_short | join(', ') ~ ')') -%}
+          {%- endfor -%}
+          {{ out }}
       run_once: true
 
     # Before any batch (GitHub issue #49): one guest that can't be snapshotted would otherwise stop the run

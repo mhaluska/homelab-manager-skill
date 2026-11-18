@@ -88,6 +88,12 @@
           failed_when: false
           when: ansible_facts.os_family == "RedHat"
 
+        - name: Free space on /, /var and /boot (MB)
+          ansible.builtin.shell: |
+            for d in / /var /boot; do [ -d "$d" ] && df -Pm "$d" | tail -n +2; done; true
+          register: hm_df
+          changed_when: false
+
         - name: Reboot required, services still running replaced code
           ansible.builtin.include_tasks: tasks/restart-check.yml
 
@@ -112,7 +118,24 @@
               autoremove_packages: "{{ hm_removable }}"
               autoremove_protected: "{{ hm_protected }}"
               config_leftovers: "{{ (deb_left.stdout | default(0) | int) if ansible_facts.os_family == 'Debian' else 0 }}"
+              # MB free per mount point; low_space: below what patch-linux.yml needs (it refuses to start)
+              free_mb: "{{ hm_free }}"
+              root_free_mb: "{{ hm_free['/'] | default(none) }}"
+              low_space: >-
+                {%- set out = [] -%}
+                {%- for mnt, mb in hm_free.items() -%}
+                  {%- set need = (patch_min_free_boot_mb | default(100)) if mnt == '/boot'
+                                 else (patch_min_free_mb | default(500)) -%}
+                  {%- if mb < need | int -%}{%- set _ = out.append(mnt) -%}{%- endif -%}
+                {%- endfor -%}
+                {{ out }}
           vars:
+            hm_free: >-
+              {%- set out = {} -%}
+              {%- for line in hm_df.stdout_lines | default([]) if line.split() | length >= 6 -%}
+                {%- set _ = out.update({line.split()[5]: line.split()[3] | int}) -%}
+              {%- endfor -%}
+              {{ out }}
             hm_removable: >-
               {{ ((deb_autoremove.stdout_lines | default([]))
                   + (rh_left.stdout_lines | default([]) | map('regex_replace', '^(.+)-(\d+:)?[^-]+-[^-]+$', '\1')))
