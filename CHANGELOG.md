@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.23.0 — 2026-11-18
+- Guard: a Python script or heredoc is checked by the commands it actually starts ([#60](https://github.com/mhaluska/homelab-manager-skill/issues/60)): `subprocess`,
+  `os.system` and `exec*` calls and nmap argv lists, with the line named in the reason. The word nmap in strings,
+  comments or column labels is no scan any more, and a heredoc fed to a script (`python3 issues.py add <<EOF`) is
+  data, not code. nmap targets only known at run time ask.
+- Guest addresses ([#56](https://github.com/mhaluska/homelab-manager-skill/issues/56), [#61](https://github.com/mhaluska/homelab-manager-skill/issues/61)): `proxmox_inventory.py --details` lists an LXC container's
+  configured `ip=` next to what Proxmox reports (one address per interface, so a keepalived VIP could hide the
+  container's own) and marks the others `extra`. `proxmox_to_inventory.py` picks `ansible_host` on a NIC of the
+  guest's config (by MAC), inside the site's ranges / `authorized_ranges`, not on a tunnel, bridge or container
+  interface (WireGuard, Docker), instead of the lowest address.
+- `patch-linux.yml`:
+  - autoremove is simulated first and skipped on a host (reported, not failed) when it would remove a package
+    matching `autoremove_protect` (SSSD, NSS/PAM, Kerberos, sudo, SSH, systemd, networking) or more than
+    `autoremove_max` (20) packages ([#58](https://github.com/mhaluska/homelab-manager-skill/issues/58)): a removed `freeipa-client` had left SSSD autoremovable.
+  - free space on `/`, `/var` and `/boot` of every target is checked before anything is snapshotted or patched
+    (`patch_min_free_mb`, `patch_min_free_boot_mb`; `-e clean_cache=true` cleans the package cache first)
+    ([#57](https://github.com/mhaluska/homelab-manager-skill/issues/57)).
+  - a Proxmox LXC guest that stays stopped after its in-guest reboot is started once through the API (with
+    `hm_scripts`, after `lxc_reboot_timeout`) instead of failing after 900 s ([#59](https://github.com/mhaluska/homelab-manager-skill/issues/59)).
+- `check-updates.yml` reports `autoremove_packages`, `autoremove_protected`, `free_mb` and `low_space`.
+- `pve_snapshot.py rollback` starts a guest that was running again and prints its final status (`--no-start`);
+  new `pve_guest.py status|start` ([#59](https://github.com/mhaluska/homelab-manager-skill/issues/59)).
+- New `guest_map.py` ([#62](https://github.com/mhaluska/homelab-manager-skill/issues/62)): `discovery/guest-map.md`, every guest NIC with VLAN, bridge and addresses
+  (config, agent, LXC, RouterOS by MAC), with findings: addresses outside their VLAN's cidr, unknown tags, NICs
+  without an address, stale or VIP `ansible_host`, VMIDs off `vmid_scheme`. The drift report points to it.
+- Upgrade notes for `patch-linux.yml` and `check-updates.yml`: `init_repo.py --sync-managed`.
+
 ## 0.22.0 — 2026-11-18
 - `patch-linux.yml` waits for slow services after a reboot ([#53](https://github.com/mhaluska/homelab-manager-skill/issues/53)):
   it waits until the boot has finished (`systemctl is-system-running`), and `health_services` units still

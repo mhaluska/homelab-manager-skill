@@ -323,6 +323,34 @@
       },
       "text": "OpenTofu environments take an LXC storage (defaults.lxc_datastore) and storage per node (defaults.node_datastores, homelab.yaml proxmox.nodes) for a cluster without shared storage or a node with other disks; VMs may name template_node (#54). The drift report checks each node's storage.",
       "action": "In each environment under tofu/environments/, bring the locals block and module arguments of main.tf and the defaults/vms types of variables.tf in line with {HM}/assets/repo-template/tofu/environments/homelab/ (show the user the diff first), then tofu validate and plan: expect no changes. Set proxmox.lxc_storage / proxmox.nodes only if the user's storage needs them (drift report, Storage section)."
+    },
+    {
+      "version": "0.23.0",
+      "id": "patch-linux-autoremove-diskspace-lxc",
+      "kind": "template",
+      "when": {
+        "component": "ansible",
+        "file_lacks": [
+          "ansible/playbooks/patch-linux.yml",
+          "autoremove_protect"
+        ]
+      },
+      "text": "patch-linux.yml simulates autoremove and skips it on a host when it would remove authentication, NSS/PAM, sudo, SSH or networking packages (autoremove_protect) or more than autoremove_max (#58); checks free space on every target before anything is changed (patch_min_free_mb, -e clean_cache=true) (#57); and starts a Proxmox LXC guest that stays stopped after its reboot (with hm_scripts) instead of waiting 900 s (#59).",
+      "action": "Replace ansible/playbooks/patch-linux.yml with {template}, carrying over any local edits (show the user the diff first)."
+    },
+    {
+      "version": "0.23.0",
+      "id": "check-updates-autoremove-diskspace",
+      "kind": "template",
+      "when": {
+        "component": "ansible",
+        "file_lacks": [
+          "ansible/playbooks/check-updates.yml",
+          "autoremove_protected"
+        ]
+      },
+      "text": "check-updates.yml lists the packages autoremove would remove (autoremove_packages) and flags protected ones (autoremove_protected), and reports free space (free_mb, low_space) (#57, #58).",
+      "action": "Replace ansible/playbooks/check-updates.yml with {template}, carrying over any local edits (show the user the diff first)."
     }
   ]
 }
