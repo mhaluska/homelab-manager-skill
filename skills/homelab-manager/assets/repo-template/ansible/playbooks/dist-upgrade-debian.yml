@@ -1,0 +1,438 @@
+# Debian release upgrade, one release per run (GitHub issue #84): e.g. 11 bullseye → 12 bookworm, then a
+# second run to 13 trixie, never two releases at once.
+#
+#   ansible-playbook playbooks/dist-upgrade-debian.yml -e target=<host> -e target_release=<codename> --check
+#   ansible-playbook playbooks/dist-upgrade-debian.yml -e target=<host> -e target_release=<codename> \
+#       -e hm_scripts=$HM/scripts [-e snapshot=false] [-e foreign_sources=fail|disable|keep] [-e held_ok=true]
+#       [-e reboot=false] [-e dist_upgrade_min_free_mb=2000] [-e debian_mirrors='http://cache.lan:3142/']
+#
+# --check (the guard lets it run without asking) is the pre-flight only, on every target, changing nothing but
+# the package lists: Debian (not Ubuntu: do-release-upgrade, references/patching.md), target_release the next
+# release, not a Proxmox node (patch-proxmox-node.yml / the Proxmox upgrade guide), free space (default 2000 MB
+# on / and /var, 200 MB on /boot), the current release fully patched (patch-linux.yml first), dpkg consistent
+# (dpkg --audit), sshd -t passes, no held packages (held_ok=true: keep them held), and the APT sources:
+# foreign entries (third-party repositories, other releases such as sid, mirrors not under debian.org unless
+# listed in debian_mirrors) and pin files refuse the run unless foreign_sources=disable (switched off
+# reversibly, re-enable each once it has a repository for the new release) or keep (left as they are, at the
+# user's risk). Without --check the guard asks.
+#
+# Then one host at a time (serial 1, stop at the first failure): a snapshot (snapshot=true by default:
+# pve_snapshot.py / lxd_snapshot.py for hosts with lxd_host; needs hm_scripts), a backup of the APT, SSH,
+# PAM/NSS, SSSD, Kerberos and sudo configuration to /root/hm-dist-upgrade-<from>-<date>.tar.gz, the sources
+# rewritten to target_release (tasks/debian-sources.sh), a simulation that refuses (and puts the sources back)
+# when the upgrade would remove a package matching autoremove_protect (the list of patch-linux.yml), then
+# `apt-get upgrade --without-new-pkgs` and `apt-get full-upgrade` with --force-confold (local configuration
+# kept, the maintainer's version saved as *.dpkg-dist) in a transient systemd unit, so an SSH restart during
+# the upgrade doesn't stop it (log: /var/log/hm-dist-upgrade.log). After it: dpkg --audit, sshd -t (before the
+# reboot: a broken sshd would lock Ansible out), the reboot (reboot=false: none, the new kernel waits), the
+# release now reported, health_services, and no unit failed that didn't before (failed_units_ignore,
+# lxc_failed_units_ignore). Packages left for autoremove and the *.dpkg-dist files are reported, not touched:
+# review them, then patch-linux.yml (autoremove) cleans up. Remove the snapshot after a good run (the user's yes).
+- name: Pre-flight for a Debian release upgrade (changes nothing but the package lists)
+  hosts: "{{ target | default('__no_target__') }}"
+  gather_facts: true
+  become: true
+  any_errors_fatal: true   # one host not ready: nothing changes anywhere
+  vars:
+    hm_releases: [buster, bullseye, bookworm, trixie, forky, duke]
+    hm_from: "{{ ansible_facts.distribution_release | default('') }}"
+    hm_next: "{{ hm_releases[hm_releases.index(hm_from) + 1] if hm_from in hm_releases[:-1] else '' }}"
+  tasks:
+    - name: target and target_release are required
+      ansible.builtin.assert:
+        that: target is defined and target | length > 0 and target_release is defined and target_release | length > 0
+        fail_msg: "Pass -e target=<host> -e target_release=<codename> (one release after the host's current one)."
+      run_once: true
+
+    - name: Debian, one release at a time, not a Proxmox node
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.distribution == 'Debian'
+          - hm_next | length > 0
+          - target_release == hm_next
+          - not (patch_requires_approval | default(false) | bool)
+          - "'proxmox_nodes' not in group_names"
+        fail_msg: >-
+          {{ inventory_hostname }}: {{ ansible_facts.distribution }} {{ hm_from }}{{
+          (' — only Debian (Ubuntu: do-release-upgrade, references/patching.md)') if ansible_facts.distribution != 'Debian'
+          else (' — not a Proxmox node: patch-proxmox-node.yml and the Proxmox upgrade guide')
+               if patch_requires_approval | default(false) | bool or 'proxmox_nodes' in group_names
+          else (' — the next release is ' ~ (hm_next or 'unknown') ~ ', not ' ~ target_release ~ ' (one release per run)') }}
+
+    - name: Free space on /, /var and /boot (MB)
+      ansible.builtin.shell: for d in / /var /boot; do [ -d "$d" ] && df -Pm "$d" | tail -n +2; done; true
+      register: hm_df
+      changed_when: false
+      check_mode: false
+
+    - name: Refresh the package lists
+      ansible.builtin.command: apt-get -q update
+      changed_when: false
+      check_mode: false
+
+    - name: Pending updates of the current release
+      ansible.builtin.shell: apt-get -s -o Debug::NoLocking=1 dist-upgrade | grep -c '^Inst ' || true
+      register: hm_pending
+      changed_when: false
+      check_mode: false
+
+    - name: dpkg consistency (dpkg --audit)
+      ansible.builtin.command: dpkg --audit
+      register: hm_audit
+      changed_when: false
+      check_mode: false
+
+    - name: Held packages
+      ansible.builtin.command: apt-mark showhold
+      register: hm_held
+      changed_when: false
+      check_mode: false
+
+    - name: sshd configuration (sshd -t)
+      ansible.builtin.command: sshd -t
+      register: hm_sshd
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: APT sources
+      ansible.builtin.script: "tasks/debian-sources.sh list {{ hm_from }} '{{ debian_mirrors | default('') }}'"
+      register: hm_sources
+      changed_when: false
+      check_mode: false
+
+    - name: APT pins
+      ansible.builtin.script: tasks/debian-sources.sh pins
+      register: hm_pins
+      changed_when: false
+      check_mode: false
+
+    - name: Findings
+      ansible.builtin.set_fact:
+        hm_foreign: >-
+          {{ hm_sources.stdout_lines | select('search', '\tforeign\t') | map('regex_replace', '\tforeign\t', ': ')
+             | map('regex_replace', '\t', ' ') | list }}
+        hm_pin_files: "{{ hm_pins.stdout_lines | select | list }}"
+        hm_preflight: >-
+          {%- set out = [] -%}
+          {%- for line in hm_df.stdout_lines | unique if line.split() | length >= 6 -%}
+            {%- set f = line.split() -%}
+            {%- set need = 200 if f[5] == '/boot' else (dist_upgrade_min_free_mb | default(2000)) -%}
+            {%- if f[3] | int < need | int -%}{%- set _ = out.append(f[5] ~ ': ' ~ f[3] ~ ' MB free, needs ' ~ need) -%}{%- endif -%}
+          {%- endfor -%}
+          {%- if hm_pending.stdout | trim | int > 0 -%}
+            {%- set _ = out.append(hm_pending.stdout | trim ~ ' updates of ' ~ hm_from ~ ' pending: run patch-linux.yml first') -%}
+          {%- endif -%}
+          {%- if hm_audit.stdout | trim | length > 0 -%}
+            {%- set _ = out.append('dpkg --audit reports problems: ' ~ hm_audit.stdout | trim | truncate(200)) -%}
+          {%- endif -%}
+          {%- if hm_held.stdout_lines | select | list and not held_ok | default(false) | bool -%}
+            {%- set _ = out.append('held packages (held_ok=true keeps them held): ' ~ hm_held.stdout_lines | select | join(', ')) -%}
+          {%- endif -%}
+          {%- if hm_sshd.rc != 0 -%}
+            {%- set _ = out.append('sshd -t fails: ' ~ (hm_sshd.stderr | trim | truncate(200))) -%}
+          {%- endif -%}
+          {%- if not (hm_sources.stdout_lines | select('search', '\tdebian\t') | list) -%}
+            {%- set _ = out.append('no Debian ' ~ hm_from ~ ' entries in the APT sources (a local mirror: debian_mirrors)') -%}
+          {%- endif -%}
+          {{ out }}
+
+    - name: Foreign APT sources and pins
+      ansible.builtin.debug:
+        msg: "{{ hm_foreign + hm_pin_files | map('regex_replace', '^', 'pin file ') | list }}"
+      when: hm_foreign | length > 0 or hm_pin_files | length > 0
+
+    - name: Pre-flight passed
+      ansible.builtin.assert:
+        that:
+          - hm_preflight | length == 0
+          - (foreign_sources | default('fail')) in ['disable', 'keep'] or (hm_foreign + hm_pin_files) | length == 0
+          - (foreign_sources | default('fail')) in ['fail', 'disable', 'keep']
+        fail_msg: >-
+          {{ inventory_hostname }} ({{ hm_from }} → {{ target_release }}) is not ready: {{ (hm_preflight + (
+          ['foreign APT sources or pins (listed above): -e foreign_sources=disable switches them off for the
+          upgrade (re-enable each once it has a ' ~ target_release ~ ' repository), keep leaves them']
+          if (foreign_sources | default('fail')) not in ['disable', 'keep'] and (hm_foreign + hm_pin_files) | length > 0
+          else [])) | join('; ') }}. Nothing was changed.
+
+    - name: Snapshot needs the skill's scripts
+      ansible.builtin.assert:
+        that: hm_scripts is defined
+        fail_msg: "Pass -e hm_scripts=<skill dir>/scripts for the snapshot (or -e snapshot=false: the user's yes)."
+      run_once: true
+      when: snapshot | default(true) | bool
+
+    - name: Can it be snapshotted? (pve_snapshot.py / lxd_snapshot.py check, read-only)
+      ansible.builtin.command:
+        argv: >-
+          {{ (['python3', hm_scripts ~ '/lxd_snapshot.py', 'check', inventory_hostname] if lxd_host is defined
+              else ['python3', hm_scripts ~ '/pve_snapshot.py', 'check', (proxmox_vmid | default(inventory_hostname_short)) | string]
+                   + (['--site', hm_site] if hm_site else [])) }}
+        chdir: "{{ playbook_dir }}/../.."
+      vars:
+        hm_site: "{{ group_names | select('match', '^site_') | map('regex_replace', '^site_', '') | first | default('') }}"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      check_mode: false
+      when: snapshot | default(true) | bool
+
+    - name: Ready
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: {{ hm_from }} → {{ target_release }} ready{{
+          (', foreign sources/pins: ' ~ foreign_sources) if (hm_foreign + hm_pin_files) | length > 0 else '' }}{{
+          ' (check mode: nothing changed)' if ansible_check_mode else '' }}.
+
+- name: Debian release upgrade
+  hosts: "{{ target | default('__no_target__') }}"
+  serial: 1
+  max_fail_percentage: 0
+  any_errors_fatal: true
+  gather_facts: false
+  become: true
+  vars:
+    snapshot: true
+    reboot: true
+    hm_apt_env:
+      DEBIAN_FRONTEND: noninteractive
+      APT_LISTCHANGES_FRONTEND: none
+      NEEDRESTART_MODE: a
+    # the same lists as in patch-linux.yml (override autoremove_protect / failed_units_ignore in group_vars)
+    hm_autoremove_protect: [sssd*, libsss*, libnss-*, libpam-*, nss-*, pam*, freeipa-*, ipa-*, krb5-*, libkrb5*,
+                            realmd, adcli, winbind*, oddjob*, openssh-*, ssh, sudo*, polkit*, systemd*, dbus*,
+                            network*, netplan*, ifupdown*, NetworkManager*, dhcp*, isc-dhcp-*, resolvconf,
+                            cloud-init, python3, python3-apt, python3-dnf*, chrony*, ntp*]
+    lxc_failed_units_ignore: [auth-rpcgss-module.service, systemd-modules-load.service, systemd-binfmt.service,
+                              proc-sys-fs-binfmt_misc.mount, sys-kernel-config.mount, sys-kernel-debug.mount,
+                              sys-kernel-tracing.mount, systemd-journald-audit.socket]
+  tasks:
+    - name: Check mode ends after the pre-flight
+      ansible.builtin.meta: end_play
+      when: ansible_check_mode
+
+    # fixed once: the release changes during the run, and now() would give each task another name
+    - name: Release, snapshot and backup names
+      ansible.builtin.set_fact:
+        hm_from: "{{ ansible_facts.distribution_release }}"
+        snapshot_name: "{{ snapshot_name | default('predistupgrade-' ~ now().strftime('%Y%m%d')) }}"
+        hm_backup: "/root/hm-dist-upgrade-{{ ansible_facts.distribution_release }}-{{ now().strftime('%Y%m%d-%H%M') }}.tar.gz"
+
+    - name: Failed systemd units before the upgrade
+      ansible.builtin.command: systemctl list-units --state=failed --no-legend --plain
+      register: failed_before
+      changed_when: false
+
+    - name: Snapshot
+      ansible.builtin.command:
+        argv: >-
+          {{ (['python3', hm_scripts ~ '/lxd_snapshot.py', 'create', inventory_hostname] if lxd_host is defined
+              else ['python3', hm_scripts ~ '/pve_snapshot.py', 'create', (proxmox_vmid | default(inventory_hostname_short)) | string]
+                   + (['--site', hm_site] if hm_site else []))
+             + ['--name', snapshot_name] }}
+        chdir: "{{ playbook_dir }}/../.."
+      vars:
+        hm_site: "{{ group_names | select('match', '^site_') | map('regex_replace', '^site_', '') | first | default('') }}"
+      delegate_to: localhost
+      become: false
+      register: snap
+      changed_when: "'done' in snap.stdout"
+      when: snapshot | bool
+
+    - name: Back up the APT, SSH, PAM/NSS, SSSD, Kerberos and sudo configuration
+      ansible.builtin.shell: |
+        set -e
+        list=""
+        for p in /etc/apt /etc/ssh /etc/pam.d /etc/nsswitch.conf /etc/sssd /etc/krb5.conf /etc/krb5.conf.d \
+                 /etc/sudoers /etc/sudoers.d /etc/security; do
+          [ -e "$p" ] && list="$list ${p#/}"
+        done
+        tar -C / -czf {{ hm_backup }} $list
+        chmod 600 {{ hm_backup }}
+
+    - name: Switch foreign APT sources and pins off (foreign_sources=disable)
+      ansible.builtin.script: "tasks/debian-sources.sh disable {{ hm_from }} '{{ debian_mirrors | default('') }}'"
+      register: hm_disabled
+      when: (foreign_sources | default('fail')) == 'disable'
+
+    - name: Point the Debian sources at {{ target_release }}
+      ansible.builtin.script: "tasks/debian-sources.sh rewrite {{ hm_from }} {{ target_release }} '{{ debian_mirrors | default('') }}'"
+      register: hm_rewritten
+
+    - name: Simulate the upgrade
+      block:
+        - name: Package lists of {{ target_release }}
+          ansible.builtin.command: apt-get -q update
+          changed_when: false
+
+        - name: What the full upgrade would remove
+          ansible.builtin.shell: >-
+            apt-get -s -o Debug::NoLocking=1 full-upgrade | awk '/^Remv /{sub(/:.*/, "", $2); print $2}'
+          register: hm_removes
+          changed_when: false
+
+        - name: It removes nothing protected
+          ansible.builtin.assert:
+            that: hm_protected | length == 0
+            fail_msg: >-
+              The upgrade to {{ target_release }} would remove {{ hm_protected | join(', ') }} (autoremove_protect:
+              authentication, SSH, sudo, networking). The APT configuration was put back; nothing was upgraded.
+              Find what replaces them in {{ target_release }} first.
+          vars:
+            hm_protected: >-
+              {%- set out = [] -%}
+              {%- for pkg in hm_removes.stdout_lines -%}
+                {%- for pat in autoremove_protect | default(hm_autoremove_protect, true)
+                    if pkg is match('^' ~ (pat | regex_escape | replace('\*', '.*') | replace('\?', '.')) ~ '$') -%}
+                  {%- set _ = out.append(pkg) -%}
+                {%- endfor -%}
+              {%- endfor -%}
+              {{ out | unique }}
+      rescue:
+        - name: Put the APT configuration back
+          ansible.builtin.shell: |
+            set -e
+            rm -rf /etc/apt.hm-failed && mv /etc/apt /etc/apt.hm-failed
+            tar -C / -xzf {{ hm_backup }} etc/apt
+            apt-get -q update || true
+
+        - name: Stop here
+          ansible.builtin.fail:
+            msg: "{{ ansible_failed_result.msg | default('the simulation failed') }} (the rewritten configuration is in /etc/apt.hm-failed)"
+
+    - name: No earlier upgrade unit left
+      ansible.builtin.command: systemctl reset-failed hm-dist-upgrade
+      changed_when: false
+      failed_when: false
+
+    # A transient unit: the upgrade restarts sshd and may drop this connection; it keeps running regardless.
+    # systemd-run returns once it started (a simple service); the next task waits for it.
+    - name: Upgrade to {{ target_release }} (minimal upgrade, then full upgrade; /var/log/hm-dist-upgrade.log)
+      ansible.builtin.command:
+        argv:
+          - systemd-run
+          - --unit=hm-dist-upgrade
+          - --description=homelab-manager Debian release upgrade
+          - --property=StandardOutput=append:/var/log/hm-dist-upgrade.log
+          - --property=StandardError=append:/var/log/hm-dist-upgrade.log
+          - "--setenv=DEBIAN_FRONTEND={{ hm_apt_env.DEBIAN_FRONTEND }}"
+          - "--setenv=APT_LISTCHANGES_FRONTEND={{ hm_apt_env.APT_LISTCHANGES_FRONTEND }}"
+          - "--setenv=NEEDRESTART_MODE={{ hm_apt_env.NEEDRESTART_MODE }}"
+          - /bin/sh
+          - -c
+          - >-
+            set -e;
+            o='-y -q -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef';
+            apt-get $o upgrade --without-new-pkgs;
+            apt-get $o full-upgrade
+      register: hm_started
+
+    # a unit that finished well is unloaded (inactive, success); a failed one stays (failed, exit-code)
+    - name: Wait for the upgrade (up to dist_upgrade_timeout, default 3600 s)
+      ansible.builtin.command: systemctl show hm-dist-upgrade -p ActiveState -p Result
+      register: hm_unit
+      changed_when: false
+      until: (hm_unit.stdout_lines | select('match', '^ActiveState=') | first | default('=')).split('=')[1]
+             not in ['activating', 'active', 'reloading', 'deactivating']
+      retries: "{{ ((dist_upgrade_timeout | default(3600) | int) / 20) | round(0, 'ceil') | int }}"
+      delay: 20
+
+    - name: The upgrade succeeded
+      ansible.builtin.assert:
+        that:
+          - "'Result=success' in hm_unit.stdout_lines"
+          - "'ActiveState=failed' not in hm_unit.stdout_lines"
+        fail_msg: >-
+          The upgrade to {{ target_release }} failed ({{ hm_unit.stdout_lines | join(' ') }}): see
+          /var/log/hm-dist-upgrade.log and `journalctl -u hm-dist-upgrade` on {{ inventory_hostname }}. Not
+          rebooted. Fix it there (`dpkg --configure -a`, `apt-get -f install`) or roll back to the snapshot.
+
+    - name: Forget the finished unit
+      ansible.builtin.command: systemctl reset-failed hm-dist-upgrade
+      changed_when: false
+      failed_when: false
+
+    - name: dpkg consistency after the upgrade
+      ansible.builtin.command: dpkg --audit
+      register: hm_audit_after
+      changed_when: false
+      failed_when: hm_audit_after.stdout | trim | length > 0
+
+    - name: sshd configuration still valid (before the reboot)
+      ansible.builtin.command: sshd -t
+      changed_when: false
+
+    - name: The maintainer's configuration files left to review (*.dpkg-dist, *.ucf-dist)
+      ansible.builtin.shell: find /etc \( -name '*.dpkg-dist' -o -name '*.ucf-dist' -o -name '*.dpkg-new' \) -newer {{ hm_backup }} 2>/dev/null || true
+      register: hm_dist_files
+      changed_when: false
+
+    - name: Reboot into {{ target_release }}
+      ansible.builtin.reboot:
+        reboot_timeout: 900
+        msg: "Reboot by homelab-manager after the release upgrade to {{ target_release }}"
+      when: reboot | bool
+
+    - name: Wait until the boot has finished
+      ansible.builtin.command: systemctl is-system-running
+      register: hm_boot_state
+      changed_when: false
+      failed_when: false
+      until: hm_boot_state.stdout | trim not in ['initializing', 'starting']
+      retries: "{{ ((health_timeout | default(300) | int) / 10) | round(0, 'ceil') | int }}"
+      delay: 10
+      when: reboot | bool
+
+    - name: Facts after the upgrade
+      ansible.builtin.setup:
+        gather_subset: [min]
+
+    - name: Now on {{ target_release }}
+      ansible.builtin.assert:
+        that: ansible_facts.distribution_release == target_release
+        fail_msg: "{{ inventory_hostname }} reports {{ ansible_facts.distribution_release }}, not {{ target_release }}."
+
+    - name: Required services are active
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+      register: svc
+      until: svc.status.ActiveState | default('') not in ['activating', 'reloading', 'deactivating']
+      retries: "{{ ((health_timeout | default(300) | int) / 10) | round(0, 'ceil') | int }}"
+      delay: 10
+      failed_when: svc.status.ActiveState | default('') != "active"
+      loop: "{{ health_services | default([]) }}"
+
+    - name: Failed systemd units after the upgrade
+      ansible.builtin.command: systemctl list-units --state=failed --no-legend --plain
+      register: failed_after
+      changed_when: false
+
+    - name: No new failed units
+      ansible.builtin.assert:
+        that: hm_new_failed | length == 0
+        fail_msg: >-
+          New failed units: {{ hm_new_failed | join(', ') }}. Check `journalctl -b -u <unit>`; a unit that can't
+          work in this release may need its package replaced. The snapshot is still there.
+      vars:
+        hm_new_failed: >-
+          {{ failed_after.stdout_lines | select | map('split') | map('first') | list
+             | difference(failed_before.stdout_lines | select | map('split') | map('first') | list)
+             | difference(failed_units_ignore | default([], true)
+                          + (lxc_failed_units_ignore if ansible_facts.virtualization_type | default('') == 'lxc' else [])) }}
+
+    - name: Packages autoremove would remove now (not removed — review, then patch-linux.yml)
+      ansible.builtin.shell: >-
+        apt-get -s -o Debug::NoLocking=1 autoremove | awk '/^Remv /{sub(/:.*/, "", $2); print $2}'
+      register: hm_autoremove
+      changed_when: false
+
+    - name: Result
+      ansible.builtin.debug:
+        msg:
+          upgraded: "{{ hm_from }} → {{ ansible_facts.distribution_release }} ({{ ansible_facts.distribution_version }})"
+          rebooted: "{{ reboot | bool }}"
+          snapshot: "{{ snapshot_name if snapshot | bool else 'none' }}"
+          backup: "{{ hm_backup }}"
+          foreign_sources_disabled: "{{ hm_disabled.stdout_lines | default([]) }}"
+          review_config: "{{ hm_dist_files.stdout_lines }}"
+          autoremovable: "{{ hm_autoremove.stdout_lines }}"

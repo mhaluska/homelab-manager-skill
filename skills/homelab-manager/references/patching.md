@@ -124,7 +124,38 @@ Set up once, each change with the user's yes:
 Restore (`restore <host> --name N`, the user's yes) restarts a running instance and loses its changes since. On
 ZFS only the newest snapshot can be restored: it refuses while newer ones exist; deleting those first is a
 separate yes. TrueNAS (its middleware manages Incus) and Synology (Docker only) are not covered: use their own
-dataset snapshots. A dist-upgrade of an instance: one release at a time, a snapshot before each, verify between.
+dataset snapshots. A release upgrade of an instance: the next section (it snapshots with `lxd_snapshot.py`).
+
+## Debian release upgrade (e.g. 11 → 12 → 13)
+
+`playbooks/dist-upgrade-debian.yml`, one release per run, one host at a time. An end-of-life release first gets
+a plan the user agrees to: which hosts, in which order (a jump host or one with central authentication last),
+when (the services on it are down during the upgrade and the reboot).
+1. Pre-flight, read-only: `ansible-playbook playbooks/dist-upgrade-debian.yml -e target=<host>
+   -e target_release=<next codename> -e hm_scripts=$HM/scripts --check`. It refuses a release that isn't the
+   next one, Ubuntu, Proxmox nodes, short space (`dist_upgrade_min_free_mb`, default 2000 on / and /var),
+   pending updates of the current release (patch-linux.yml first), `dpkg --audit` problems, held packages
+   (`held_ok=true` keeps them held), a failing `sshd -t`, and foreign APT sources or pin files: third-party
+   repositories, other releases (sid, testing), mirrors outside debian.org (list a local mirror or cache in
+   `debian_mirrors`). Show them to the user: `foreign_sources=disable` switches them off for the upgrade,
+   `keep` leaves them (only when each already has a repository for the new release).
+2. The upgrade (the guard asks): the same command without `--check`, plus `-e foreign_sources=…` as agreed.
+   It snapshots (`snapshot=false` only with the user's yes), backs up the APT, SSH, PAM/NSS, SSSD, Kerberos
+   and sudo configuration to `/root/hm-dist-upgrade-<release>-<date>.tar.gz`, rewrites the Debian sources
+   (bookworm adds `non-free-firmware` where `non-free` was), simulates and stops, with the old sources put
+   back, if the upgrade would remove a package matching `autoremove_protect`, then runs `upgrade
+   --without-new-pkgs` and `full-upgrade` with `--force-confold` in the transient unit `hm-dist-upgrade`
+   (survives an sshd restart; log `/var/log/hm-dist-upgrade.log`, `dist_upgrade_timeout` default 3600 s).
+   Then `dpkg --audit`, `sshd -t` before the reboot, the reboot (`reboot=false`: later), the new release,
+   `health_services` and no new failed units.
+3. Report `review_config` (the maintainer's versions of changed configuration files, `*.dpkg-dist`: merge what
+   matters), `autoremovable` and the disabled sources. Re-enable a foreign source once it has a repository
+   for the new release: change its suite, remove the `#hm-disabled ` prefix (one-line format) or the
+   `#hm-disabled` and `Enabled: no` lines (deb822), and drop `.hm-disabled` from pin files; then `apt-get
+   update`. Then `check-updates.yml`, patch-linux.yml for the autoremove, and the next release in a new run.
+   Remove the snapshot after a good run (the user's yes).
+Rollback: the snapshot (`pve_snapshot.py rollback` / `lxd_snapshot.py restore`, the user's yes). Ubuntu
+(`do-release-upgrade`) is not covered: do it by hand with the same order of steps.
 
 ## Patch Proxmox nodes
 

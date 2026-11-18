@@ -195,6 +195,9 @@ class GuardInfraTests(unittest.TestCase):
 
     def test_playbooks(self):
         self.assertEqual(decision("ansible-playbook playbooks/patch-linux.yml -e target=linux", self.d), "ask")
+        dist = "ansible-playbook playbooks/dist-upgrade-debian.yml -e target=jump -e target_release=bookworm"
+        self.assertEqual(decision(dist, self.d), "ask")                                  # GitHub issue #84
+        self.assertIsNone(decision(dist + " --check", self.d))                           # the pre-flight
         self.assertIsNone(decision("ansible-playbook playbooks/patch-linux.yml -e target=linux --check --diff", self.d))
         self.assertEqual(decision("ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=pve1", self.d), "ask")
         self.assertEqual(decision("ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=pve1 "

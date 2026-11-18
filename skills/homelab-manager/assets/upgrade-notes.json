@@ -540,6 +540,14 @@
       "text": "check-updates.yml also reports QNAP NAS (group qnap, raw only, read-only): installed firmware with QTS's last update check, and installed apps with a newer version in App Center's cached catalogue, into discovery/updates.json (#81).",
       "edited": "This repo's copy has local edits, so --sync-managed did not replace it.",
       "action": "Only with a QNAP NAS in the qnap group: replace ansible/playbooks/check-updates.yml with {template}, carrying over any local edits (show the user the diff first), then run `ansible-playbook playbooks/check-updates.yml -e target=<a linux host> -e qnap_target=<the NAS>` and check its entry in discovery/updates.json. See references/windows-appliances.md 'QNAP NAS'."
+    },
+    {
+      "version": "0.31.0",
+      "id": "dist-upgrade-debian",
+      "kind": "template",
+      "when": {"component": "ansible", "file_missing": "ansible/playbooks/dist-upgrade-debian.yml"},
+      "text": "New playbooks/dist-upgrade-debian.yml upgrades a Debian host one release at a time (pre-flight with --check, snapshot, backup, sources rewritten, protected packages checked, sshd -t before the reboot, health afterwards) (#84).",
+      "action": "Copy {template} and {HM}/assets/repo-template/ansible/playbooks/tasks/debian-sources.sh into ansible/playbooks/ (the script into tasks/); see references/patching.md \"Debian release upgrade\"."
     }
   ]
 }

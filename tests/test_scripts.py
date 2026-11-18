@@ -2434,6 +2434,64 @@ class DiscoveryLayoutTests(unittest.TestCase):  # GitHub issue #73
         self.assertIn("default", hmlib.site_parts(f))
         self.assertEqual(hmlib.site_part(f, home), {"hosts": {"10.0.0.2": {}}})     # its own key wins
 
+    def test_debian_sources(self):  # GitHub issue #84
+        script = SCRIPTS.parent / "assets/repo-template/ansible/playbooks/tasks/debian-sources.sh"
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        (d / "sources.list.d").mkdir()
+        (d / "preferences.d").mkdir()
+        (d / "sources.list").write_text(
+            "# comment\n"
+            "deb http://deb.debian.org/debian bullseye main contrib non-free\n"
+            "deb [arch=amd64] http://security.debian.org/debian-security bullseye-security main\n"
+            "deb http://deb.debian.org/debian sid main\n"
+            "deb http://cache.lan:3142/debian bullseye-backports main\n")
+        (d / "sources.list.d/docker.list").write_text(
+            "deb [signed-by=/k.asc] https://download.docker.com/linux/debian bullseye stable\n")
+        (d / "sources.list.d/x.sources").write_text(
+            "Types: deb\nURIs: http://deb.debian.org/debian\nSuites: bullseye bullseye-updates\n"
+            "Components: main non-free\n\nTypes: deb\nURIs: https://repo.example/apt\nSuites: bullseye\n"
+            "Components: main\n")
+        (d / "preferences.d/unstable").write_text("Package: *\nPin: release a=unstable\nPin-Priority: 100\n")
+        sh = lambda *a: subprocess.run(["sh", str(script), *a], env={**os.environ, "HM_APT_ROOT": str(d)},
+                                       capture_output=True, text=True, check=True).stdout
+        kinds = lambda out: sorted((l.split("\t")[1], l.split("\t")[2]) for l in out.splitlines())
+        self.assertEqual(kinds(sh("list", "bullseye")), [
+            ("debian", "bullseye"), ("debian", "bullseye bullseye-updates"), ("debian", "bullseye-security"),
+            ("foreign", "bullseye"), ("foreign", "bullseye"), ("foreign", "bullseye-backports"), ("foreign", "sid")])
+        self.assertIn(("debian", "bullseye-backports"), kinds(sh("list", "bullseye", "http://cache.lan:3142/")))
+        self.assertEqual(sh("pins").strip(), str(d / "preferences.d/unstable"))
+        sh("disable", "bullseye")
+        sh("rewrite", "bullseye", "bookworm")
+        text = (d / "sources.list").read_text()
+        self.assertIn("deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware\n", text)
+        self.assertIn("http://security.debian.org/debian-security bookworm-security main\n", text)
+        self.assertIn("#hm-disabled deb http://deb.debian.org/debian sid main\n", text)
+        self.assertIn("#hm-disabled deb [signed-by=/k.asc] https://download.docker.com", (d / "sources.list.d/docker.list").read_text())
+        self.assertEqual((d / "sources.list.d/x.sources").read_text(),
+                         "Types: deb\nURIs: http://deb.debian.org/debian\nSuites: bookworm bookworm-updates\n"
+                         "Components: main non-free non-free-firmware\n\nTypes: deb\nURIs: https://repo.example/apt\n"
+                         "Suites: bullseye\nComponents: main\n#hm-disabled\nEnabled: no\n")
+        self.assertEqual(sorted(f.name for f in (d / "preferences.d").iterdir()), ["unstable.hm-disabled"])
+        self.assertEqual([l.split("\t")[1] for l in sh("list", "bookworm").splitlines()], ["debian"] * 3)
+        (d / "sources.list").write_text("deb http://security.debian.org/debian-security buster/updates main\n")
+        sh("rewrite", "buster", "bullseye")                                       # the suite was renamed
+        self.assertEqual((d / "sources.list").read_text(),
+                         "deb http://security.debian.org/debian-security bullseye-security main\n")
+
+    def test_dist_upgrade_playbook(self):  # GitHub issue #84
+        pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/dist-upgrade-debian.yml").read_text()
+        pre, upgrade = pb.split("\n- name: Debian release upgrade\n")
+        self.assertIn("any_errors_fatal: true", pre)
+        self.assertIn("target_release == hm_next", pre)                           # one release at a time
+        self.assertIn("ansible.builtin.meta: end_play\n      when: ansible_check_mode", upgrade)  # --check: pre-flight
+        self.assertIn("serial: 1", upgrade)
+        self.assertLess(upgrade.index("Snapshot"), upgrade.index("Point the Debian sources"))
+        self.assertLess(upgrade.index("It removes nothing protected"), upgrade.index("systemd-run"))
+        self.assertLess(upgrade.index("sshd configuration still valid"), upgrade.index("ansible.builtin.reboot"))
+        self.assertIn("--force-confold", upgrade)
+        self.assertIn("ansible/playbooks/dist-upgrade-debian.yml", (SCRIPTS / "init_repo.py").read_text())
+
     def test_check_updates_covers_qnap_read_only(self):  # GitHub issue #81
         pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/check-updates.yml").read_text()
         play = pb.split("- name: Firmware and app versions on QNAP NAS")[1].split("\n- name:")[0]
