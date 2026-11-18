@@ -179,7 +179,8 @@ python3 $HM/scripts/issues.py add --title "…" --kind script|guard|instructions
   bridges, user, paths, secrets → placeholders, counted in `Redacted:`). Anything still site-specific? Edit, re-run.
   A plain word redacted wrongly (a VLAN named "storage") → re-run with `--keep storage`.
   Fix wrong matches with `--match SKILL-002=<number>` / `--new SKILL-002`. Show the plan, get the
-  user's yes, run without `--dry-run` (the guard asks too), commit skill_issues.md. The marker stops
+  user's yes, run without `--dry-run` (the guard asks too; with `issues.auto_send: true`, which only the user sets,
+  their "report skill issues" is the yes and the guard doesn't ask), commit skill_issues.md. The marker stops
   re-sending; failures leave it for a retry. Labels are only set when the user may triage the repo.
 - `issues.py list|resolve`; `fixed [--github] [--apply]`: entries the release fixed (`--github`: also closed as
   not planned/split — ask, then resolve with the printed note or keep). `issues.report: false`: all local.

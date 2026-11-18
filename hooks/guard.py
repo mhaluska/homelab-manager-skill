@@ -29,6 +29,7 @@ sys.path.insert(0, str(PLUGIN_ROOT / "skills" / "homelab-manager" / "scripts"))
 import hmlib  # noqa: E402
 
 DENY, ASK = "deny", "ask"
+ISSUES_SEND = "Sends skill issues from skill_issues.md to the plugin's public GitHub repository (gh issue create / comment)."
 
 # (regex, decision, reason). Applied to the command text and to executed script contents.
 RULES: list[tuple[re.Pattern, str, str]] = [
@@ -94,8 +95,10 @@ RULES: list[tuple[re.Pattern, str, str]] = [
                 r"|pr\s+merge|workflow\s+run)\b"), ASK, "Changes the GitHub repository or its settings."),
     (re.compile(r"\bgh\s+api\b(?![^\n;&|]*(-X|--method)\s*GET)[^\n;&|]*((-X|--method)\s*(POST|PUT|PATCH|DELETE)"
                 r"|\s(-f|-F|--field|--raw-field|--input)\b)"), ASK, "Writes to the GitHub API."),
-    (re.compile(r"issues\.py\b[^\n;&|]*\s(open|report)\b(?![^\n;&|]*--dry-run)"), ASK,
-     "Sends skill issues from skill_issues.md to the plugin's public GitHub repository (gh issue create / comment)."),
+    (re.compile(r"issues\.py\b[^\n;&|]*\s(open|report)\b(?![^\n;&|]*--dry-run)"), ASK, ISSUES_SEND),
+    (re.compile(r"(config_set\.py|\byq\b[^\n;&|]*\s-i\b)[^\n;&|]*issues\.auto_send\s*=(?!=)"), ASK,
+     "Lets skill issues be sent to the public plugin repository without asking (issues.auto_send): only on the "
+     "user's own request."),
     # --- templates / git / misc -------------------------------------------------------
     (re.compile(r"\bpacker\s+build\b[^\n;&|]*\s-force\b"), ASK, "packer build -force overwrites an existing template."),
     (re.compile(r"\bgit\s+push\b[^\n;&|]*\s(--force|--force-with-lease|-f)\b"), ASK, "Force-push rewrites Git history."),
@@ -673,6 +676,23 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
     return findings
 
 
+def auto_send(cwd: str) -> bool:
+    """issues.auto_send: true in the repository's homelab.yaml (GitHub issue #114): the user opted in to sending skill
+    issues without this hook asking; raw `gh issue` writes still ask."""
+    try:
+        root = hmlib.find_repo_root(cwd)
+        return bool(root) and hmlib.get(hmlib.load_config(root), "issues.auto_send") is True
+    except Exception:   # noqa: BLE001 — unreadable config: keep asking
+        return False
+
+
+def opted_in(findings: list[tuple[str, str]], cwd: str) -> list[tuple[str, str]]:
+    """Drop the issues.py send question when the repository opted in to issues.auto_send."""
+    if any(r.endswith(ISSUES_SEND) for _, r in findings) and auto_send(cwd):
+        return [(d, r) for d, r in findings if not r.endswith(ISSUES_SEND)]
+    return findings
+
+
 def decide(findings: list[tuple[str, str]]) -> dict | None:
     if not findings:
         return None
@@ -695,7 +715,7 @@ def main() -> int:
     command = (payload.get("tool_input") or {}).get("command", "")
     cwd = payload.get("cwd") or os.getcwd()
     try:
-        out = decide(evaluate(command, cwd))
+        out = decide(opted_in(evaluate(command, cwd), cwd))
     except Exception as e:  # fail closed for anything infra-shaped
         out = decide([(ASK, f"guard error ({type(e).__name__}); review this command manually.")]) if INFRA_HINT.search(command) else None
     if out:

@@ -277,6 +277,21 @@ class HookProcessTests(unittest.TestCase):
             self.assertIn("outside the authorized ranges", out["hookSpecificOutput"]["permissionDecisionReason"])
             self.assertIsNone(self.run_hook("git status", r))
 
+    def test_issues_auto_send(self):  # GitHub issue #114
+        with Repo() as r:
+            send = "python3 $HM/scripts/issues.py report SKILL-001"
+            self.assertEqual(self.run_hook(send, r)["hookSpecificOutput"]["permissionDecision"], "ask")
+            self.assertIsNone(self.run_hook("python3 issues.py report --dry-run", r))
+            for c in ("python3 config_set.py issues.auto_send=true", "yq -i '.issues.auto_send = true' homelab.yaml"):
+                self.assertEqual(self.run_hook(c, r)["hookSpecificOutput"]["permissionDecision"], "ask", c)
+            Path(r, "homelab.yaml").write_text(CONFIG + "issues:\n  auto_send: true\n")
+            self.assertIsNone(self.run_hook(send, r))
+            self.assertIsNone(self.run_hook(f"cd {r} && {send}", r))
+            for c in ("gh issue create -R o/r -t x -b y", f"{send}; gh issue comment 5 -b x"):   # raw gh still asks
+                self.assertEqual(self.run_hook(c, r)["hookSpecificOutput"]["permissionDecision"], "ask", c)
+            Path(r, "homelab.yaml").write_text(CONFIG + "issues:\n  auto_send: \"yes\"\n")   # only a real true
+            self.assertEqual(self.run_hook(send, r)["hookSpecificOutput"]["permissionDecision"], "ask")
+
     def test_non_bash_ignored(self):
         payload = json.dumps({"tool_name": "Read", "tool_input": {"file_path": "/x"}})
         r = subprocess.run([sys.executable, str(ROOT / "hooks" / "guard.py")], input=payload,
