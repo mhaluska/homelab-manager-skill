@@ -1627,6 +1627,8 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertIn("Not checked yet (`check-updates.yml`): db, rtr1.", health)
         self.assertIn("Not covered by `check-updates.yml` (see Network devices): bmc1, sw1, sw2.", health)
         self.assertIn("BMC health: bmc1 Critical (not OK: psu; bmc-info.yml records the cause).", health)
+        self.assertIn("Warnings (details under Health): BMC: 1 Critical · 1 guest in no enabled backup job · "   # #108
+                      "1 storage 80 % full or more · 1 node at 85 % memory or more.", md)
         self.assertIn("RouterOS updates available: sw1 7.21.4 → 7.21.5.", health)
         site_map = md.split("```mermaid")[1]                                                      # #93
         self.assertIn('subgraph default_g0["gateway sw1"]', site_map)
@@ -1745,6 +1747,15 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         md = overview.render(hmlib.load_config(self.d), managed, "test")
         self.assertIn("| BMC | bmc1 | X10 | 10.9.20.9 | – | health Critical (accepted: chassis\\_intrusion), power On", md)
         self.assertIn("BMC health: bmc1 Critical (accepted: chassis\\_intrusion).", md)
+        docs = {"bmc.json": {"hosts": {"bmc1": d, "bmc2": dict(d, health="Warning"), "bmc3": dict(d, health_causes=["psu"])}},
+                "routeros.json": {"devices": {"r1": {"findings": [{"severity": "medium"}, {"severity": "low"},
+                                                                    {"severity": "high"}, {"severity": "info"}]}}},
+                "updates.json": {"hosts": {"pve1": {"security": 82}, "web": {"security": 3}, "db": {"security": 0},
+                                           "x": {"error": "unreachable"}}}}
+        managed["pve1"] = {"_groups_all": ["proxmox_nodes"]}
+        self.assertEqual(overview.glance_warnings(docs, managed, {"backup": 18}),                 # GitHub #108
+                         ["BMC: 1 Critical, 1 Warning", "RouterOS audit: 1 high, 1 medium", "update check failed on 1 host",
+                          "security updates on 2 hosts (1 Proxmox node)", "18 guests in no enabled backup job"])
 
     def test_lists_never_cut(self):  # GitHub issue #115
         sys.path.insert(0, str(SCRIPTS))

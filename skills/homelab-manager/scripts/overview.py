@@ -588,7 +588,8 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
         g["_links"] = guest_links(g)
         guests_by.setdefault(g.get("node"), []).append(g)
     devices = device_rows(cfg, st, docs, managed, net, unifi, all_guests)
-    stats = {"nodes": len(px.get("nodes") or []), "guests": len(guests), "vlans": len(vl), "warnings": []}
+    stats = {"nodes": len(px.get("nodes") or []), "guests": len(guests), "vlans": len(vl), "warnings": [],
+             "memory": 0, "storage": 0, "backup": 0}
 
     out = [f"## Site: {cell(title)}", ""]
     facts = []
@@ -637,6 +638,7 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
             p = pct(n.get("mem_used_gib"), n.get("mem_gib"))
             if p is not None and p >= MEM_WARN_PCT:
                 stats["warnings"].append(f"{title}: node {n.get('node')} memory {p}%")
+                stats["memory"] += 1
             addrs = [x.get("cidr") for x in (px.get("networks") or {}).get(n.get("node"), []) if x.get("cidr")]
             rows.append([n.get("node"), n.get("status"), short_version(n.get("pveversion")), n.get("kernel"), n.get("cpus"),
                          f"{n.get('mem_used_gib')}/{n.get('mem_gib')} GiB" + (f" ({p}%)" if p is not None else ""),
@@ -653,6 +655,7 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
             seen.add(key)
             p = pct(s.get("used_gib"), s.get("size_gib"))
             if p is not None and p >= STORAGE_WARN_PCT:
+                stats["storage"] += 1
                 stats["warnings"].append(f"{title}: storage {s.get('storage')}"
                                          + ("" if s.get("shared") else f" on {s.get('node')}") + f" {p}% full")
             rows.append([s.get("storage"), "shared" if s.get("shared") else s.get("node"), s.get("type"),
@@ -685,6 +688,7 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
             missing = backup_uncovered(guests, jobs)
             if missing:
                 stats["warnings"].append(f"{title}: {plural(len(missing), 'guest')} in no enabled backup job")
+                stats["backup"] += len(missing)
                 out += ["", f"In no enabled backup job ({len(missing)} of {len(guests)}): "
                         + ", ".join(f"{g['vmid']} {cell(g.get('name'))}" for g in sorted(missing, key=lambda g: g["vmid"]))
                         + "."]
@@ -873,6 +877,48 @@ def health(cfg: dict, root: Path, docs: dict, managed: dict, warnings: list[str]
     return out if len(out) > 2 else []
 
 
+ROS_WARN = ("critical", "high", "medium")   # routeros_audit.py severities that count as warnings; low and info don't
+HEALTH_RANK = {"Critical": 0, "Warning": 1}
+
+
+def glance_warnings(docs: dict, managed: dict, counts: dict) -> list[str]:
+    """Every warning Health shows, by category, most severe first (GitHub issue #108): BMCs not OK (an accepted
+    cause, #103, doesn't count), RouterOS findings of medium severity and above, failed update checks, hosts with
+    security updates, guests in no backup job, full storage, node memory."""
+    out = []
+    bad: dict = {}
+    for h, d in (docs["bmc.json"].get("hosts") or {}).items():
+        b = bmc_health(d, managed.get(h) or {})
+        if b["bad"] and not b["accepted"]:
+            bad[b["health"]] = bad.get(b["health"], 0) + 1
+    if bad:
+        out.append("BMC: " + ", ".join(f"{n} {cell(k)}" for k, n in sorted(bad.items(), key=lambda x: (HEALTH_RANK.get(x[0], 2), x[0]))))
+    sev: dict = {}
+    for d in (docs["routeros.json"].get("devices") or {}).values():
+        for f in d.get("findings") or []:
+            k = str(f.get("severity") or "").lower()
+            if k in ROS_WARN:
+                sev[k] = sev.get(k, 0) + 1
+    if sev:
+        out.append("RouterOS audit: " + ", ".join(f"{sev[k]} {k}" for k in ROS_WARN if k in sev))
+    upd = docs["updates.json"].get("hosts") or {}
+    failed = [h for h, d in upd.items() if d.get("error")]
+    if failed:
+        out.append(f"update check failed on {plural(len(failed), 'host')}")
+    sec = [h for h, d in upd.items() if isinstance(d.get("security"), int) and d["security"] > 0]
+    if sec:
+        nodes = [h for h in sec if "proxmox_nodes" in groups_of(managed.get(h) or {})]
+        out.append(f"security updates on {plural(len(sec), 'host')}"
+                   + (f" ({plural(len(nodes), 'Proxmox node')})" if nodes else ""))
+    if counts.get("backup"):
+        out.append(f"{plural(counts['backup'], 'guest')} in no enabled backup job")
+    if counts.get("storage"):
+        out.append(f"{plural(counts['storage'], 'storage')} {STORAGE_WARN_PCT} % full or more")
+    if counts.get("memory"):
+        out.append(f"{plural(counts['memory'], 'node')} at {MEM_WARN_PCT} % memory or more")
+    return out
+
+
 def known_name(devs: dict, host: str) -> str:
     return ((devs.get(host) or {}).get("identity") or {}).get("name") or host
 
@@ -895,20 +941,21 @@ def render(cfg: dict, managed: dict, note: str) -> str:
     known = build_known(cfg, docs, managed, snaps)
     all_guests = Guests(snaps)
     body, rows, warnings = [], [], []
-    totals = {"nodes": 0, "guests": 0}
+    totals = {"nodes": 0, "guests": 0, "memory": 0, "storage": 0, "backup": 0}
     for st in st_list:
         sec, stats = site_section(cfg, st, docs, managed, known, all_guests)
         body += sec
         rows.append((st, stats["nodes"], stats["guests"], stats["vlans"]))
         warnings += stats["warnings"]
-        totals["nodes"] += stats["nodes"]
-        totals["guests"] += stats["guests"]
+        for k in ("nodes", "guests", "memory", "storage", "backup"):
+            totals[k] += stats[k]
     glance = [plural(len(st_list), "site"), plural(totals["nodes"], "Proxmox node"), plural(totals["guests"], "guest")]
     if managed:
         glance.append(plural(len(managed), "Ansible host"))
     out += ["## At a glance", "", ", ".join(glance) + "."]
-    if warnings:
-        out.append(f"{len(warnings)} warning{'s' if len(warnings) != 1 else ''} under Health.")
+    found = glance_warnings(docs, managed, totals)
+    if found:
+        out.append("Warnings (details under Health): " + " · ".join(found) + ".")
     out.append("")
     if len(st_list) > 1:
         out += ["## Sites", ""] + sites_map(rows) + [""]

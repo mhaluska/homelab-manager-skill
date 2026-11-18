@@ -203,6 +203,9 @@ nmap's best guess with its match %; on a tie a vendor/product match beats a gene
 critical host plus any host with something pending (stale data marked), inventory hosts without update data, BMC
 health with its cause (accepted per host: `bmc_health_accept`), RouterOS findings and updates, capacity and
 backup warnings, a one-line drift summary; and when each source was collected. With several sites, a sites diagram first.
+At a glance names every warning category Health shows, most severe first: BMCs not OK (an accepted cause doesn't
+count), RouterOS findings of medium severity and above, failed update checks, hosts with security updates, guests in
+no backup job, full storage, node memory.
 - Regenerate it after every verified change (operating loop step 9) and commit it with that change. The output is
   deterministic (no "generated at" time), so the diff shows what changed. `--check` exits 1 when it is stale; so
   does `drift_report.py --stale` when the repo has an OVERVIEW.md.
