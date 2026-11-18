@@ -190,12 +190,15 @@ def in_net(ip: str, cidr) -> bool:
         return False
 
 
-def job_name(j: dict, i: int) -> str:
-    """A backup job's comment, or its id unless that is a generated hash (GitHub issue #97)."""
+def job_name(j: dict) -> str:
+    """A backup job's comment, else its id unless Proxmox generated it (a hash or backup-xxxxxxxx-xxxx), else its
+    schedule and storage (GitHub issues #97, #109): one rule for every job without a comment."""
     jid = str(j.get("id") or "")
     if j.get("comment"):
         return str(j["comment"])
-    return f"job {i}" if not jid or re.fullmatch(r"[0-9a-f]{20,}(:\d+)?|backup-[0-9a-f-]{20,}", jid) else jid
+    if jid and not re.fullmatch(r"[0-9a-f]{20,}(:\d+)?|backup-[0-9a-f]{8}(-[0-9a-f]{4,})*", jid):
+        return jid
+    return f"{j.get('schedule') or '?'} → {j.get('storage') or '?'}"
 
 
 def job_guests(j: dict) -> str:
@@ -443,12 +446,16 @@ def site_map(st: dict, px: dict, vl: list[dict], guests_by: dict, gateways: dict
     return lines + ["```"]
 
 
+def plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 'es' if word.endswith('s') else 's'}"
+
+
 def sites_map(rows: list[tuple[dict, int, int, int]]) -> list[str]:
+    """One box per site; no edges: the repository has no data on links between sites (GitHub issue #109)."""
     lines = ["```mermaid", "flowchart LR"]
     for i, (st, nodes, guests, vlans) in enumerate(rows):
-        lines.append(f'  s{i}["{label(hmlib.site_title(st) or "default", 60)}<br/>{nodes} nodes, {guests} guests, '
-                     f'{vlans} VLANs"]')
-    lines += [f"  s0 --- s{i}" for i in range(1, len(rows))]
+        lines.append(f'  s{i}["{label(hmlib.site_title(st) or "default", 60)}<br/>{plural(nodes, "node")}, '
+                     f'{plural(guests, "guest")}, {plural(vlans, "VLAN") if vlans else "flat network (untagged)"}"]')
     return lines + ["```"]
 
 
@@ -556,14 +563,14 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known) -
         if jobs is None:
             out += ["The backup jobs could not be read (the read-only token needs Sys.Audit on /).", ""]
         else:
-            rows = [[job_name(j, i), "yes" if j.get("enabled") else "no", j.get("schedule"), j.get("storage"),
+            rows = [[job_name(j), "yes" if j.get("enabled") else "no", j.get("schedule"), j.get("storage"),
                      job_guests(j), j.get("node") or "all"]
-                    for i, j in enumerate(sorted(jobs, key=lambda j: str(j.get("id"))), 1)]
+                    for j in sorted(jobs, key=lambda j: str(j.get("id")))]
             out += (table(["Job", "Enabled", "Schedule", "Storage", "Guests", "Node"], rows) if rows
                     else ["No scheduled backup jobs."])
             missing = backup_uncovered(guests, jobs)
             if missing:
-                stats["warnings"].append(f"{title}: {len(missing)} guests in no enabled backup job")
+                stats["warnings"].append(f"{title}: {plural(len(missing), 'guest')} in no enabled backup job")
                 out += ["", f"In no enabled backup job ({len(missing)} of {len(guests)}): "
                         + ", ".join(f"{g['vmid']} {cell(g.get('name'))}" for g in sorted(missing, key=lambda g: g["vmid"]))
                         + "."]
@@ -575,15 +582,19 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known) -
             ["Kind", "Name", "Model", "Address", "Firmware", "State", "Last seen"],
             [[d["kind"], d["name"], d["model"], d["address"], d["firmware"], d["state"], d["seen"]] for d in devices]) + [""]
     other = [(ip, h) for ip, h in scanned if ip not in guest_ips and not known.name(ip)]
-    named = len(scanned) - len([1 for ip, _ in scanned if ip in guest_ips]) - len(other)
+    named = [ip for ip, _ in scanned if ip not in guest_ips and known.name(ip)]
     if other:
         out += ["### Other scanned addresses", "", "Addresses nmap found that nothing in this repository names"
-                + (f" ({named} more belong to known hosts: Proxmox nodes, inventory hosts, guests, VIPs)" if named else "")
+                + (f" ({len(named)} more belong to known hosts: Proxmox nodes, inventory hosts, guests, VIPs)"
+                   if named else "")
                 + ". A known host's address on another network goes into its `hm_extra_ips` host variable.", ""]
         out += table(["Address", "Name", "Looks like", "OS", "Open ports", "Last seen"],
                      [[ip, (h.get("ssh_probe") or {}).get("hostname") or ", ".join(h.get("hostnames") or []),
                        h.get("device_type_guess"), os_top(h.get("os")), len(h.get("ports") or []), stamp(h.get("last_seen"))]
                       for ip, h in other]) + [""]
+    if named:   # which known host each of them was attributed to (GitHub issue #109)
+        out += [f"<details><summary>{plural(len(named), 'scanned address')} of known hosts</summary>", ""]
+        out += table(["Address", "Known as", "Source"], [[ip, *known.addr[ip]] for ip in named]) + ["", "</details>", ""]
     return out, stats
 
 
@@ -769,10 +780,9 @@ def render(cfg: dict, managed: dict, note: str) -> str:
         warnings += stats["warnings"]
         totals["nodes"] += stats["nodes"]
         totals["guests"] += stats["guests"]
-    glance = [f"{len(st_list)} site{'s' if len(st_list) != 1 else ''}", f"{totals['nodes']} Proxmox nodes",
-              f"{totals['guests']} guests"]
+    glance = [plural(len(st_list), "site"), plural(totals["nodes"], "Proxmox node"), plural(totals["guests"], "guest")]
     if managed:
-        glance.append(f"{len(managed)} Ansible hosts")
+        glance.append(plural(len(managed), "Ansible host"))
     out += ["## At a glance", "", ", ".join(glance) + "."]
     if warnings:
         out.append(f"{len(warnings)} warning{'s' if len(warnings) != 1 else ''} under Health.")

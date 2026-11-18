@@ -1525,7 +1525,8 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertIn("| Known device | Living room TV | – | 10.9.20.40 | – | not managed | – |", md)
         self.assertIn("| Known device | EV charger | – | 10.9.20.50 | – | not managed, MAC aa:bb:cc:00:00:01, seen at "
                       "10.9.20.41 | – |", md)
-        other = md[md.index("### Other scanned addresses"):md.index("## Containers") if "## Containers" in md else None]
+        other = md[md.index("### Other scanned addresses"):md.index("<details>")]
+        self.assertIn("| 10.9.20.40 | Living room TV | known device |", md.split("<details>")[1])   # #109
         self.assertIn("| 10.9.20.42 |", other)
         self.assertNotIn("10.9.20.40", other)
         self.assertNotIn("10.9.20.41", other)
@@ -1597,7 +1598,7 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         md = overview.render(hmlib.load_config(self.d), managed, "test")
         self.assertIn("| 103 | rtr1 | vm | pve1 | running | – | – | – | VLAN 20 DMZ | 10.9.20.8 |", md)   # #97 NIC
         self.assertIn("| pve1 | online | 9.1.11 | 7.0.2-4-pve |", md)                                     # #97 node
-        self.assertIn("| job 1 | yes |", md)                                                            # #97 job id
+        self.assertIn("| ? → ? | yes |", md)                                                            # #97, #109 job id
         self.assertIn("| 2 listed |", md)
         self.assertIn("| nas1 | – | ct-pbs1 | LXD (RUNNING) | 10.9.20.99 (eth0) | – |", md)              # #97 NAS
         self.assertIn("| app | nginx | bridge | /share/web |", md)                                      # #102
@@ -1605,7 +1606,7 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertIn("| RouterOS | sw1 | CRS317 | 10.9.20.1 | 7.21.4 | 1 audit findings (2026-01-02) |", md)  # #94
         self.assertIn("| RouterOS | sw2 | – | 10.9.20.3 | – | not audited", md)
         self.assertIn("| BMC | bmc1 | ML350 |", md)
-        other = md.split("### Other scanned addresses")[1].split("##")[0]                          # #96
+        other = md.split("### Other scanned addresses")[1].split("<details>")[0]                   # #96
         self.assertIn("| 10.9.20.66 | – | linux | Linux 5.0 - 5.14 (95%) |", other)
         for ip in ("10.9.20.1 ", "10.9.20.2 ", "10.9.30.2 ", "10.9.20.7 "):
             self.assertNotIn(ip, other)
@@ -1632,7 +1633,22 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertIn('default_idle(["1 VLANs without guests or addresses: 8"])', out)
         self.assertNotIn("default_v8(", out)
         self.assertEqual(overview.os_top("x"), "x")
-        self.assertEqual(overview.job_name({"id": "backup-2f7154fd-a3d8", "comment": ""}, 1), "backup-2f7154fd-a3d8")
+
+    def test_wording(self):  # GitHub issue #109
+        sys.path.insert(0, str(SCRIPTS))
+        import overview
+        job = {"schedule": "02:00", "storage": "pbs"}
+        self.assertEqual(overview.job_name({"id": "backup-2f7154fd-a3d8", **job}), "02:00 → pbs")
+        self.assertEqual(overview.job_name({"id": "94303c4493efac4f203cefc5732a1514c671842c:1", **job}), "02:00 → pbs")
+        self.assertEqual(overview.job_name({"id": "daily", **job}), "daily")
+        self.assertEqual(overview.job_name({"id": "backup-2f7154fd-a3d8", "comment": "Nightly", **job}), "Nightly")
+        out = "\n".join(overview.sites_map([({"name": "", "label": "", "default": True}, 1, 1, 0),
+                                            ({"name": "b", "label": "", "default": False}, 3, 2, 4)]))
+        self.assertIn("1 node, 1 guest, flat network (untagged)", out)
+        self.assertIn("3 nodes, 2 guests, 4 VLANs", out)
+        self.assertNotIn("---", out)
+        md = run("overview.py", "--no-ansible", "--out", "-", cwd=self.d).stdout
+        self.assertIn("1 site, 1 Proxmox node, 2 guests.", md)
 
     def test_mermaid_label_and_redaction(self):
         sys.path.insert(0, str(SCRIPTS))
