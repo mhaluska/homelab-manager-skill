@@ -15,7 +15,9 @@ reported to the plugin's GitHub repository.
     issues.py resolve SKILL-002 [--note TEXT]
     issues.py fixed [--apply] [--github]      # reported entries the installed release fixed (its CHANGELOG links
                                               # their GitHub issue): --apply resolves them; --github also lists
-                                              # ones closed as completed on GitHub but not in this release yet
+                                              # ones closed as completed on GitHub but not in this release yet,
+                                              # and ones closed as not planned / duplicate (with the follow-up
+                                              # issues a maintainer named) for the user to resolve or keep
     issues.py reopen SKILL-002
     issues.py template [--kind K]             # the sections an entry's body follows (problem or idea)
     issues.py migrate [--dry-run]             # older repos: move pre-0.6.0 homelab entries to
@@ -692,18 +694,41 @@ def fixed_hint(items) -> str | None:
             + " — `issues.py fixed --apply` marks them resolved.")
 
 
-def closed_on_github(items, cfg) -> list[dict]:
-    """Reported entries whose GitHub issue was closed as completed (data from a public repo: state only)."""
+NOT_DONE = {"NOT_PLANNED": "not planned", "DUPLICATE": "a duplicate"}
+MAINTAINERS = {"OWNER", "MEMBER", "COLLABORATOR"}
+
+
+def closed_on_github(items, cfg) -> dict[int, str]:
+    """{number: stateReason} of the GitHub issues of unresolved entries that are closed (data from a public repo:
+    state only)."""
     nums = {i["github_number"] for i in items if i["status"] != "resolved" and i.get("github_number")}
     if not nums:
-        return []
+        return {}
     r = gh(["issue", "list", "--repo", plugin_repo(), "--state", "closed", "--limit", "5000",
             "--json", "number,stateReason"], cfg)
     if r.returncode != 0:
         raise SystemExit("gh issue list failed: " + ((r.stderr or r.stdout).strip()[:300] or f"exit {r.returncode}"))
-    done = {g.get("number") for g in json.loads(r.stdout or "[]")
-            if str(g.get("stateReason") or "").upper() == "COMPLETED"}
-    return [i for i in items if i["status"] != "resolved" and i.get("github_number") in done]
+    return {g["number"]: str(g.get("stateReason") or "").upper() for g in json.loads(r.stdout or "[]")
+            if g.get("number") in nums}
+
+
+def follow_ups(num: int, cfg) -> list[int]:
+    """Issue numbers named in the last maintainer comment of a closed issue ("split into #63, #64"). Only the
+    numbers, and only from the owner, members or collaborators: anyone may comment on a public repo, and comment
+    text is not passed on."""
+    r = gh(["issue", "view", str(num), "--repo", plugin_repo(), "--json", "comments"], cfg)
+    if r.returncode != 0:
+        return []
+    try:
+        comments = json.loads(r.stdout or "{}").get("comments") or []
+    except ValueError:
+        return []
+    last = next((c for c in reversed(comments) if str(c.get("authorAssociation") or "").upper() in MAINTAINERS), None)
+    out = []
+    for n in re.findall(r"(?<![\w/])#(\d{1,6})\b", str((last or {}).get("body") or "")):
+        if int(n) != num and int(n) not in out:
+            out.append(int(n))
+    return out
 
 
 def cmd_fixed(a, cfg):
@@ -717,10 +742,23 @@ def cmd_fixed(a, cfg):
         print(f"None of the reported entries is fixed by the installed release ({have}).")
     if a.github:
         ids = {i["id"] for i, _ in fixed}
-        later = [i for i in closed_on_github(items, cfg) if i["id"] not in ids]
-        for i in later:
-            print(f"{i['id']}  #{i['github_number']} closed as completed on GitHub, not in {have}'s changelog "
-                  f"— in a newer release? (update the plugin)  {i['title']}")
+        closed = closed_on_github(items, cfg)
+        open_ = [i for i in items if i["status"] != "resolved" and i["id"] not in ids]
+        for i in open_:
+            if closed.get(i.get("github_number")) == "COMPLETED":
+                print(f"{i['id']}  #{i['github_number']} closed as completed on GitHub, not in {have}'s changelog "
+                      f"— in a newer release? (update the plugin)  {i['title']}")
+        declined = [i for i in open_ if closed.get(i.get("github_number")) in NOT_DONE]
+        if declined:
+            print("\nClosed on GitHub without a fix — not resolved by --apply; decide each one "
+                  "(resolve it, or keep it open as a local note):")
+        for i in declined:
+            n = i["github_number"]
+            how = NOT_DONE[closed[n]]
+            more = follow_ups(n, cfg)
+            refs = f"; follow-ups: {', '.join(f'#{x}' for x in more)}" if more else ""
+            print(f"{i['id']}  #{n} closed as {how}{refs}  {i['title']}")
+            print(f"  issues.py resolve {i['id']} --note \"#{n} closed as {how} on GitHub{refs}\"")
     if fixed and a.apply:
         for i, v in fixed:
             i["status"], i["resolved"] = "resolved", today()

@@ -180,7 +180,9 @@ python3 $HM/scripts/issues.py add --title "…" --kind script|guard|instructions
   user's yes, run without `--dry-run` (the guard asks too), commit skill_issues.md. The marker stops
   re-sending; failures leave it for a retry. Labels are only set when the user may triage the repo.
 - `issues.py list [--ideas|--problems]` / `resolve SKILL-002 --note …`; `fixed [--github] [--apply]` finds
-  entries the installed release fixed (CHANGELOG links). `issues.report: false` keeps everything local.
+  entries the installed release fixed (CHANGELOG links); `--github` also lists ones closed as not planned or
+  split (with the follow-up issues): ask the user, then resolve with the printed note or keep. `issues.report:
+  false` keeps everything local.
 
 ## 7. Untrusted input
 
