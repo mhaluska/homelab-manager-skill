@@ -6,6 +6,7 @@
     init_repo.py [TARGET_DIR] --add-components templates        # later: enable a part you skipped
     init_repo.py [TARGET_DIR] --sync-managed [--dry-run]        # bring a repo set up by an older plugin version up to date
     init_repo.py [TARGET_DIR] --add-site NAME [--dry-run]       # scaffold a site listed in homelab.yaml sites:
+    init_repo.py [TARGET_DIR] --name-default-site NAME [--steps ranges,vlans,group] [--dry-run]
 
 - Copies only the files the chosen components need. Existing files are NEVER overwritten
   (an existing .claude/settings.json — e.g. from installing the plugin with project scope — gets the
@@ -25,7 +26,11 @@
 - Registers this plugin's marketplace in .claude/settings.json when its Git remote is known.
 - --add-site: the site's OpenTofu environment tofu/environments/<name> (proxmox component) and a site.tf in it
   and in the default environment that refuses another site's token; group_vars/site_<name>.yml (ansible). For the
-  default site only group_vars/site_<name>.yml (it uses the top-level settings and environment).
+  default site only group_vars/site_<name>.yml (it uses the top-level settings and environment). It points out
+  a default site that isn't explicit yet.
+- --name-default-site: makes the existing site explicit (setup, or before a second site): sites[0] gets the
+  name and ranges proposed from authorized_ranges and VLAN CIDRs; VLANs without a site get it; hosts.yml gets
+  site_<name> with every inventory host in no site group, plus group_vars/site_<name>.yml.
 Does not commit: the skill reviews the result with the user and commits.
 """
 from __future__ import annotations
@@ -444,6 +449,202 @@ def add_site(target: Path, name: str, dry_run: bool) -> int:
         print(f"Next: fill `defaults` in tofu/environments/{env}/homelab.auto.tfvars from sites[{name}].proxmox, then "
               f"`tofu_init.py --site {name}`; run plans with the site's token "
               f"({hmlib.proxmox_token_name(st['proxmox'], 'provisioning')}).")
+    gaps = hmlib.default_site_gaps(cfg, target)
+    if gaps and not st["default"]:
+        default = hmlib.site(cfg)["name"]
+        print(f"The default site {default} isn't explicit yet ({', '.join(gaps)}): with two sites an untagged VLAN "
+              f"or a host in no site group is ambiguous. `init_repo.py --name-default-site {default} --dry-run` "
+              "shows the steps; run each with the user's yes.")
+    return 0
+
+
+NAME_STEPS = ("ranges", "vlans", "group")
+
+
+def _sites_with_ranges(text: str, raw: list, name: str, ranges: list[str]) -> str | None:
+    """homelab.yaml with `ranges:` inserted under a block-style `- name: <name>` item of sites:; None if the
+    item is not written that way (the caller then rewrites the list)."""
+    lines = text.splitlines(True)
+    start = next((i for i, l in enumerate(lines) if re.match(r"^sites:", l)), None)
+    if start is None:
+        return None
+    for i in range(start + 1, len(lines)):
+        l = lines[i]
+        if l.strip() and not l.startswith((" ", "-", "#")):
+            return None   # past the sites: block
+        m = re.match(rf"""^(\s*)- name:\s*["']?{re.escape(name)}["']?\s*(#.*)?$""", l.rstrip("\n"))
+        if m:
+            ind = m.group(1) + "  "
+            lines.insert(i + 1, f"{ind}ranges: {config_set.render(ranges)}\n")
+            return "".join(lines)
+    return None
+
+
+def _yaml_hosts(obj, out: set):
+    """Host names under every `hosts:` mapping of an inventory file (yq JSON)."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k == "hosts" and isinstance(v, dict):
+                out.update(v)
+            else:
+                _yaml_hosts(v, out)
+
+
+def _loose_hosts(target: Path) -> tuple[list[str], list[str], str | None]:
+    """(hosts in no site_<name> group, of them the ones only in generated tofu_hosts*.yml, error)."""
+    import hmlib
+    ansible = target / "ansible"
+    r = subprocess.run(["ansible-inventory", "-i", "inventory/managed", "--list"], cwd=ansible,
+                       capture_output=True, text=True, timeout=120) if shutil.which("ansible-inventory") else None
+    if not r or r.returncode != 0:
+        return [], [], "ansible-inventory is not available or failed: " + (
+            (r.stderr.strip().splitlines() or ["?"])[-1] if r else "not installed")
+    groups = hmlib.inventory_groups(json.loads(r.stdout or "{}"))
+    loose = sorted(h for h, gs in groups.items() if not hmlib.host_sites(gs))
+    managed, generated = set(), set()
+    for f in sorted((ansible / "inventory" / "managed").glob("*.y*ml")):
+        found: set = set()
+        _yaml_hosts(config_set.yq_json(f.read_text()), found)
+        (generated if f.name.startswith("tofu_hosts") else managed).update(found)
+    return loose, sorted(h for h in loose if h in generated and h not in managed), None
+
+
+def _hosts_with_group(text: str, group: str, hosts: list[str]) -> str | None:
+    """hosts.yml with `group` (listing hosts) added as the first child of all:; None if `all: children:` is not
+    written as a block."""
+    lines = text.splitlines(True)
+    top = next((i for i, l in enumerate(lines) if re.match(r"^all:\s*(#.*)?$", l)), None)
+    if top is None:
+        return None
+    ch = next((i for i in range(top + 1, len(lines)) if re.match(r"^\s+children:\s*(#.*)?$", lines[i])), None)
+    if ch is None:
+        return None
+    nxt = next((l for l in lines[ch + 1:] if l.strip() and not l.lstrip().startswith("#")), "")
+    base = len(lines[ch]) - len(lines[ch].lstrip())
+    ind = " " * max(len(nxt) - len(nxt.lstrip()), base + 2)
+    block = [f"{ind}{group}:{' ' * max(1, 22 - len(group) - len(ind))}# the default site (homelab.yaml sites[0]): "
+             f"hosts of other sites go in their site_<name>\n"]
+    block += [f"{ind}  hosts:\n"] + [f"{ind}    {h}:\n" for h in hosts] if hosts else [f"{ind}  hosts: {{}}\n"]
+    lines[ch + 1:ch + 1] = block
+    return "".join(lines)
+
+
+def name_default_site(target: Path, name: str, steps: list[str], dry_run: bool) -> int:
+    """Make the default site explicit (GitHub issue #65): name it in sites:, give it ranges, tag the VLANs without a
+    site with it and put the inventory hosts of no site in site_<name>. Each step only with the user's yes."""
+    import hmlib
+    bad = [x for x in steps if x not in NAME_STEPS]
+    if bad:
+        print(f"init_repo: unknown step(s) {', '.join(bad)} (steps: {', '.join(NAME_STEPS)}).", file=sys.stderr)
+        return 2
+    cfg_file = target / "homelab.yaml"
+    try:
+        cfg = hmlib.load_config(target)
+        raw = cfg.get("sites") or []
+        if raw and raw[0].get("name") != name:
+            raise hmlib.ConfigError(f"the default site (sites[0]) is already named {raw[0].get('name')!r}; site "
+                                    "names can't be changed yet.")
+        if not raw:   # validate the name the way sites: does
+            hmlib.sites({**cfg, "sites": [{"name": name}]})
+    except hmlib.ConfigError as e:
+        print(f"init_repo: {e}", file=sys.stderr)
+        return 3
+    verb = "would" if dry_run else "will"
+    print(f"Default site {name}: {'dry run' if dry_run else 'applying'} — {', '.join(steps) or 'name only'}")
+    text = cfg_file.read_text()
+    doc = config_set.yq_json(text)
+    want_sites = [dict(x) for x in raw] or [{"name": name}]
+    if not raw:
+        print(f"  name: sites: [{{name: {name}}}] — the existing location becomes site {name}")
+    if "ranges" in steps:
+        if want_sites[0].get("ranges"):
+            print(f"  ranges: already {', '.join(map(str, want_sites[0]['ranges']))}")
+        else:
+            prop = hmlib.proposed_default_ranges({**cfg, "sites": want_sites})
+            if prop:
+                want_sites[0]["ranges"] = prop
+                print(f"  ranges: {', '.join(prop)} (network.authorized_ranges and the VLAN CIDRs of this site; "
+                      "check that every one is at this location)")
+            else:
+                print(f"  ranges: nothing to propose — set them by hand: config_set.py can't edit list items, "
+                      f"edit sites[0] in homelab.yaml")
+    new_text = text
+    if want_sites != raw:
+        inserted = _sites_with_ranges(text, raw, name, want_sites[0]["ranges"]) if raw and "ranges" in want_sites[0] \
+            else None
+        if inserted is not None:
+            new_text = inserted
+        else:
+            new_text, _ = config_set.apply_ops(text, doc, [("set", "sites", want_sites)])
+    want_vlans = None
+    if "vlans" in steps:
+        vl = hmlib.get(cfg, "network.vlans", []) or []
+        untagged = [v for v in vl if isinstance(v, dict) and v.get("site") in (None, "")]
+        if untagged:
+            want_vlans = [{**v, "site": name} if isinstance(v, dict) and v.get("site") in (None, "") else v for v in vl]
+            new_text, _ = config_set.apply_ops(new_text, config_set.yq_json(new_text),
+                                               [("set", "network.vlans", want_vlans)])
+            print(f"  vlans: site: {name} on " + ", ".join(f"{v.get('id')}{' ' + str(v['name']) if v.get('name') else ''}"
+                                                       for v in untagged)
+                  + f" (a VLAN every site has: site: {hmlib.EVERY_SITE} instead)")
+        else:
+            print("  vlans: every VLAN already names a site")
+    if new_text != text:
+        expect = {**doc, **({"sites": want_sites} if want_sites != raw else {})}
+        if want_vlans is not None:
+            expect["network"] = {**(doc.get("network") or {}), "vlans": want_vlans}
+        try:
+            if config_set._norm(config_set.yq_json(new_text)) != config_set._norm(expect):
+                raise config_set.EditError("the edited homelab.yaml doesn't match the intended change")
+            hmlib.sites(config_set.yq_json(new_text))
+        except (config_set.EditError, hmlib.ConfigError) as e:
+            print(f"init_repo: {e}; nothing was written.", file=sys.stderr)
+            return 1
+        sys.stdout.writelines("    " + l for l in config_set.difflib.unified_diff(
+            text.splitlines(True), new_text.splitlines(True), "a/homelab.yaml", "b/homelab.yaml"))
+        if not dry_run:
+            cfg_file.write_text(new_text)
+    files = {}
+    if "group" in steps:
+        hosts_file = target / "ansible" / "inventory" / "managed" / "hosts.yml"
+        group = hmlib.SITE_GROUP_PREFIX + name
+        if not hosts_file.is_file():
+            print("  group: no ansible/inventory/managed/hosts.yml (ansible component not enabled)")
+        elif hmlib.has_site_group(target, name):
+            loose, _, err = _loose_hosts(target)
+            print(f"  group: {group} exists" + (f"; in no site group: {', '.join(loose)} — add them to it (or to "
+                                                 "their site's group) by hand" if loose else "")
+                  + (f" ({err})" if err else ""))
+        else:
+            loose, generated, err = _loose_hosts(target)
+            if err:
+                print(f"  group: {err} — can't tell which hosts are in no site group; nothing changed",
+                      file=sys.stderr)
+                return 1
+            listed = [h for h in loose if h not in generated]
+            new_hosts = _hosts_with_group(hosts_file.read_text(), group, listed)
+            if new_hosts is None:
+                print(f"  group: hosts.yml has no block-style `all: children:`; add {group} by hand with: "
+                      + ", ".join(listed), file=sys.stderr)
+                return 1
+            got = (((config_set.yq_json(new_hosts).get("all") or {}).get("children") or {}).get(group) or {})
+            if sorted((got.get("hosts") or {})) != listed:
+                print(f"init_repo: adding {group} to hosts.yml didn't give the intended result; nothing changed.",
+                      file=sys.stderr)
+                return 1
+            print(f"  group: {group} in hosts.yml with {len(listed)} host(s): {', '.join(listed) or 'none yet'}")
+            if generated:
+                print(f"         generated by tofu_to_inventory.py ({', '.join(generated)}): run it again, it puts "
+                      f"them in {group}")
+            if not dry_run:
+                hosts_file.write_text(new_hosts)
+            files[f"ansible/inventory/managed/group_vars/{group}.yml"] = SITE_GROUP_VARS.format(name=name)
+    for rel, body in files.items():
+        if not (target / rel).exists():
+            print(f"  + {rel}")
+            if not dry_run:
+                (target / rel).write_text(body)
+    print("Nothing written (dry run)." if dry_run else "Review with `git diff`, then commit.")
     return 0
 
 
@@ -499,6 +700,9 @@ def main():
     ap.add_argument("--list-components", action="store_true")
     ap.add_argument("--sync-managed", action="store_true")
     ap.add_argument("--add-site", metavar="NAME", help="scaffold a site already listed in homelab.yaml sites:")
+    ap.add_argument("--name-default-site", metavar="NAME",
+                    help="make the existing (default) site explicit: name, ranges, VLAN tags, site_<name> group")
+    ap.add_argument("--steps", help=f"with --name-default-site: comma-separated, default all ({','.join(NAME_STEPS)})")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     if a.list_components:
@@ -510,6 +714,9 @@ def main():
         return sync_managed(target, a.dry_run)
     if a.add_site:
         return add_site(target, a.add_site, a.dry_run)
+    if a.name_default_site:
+        steps = [x.strip() for x in a.steps.split(",") if x.strip()] if a.steps is not None else list(NAME_STEPS)
+        return name_default_site(target, a.name_default_site, steps, a.dry_run)
     existing = current_components(target)
     if a.add_components:
         comps = resolve(existing + a.add_components.split(","))

@@ -324,6 +324,28 @@ def edit_file(path: Path, ops: list[tuple], dry_run: bool = False) -> str:
     return diff
 
 
+def site_defaults(ops: list[tuple], doc: dict) -> list[str]:
+    """Sites (GitHub issue #65): a VLAN added without a site gets the only site's name (with several, a note asks
+    for one); adding the first site points at init_repo.py --name-default-site. Changes ops in place."""
+    raw = doc.get("sites") if isinstance(doc.get("sites"), list) else []
+    names = [str(x.get("name")) for x in raw if isinstance(x, dict) and x.get("name")]
+    notes = []
+    for i, op in enumerate(ops):
+        if op[0] == "add" and op[1] == "network.vlans" and isinstance(op[2], dict) and op[2].get("site") in (None, ""):
+            if len(names) == 1:
+                ops[i] = (op[0], op[1], {**op[2], "site": names[0]})
+                notes.append(f"config_set: VLAN {op[2].get('id')} gets site: {names[0]} (the only site; "
+                             f"site: {hmlib.EVERY_SITE} for one every site has)")
+            elif len(names) > 1:
+                notes.append(f"config_set: VLAN {op[2].get('id')} has no site, so it applies to every site — add "
+                             f"site: <{'|'.join(names)}> (or {hmlib.EVERY_SITE})")
+        if op[0] == "add" and op[1] == "sites" and not raw:
+            notes.append("config_set: the first site is the default (the existing location). "
+                         "init_repo.py --name-default-site <name> also gives it ranges, tags its VLANs and creates "
+                         "site_<name>.")
+    return notes
+
+
 def parse_op(arg: str) -> tuple:
     m = re.match(r"^([A-Za-z0-9_.-]+?)(\+=|-=|=)(.*)$", arg, re.S)
     if not m:
@@ -352,11 +374,14 @@ def main() -> int:
         ops = [parse_op(x) for x in a.ops] + [("delete", p) for p in a.delete]
         if not ops:
             ap.error("nothing to change")
+        notes = site_defaults(ops, yq_json(target.read_text()))
         diff = edit_file(target, ops, a.dry_run)
     except EditError as e:
         print(f"config_set: {e}", file=sys.stderr)
         return 1
     print(diff or "no change", end="" if diff else "\n")
+    for n in notes:
+        print(n, file=sys.stderr)
     return 0
 
 

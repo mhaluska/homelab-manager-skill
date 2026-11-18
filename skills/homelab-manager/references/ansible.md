@@ -13,7 +13,8 @@ Install collections once: `ansible-galaxy collection install -r requirements.yml
   use `with_secrets.py <name> -- ansible-playbook …` and read the env var with
   `lookup('ansible.builtin.env', 'VAR')`, marked `no_log: true` on tasks that use it.
 - A host goes into managed inventory only on purpose (user said so, or OpenTofu created it).
-- Several locations: `site_<name>` groups, one per host at most (references/proxmox.md "Several sites").
+- Several locations: `site_<name>` groups, one per host at most; once the default site is named, new hosts go
+  in its `site_<name>` too (references/proxmox.md "Several sites").
 
 ## Onboarding existing hosts
 

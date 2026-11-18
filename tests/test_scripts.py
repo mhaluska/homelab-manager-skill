@@ -1994,6 +1994,93 @@ class SitesTests(unittest.TestCase):  # issue 52
         self.assertIn("offbackup", hosts)
 
 
+class DefaultSiteTests(unittest.TestCase):  # issue 65
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d)
+        run("init_repo.py", self.d, "--components", "proxmox,ansible,discovery", cwd=self.d)
+        r = run("config_set.py", "network.authorized_ranges+=10.0.10.0/24",
+                "network.vlans+={id: 10, name: MGMT, cidr: 10.0.10.0/24}",
+                "network.vlans+={id: 20, name: DMZ, cidr: 10.0.20.1/24}", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        inv = Path(self.d, "ansible/inventory/managed")
+        hosts = inv / "hosts.yml"
+        hosts.write_text(hosts.read_text().replace("        rocky: {}", "        rocky:\n          hosts:\n"
+                                                   "            web01: {ansible_host: 10.0.10.5}"))
+        (inv / "tofu_hosts.yml").write_text("all:\n  children:\n    debian:\n      hosts:\n        tf01:\n"
+                                            "          ansible_host: 10.0.20.7\n")
+        sys.path.insert(0, str(SCRIPTS))
+        import hmlib
+        self.h = hmlib
+
+    def test_name_default_site(self):
+        h = self.h
+        self.assertEqual(h.default_site_gaps(h.load_config(self.d), self.d), ["name", "ranges", "vlans", "group"])
+        before = Path(self.d, "homelab.yaml").read_text()
+        r = run("init_repo.py", self.d, "--name-default-site", "home", "--dry-run", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("ranges: 10.0.10.0/24, 10.0.20.0/24", r.stdout)
+        self.assertIn("vlans: site: home on 10 MGMT, 20 DMZ", r.stdout)
+        self.assertIn("group: site_home in hosts.yml with 1 host(s): web01", r.stdout)
+        self.assertIn("tofu_to_inventory.py (tf01)", r.stdout)
+        self.assertEqual(Path(self.d, "homelab.yaml").read_text(), before)                  # dry run
+        r = run("init_repo.py", self.d, "--name-default-site", "home", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        cfg = h.load_config(self.d)
+        self.assertEqual(cfg["sites"], [{"name": "home", "ranges": ["10.0.10.0/24", "10.0.20.0/24"]}])
+        self.assertEqual([v["site"] for v in cfg["network"]["vlans"]], ["home", "home"])
+        self.assertIn("# optional, for more than one location", Path(self.d, "homelab.yaml").read_text())  # comment kept
+        self.assertTrue(Path(self.d, "ansible/inventory/managed/group_vars/site_home.yml").is_file())
+        import drift_report
+        ans, _ = drift_report.load_ansible(Path(self.d))
+        self.assertIn("site_home", ans["web01"]["_groups_all"])
+        self.assertEqual(h.default_site_gaps(cfg, self.d), [])
+        r = run("init_repo.py", self.d, "--name-default-site", "home", cwd=self.d)                # again: nothing to do
+        self.assertIn("ranges: already", r.stdout)
+        self.assertIn("every VLAN already names a site", r.stdout)
+        self.assertIn("site_home exists; in no site group: tf01", r.stdout)
+        self.assertNotEqual(run("init_repo.py", self.d, "--name-default-site", "office", cwd=self.d).returncode, 0)
+        r = run("config_set.py", "network.vlans+={id: 30, name: IOT}", cwd=self.d)              # the only site
+        self.assertIn("VLAN 30 gets site: home", r.stderr)
+        self.assertEqual(h.load_config(self.d)["network"]["vlans"][-1]["site"], "home")
+
+    def test_second_site_points_at_the_migration(self):
+        h = self.h
+        r = run("config_set.py", "sites+={name: home}", cwd=self.d)
+        self.assertIn("init_repo.py --name-default-site", r.stderr)
+        r = run("config_set.py", "sites+={name: offsite, ranges: [192.0.2.0/24]}", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = run("config_set.py", "network.vlans+={id: 40, name: OFF}", cwd=self.d)
+        self.assertIn("VLAN 40 has no site", r.stderr)
+        r = run("init_repo.py", self.d, "--add-site", "offsite", cwd=self.d)
+        self.assertIn("The default site home isn't explicit yet (ranges, vlans, group)", r.stdout)
+        import upgrade_notes
+        note = next(n for n in upgrade_notes.all_notes() if n["id"] == "explicit-default-site")
+        ok, ph = upgrade_notes._check(note, h.load_config(self.d), Path(self.d))
+        self.assertEqual((ok, ph.get("site")), (True, "home"))
+        r = run("init_repo.py", self.d, "--name-default-site", "home", "--steps", "ranges,vlans", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("group:", r.stdout)
+        cfg = h.load_config(self.d)
+        self.assertEqual([s["name"] for s in cfg["sites"]], ["home", "offsite"])
+        self.assertEqual(cfg["sites"][0]["ranges"], ["10.0.10.0/24", "10.0.20.0/24"])
+        self.assertEqual(cfg["sites"][1]["ranges"], ["192.0.2.0/24"])
+        self.assertEqual([v["site"] for v in cfg["network"]["vlans"]], ["home", "home", "home"])
+        self.assertEqual(h.default_site_gaps(cfg, self.d), ["group"])
+        self.assertNotEqual(run("init_repo.py", self.d, "--name-default-site", "home", "--steps", "bogus",
+                                cwd=self.d).returncode, 0)
+
+    def test_ranges_inserted_into_a_block_item(self):
+        import init_repo
+        text = "a: 1\nsites:\n  - name: home   # here\n    label: Home\n  - name: off\nb: 2\n"
+        out = init_repo._sites_with_ranges(text, [{}], "home", ["10.0.0.0/24"])
+        self.assertEqual(out, "a: 1\nsites:\n  - name: home   # here\n    ranges: [10.0.0.0/24]\n"
+                              "    label: Home\n  - name: off\nb: 2\n")
+        self.assertIsNone(init_repo._sites_with_ranges("sites: [{name: home}]\n", [{}], "home", ["x"]))
+        self.assertIsNone(init_repo._sites_with_ranges("sites:\n  - name: other\nnext:\n  - name: home\n", [{}],
+                                                       "home", ["x"]))
+
+
 class SiteTofuTests(unittest.TestCase):  # issue 52, part 2
     def setUp(self):
         self.d = tempfile.mkdtemp()

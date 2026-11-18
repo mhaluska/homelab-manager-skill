@@ -132,9 +132,15 @@ A site is a location: home, a rented server, family's house reached over VPN. On
 `sites:`). For more, list them in homelab.yaml, the default site first; its Proxmox is the `proxmox:` block or
 `sites[0].proxmox` (one of the two, the same keys):
 ```bash
-config_set.py 'sites+={name: home}'      # first time only: name the existing site
+init_repo.py --name-default-site home --dry-run   # first: make the existing site explicit (setup does this)
 config_set.py 'sites+={name: offsite, label: Rented server, ranges: [192.0.2.0/24], proxmox: {endpoint: "https://…:8006", tokens: {read_only: proxmox-offsite-ro, provisioning: proxmox-offsite-rw}}}'
 ```
+- `--name-default-site` (each step with the user's yes; `--steps ranges,vlans,group` runs only some): names
+  `sites[0]`, proposes its `ranges` from `authorized_ranges` and the VLAN CIDRs (check each is at this
+  location), tags VLANs without a site with it (one every site has: `site: all`) and adds `site_<name>` to
+  `hosts.yml` with every host in no site group (hosts from `tofu_hosts.yml`: re-run `tofu_to_inventory.py`).
+  With it done, a second site is purely additive. `config_set.py 'network.vlans+=…'` tags a new VLAN with the
+  only site; with several, give `site:`.
 - Name: lowercase letters, digits and `_` (it becomes the Ansible group `site_<name>`); the user chooses it
   when adding the site — there is no rename yet. `label` is free text for reports. `ranges`: the site's
   networks (the drift report labels devices there). `proxmox` (optional: a site may have only a NAS and a

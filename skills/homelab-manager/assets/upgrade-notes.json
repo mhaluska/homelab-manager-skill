@@ -12,8 +12,10 @@
     "file_lacks [path, text] (file exists and lacks text), file_has [path, text] (file exists and has text),",
     "file_missing path (a file a release added is not in the repo; {template} is its template),",
     "vmids_outside_ranges (snapshot VMIDs don't fit), agent_ips_unread (discovery/proxmox.json says the guest",
-    "agent IPs were not read: guest_ip_sources.agent present and not ok).",
-    "Placeholders in action and after_replace: {HM} skill dir, {template} template file of file_lacks, {detail} computed hint."
+    "agent IPs were not read: guest_ip_sources.agent present and not ok), default_site_implicit (two or more sites",
+    "and the default one has no ranges, VLANs without a site or no site_<default> group).",
+    "Placeholders in action and after_replace: {HM} skill dir, {template} template file of file_lacks, {detail} computed hint,",
+    "{site} the default site's name (default_site_implicit)."
   ],
   "notes": [
     {
@@ -367,6 +369,16 @@
       },
       "text": "Until 0.24.0, --sync-managed recorded upgrades.reviewed as soon as it listed suggestions, so ones that were postponed were never offered again (#67).",
       "action": "Run `python3 {HM}/scripts/upgrade_notes.py --all` and go through the list with the user (this note is in it too): apply a suggestion they want, record each one they don't (or already turned down earlier) with `python3 {HM}/scripts/upgrade_notes.py --decline ID`, then `python3 {HM}/scripts/upgrade_notes.py --done recheck-hidden-suggestions` and run --sync-managed again."
+    },
+    {
+      "version": "0.26.0",
+      "id": "explicit-default-site",
+      "kind": "config",
+      "when": {
+        "default_site_implicit": true
+      },
+      "text": "With two or more sites, a VLAN without a site applies to every site and an inventory host in no site group counts as the default site; the default site also needs ranges for reports to label its addresses (#65). check_env.py now warns about these (#63).",
+      "action": "Run `python3 {HM}/scripts/init_repo.py --name-default-site {site} --dry-run`, show the user each step (ranges, VLAN tags, site_{site} group) and run the ones they accept with `--steps`; a VLAN every site has gets `site: all` instead."
     }
   ]
 }

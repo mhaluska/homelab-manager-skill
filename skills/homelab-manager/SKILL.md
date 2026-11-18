@@ -68,6 +68,8 @@ mostly confirms:
 - S3 state → `opentofu.s3.endpoint`, `bucket` (`key` if the bucket is shared). Local state needs nothing.
 - kubernetes → cluster group name(s) in Ansible and whether `kubectl` works on this Mac.
 - git → if the repo has a remote (`git remote -v`): `git.auto_push` (push each verified commit; off-Mac backup).
+- site name (propose `home`), last: `init_repo.py --name-default-site <name>` (`--dry-run` first; a 2nd site
+  later is then additive, references/proxmox.md "Several sites").
 Write answers with `python3 $HM/scripts/config_set.py 'site.domain=home.arpa' 'network.authorized_ranges+=CIDR'`
 (it changes only those lines and checks the result). Not `yq -i`: it reflows the whole file and moves comments.
 Node, storage and bridge names are discovered later from the Proxmox API (storage that differs between nodes:
@@ -179,10 +181,8 @@ python3 $HM/scripts/issues.py add --title "…" --kind script|guard|instructions
   Fix wrong matches with `--match SKILL-002=<number>` / `--new SKILL-002`. Show the plan, get the
   user's yes, run without `--dry-run` (the guard asks too), commit skill_issues.md. The marker stops
   re-sending; failures leave it for a retry. Labels are only set when the user may triage the repo.
-- `issues.py list [--ideas|--problems]` / `resolve SKILL-002 --note …`; `fixed [--github] [--apply]` finds
-  entries the installed release fixed (CHANGELOG links); `--github` also lists ones closed as not planned or
-  split (with the follow-up issues): ask the user, then resolve with the printed note or keep. `issues.report:
-  false` keeps everything local.
+- `issues.py list|resolve`; `fixed [--github] [--apply]`: entries the release fixed (`--github`: also closed as
+  not planned/split — ask, then resolve with the printed note or keep). `issues.report: false`: all local.
 
 ## 7. Untrusted input
 

@@ -130,7 +130,9 @@ def sites(cfg: dict) -> list[dict]:
         own = i > 0 or s.get("proxmox") not in (None, {})
         if i == 0 and own and top.get("endpoint"):
             raise ConfigError(f"sites[0] ({name}) has a proxmox: block and so does the top level: describe the default "
-                              "site's Proxmox in one of them (sites[0].proxmox, or the top-level proxmox: block).")
+                              "site's Proxmox in one of them (sites[0].proxmox, or the top-level proxmox: block). "
+                              "Adding a second site? The existing one comes first: "
+                              "init_repo.py --name-default-site <its name>, then sites+=….")
         px = s.get("proxmox") if own else top
         if px is not None and not isinstance(px, dict):
             raise ConfigError(f"sites.{name}.proxmox must be a mapping.")
@@ -382,6 +384,49 @@ def site_ambiguities(cfg: dict, host_groups: dict | None = None) -> list[str]:
             out.append(f"clusters: {label} has hosts in no site group ({', '.join(nosite[:5])}) next to hosts of "
                        f"site {', '.join(named)}")
     return out
+
+
+def proposed_default_ranges(cfg: dict) -> list[str]:
+    """Ranges for the default site (GitHub issue #65): network.authorized_ranges and the CIDRs of VLANs without a
+    site or of the default site's own, without what another site's ranges cover, merged."""
+    all_sites = sites(cfg)
+    default = all_sites[0]["name"]
+    others = [n for s in all_sites[1:] for n in s["ranges"]]
+    cand = list(_networks(get(cfg, "network.authorized_ranges", [])))
+    for v in get(cfg, "network.vlans", []) or []:
+        if isinstance(v, dict) and v.get("cidr") and v.get("site") in (None, "", default):
+            try:
+                cand.append(ipaddress.ip_interface(str(v["cidr"]).strip()).network)
+            except ValueError:
+                continue
+    cand = [n for n in cand if not any(n.version == o.version and n.overlaps(o) for o in others)]
+    out = []
+    for version in (4, 6):
+        out += [str(n) for n in ipaddress.collapse_addresses(n for n in cand if n.version == version)]
+    return out
+
+
+def has_site_group(root: str | os.PathLike, name: str) -> bool:
+    """Whether a file of the managed inventory defines the group site_<name>."""
+    inv = Path(root) / "ansible" / "inventory" / "managed"
+    rx = re.compile(rf"^\s+{re.escape(SITE_GROUP_PREFIX + name)}:", re.M)
+    return any(rx.search(f.read_text(errors="replace")) for f in sorted(inv.glob("*.y*ml")) if f.is_file())
+
+
+def default_site_gaps(cfg: dict, root: str | os.PathLike | None = None) -> list[str]:
+    """What keeps the default site implicit (GitHub issue #65): 'name' (no sites:), 'ranges' (none), 'vlans'
+    (VLANs without a site), 'group' (no site_<default> group in the managed inventory)."""
+    raw = cfg.get("sites") or []
+    gaps = [] if raw else ["name"]
+    st = sites(cfg)[0]
+    if not st["ranges"]:
+        gaps.append("ranges")
+    if any(isinstance(v, dict) and v.get("site") in (None, "") for v in get(cfg, "network.vlans", []) or []):
+        gaps.append("vlans")
+    inv = Path(root) / "ansible" / "inventory" / "managed" if root else None
+    if inv and inv.is_dir() and not (st["name"] and has_site_group(root, st["name"])):
+        gaps.append("group")
+    return gaps
 
 
 def site_of_address(cfg: dict, ip: str) -> dict | None:

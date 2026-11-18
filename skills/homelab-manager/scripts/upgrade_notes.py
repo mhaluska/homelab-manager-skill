@@ -90,6 +90,13 @@ def _check(note: dict, cfg: dict, root: Path) -> tuple[bool, dict]:
         if (root / rel).exists():
             return False, ph
         ph["template"] = str(TEMPLATE / rel)
+    if w.get("default_site_implicit"):   # two or more sites, the default one not explicit (GitHub issue #65)
+        try:
+            if len(hmlib.sites(cfg)) < 2 or not hmlib.default_site_gaps(cfg, root):
+                return False, ph
+            ph["site"] = hmlib.site(cfg)["name"]
+        except hmlib.ConfigError:
+            return False, ph
     if w.get("agent_ips_unread"):
         try:
             agent = (json.loads((root / "discovery" / "proxmox.json").read_text()).get("guest_ip_sources") or {}).get("agent")
