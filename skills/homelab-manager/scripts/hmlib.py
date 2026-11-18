@@ -101,6 +101,7 @@ def proxmox_ssl_context(cfg: dict, px: dict | None = None):
 SITE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,30}$")
 SITE_GROUP_PREFIX = "site_"
 SITE_SETTINGS = ("vmid_ranges", "vmid_scheme", "templates")
+EVERY_SITE = "all"   # network.vlans site: all — a VLAN every site has, on purpose (GitHub issue #63)
 
 
 def sites(cfg: dict) -> list[dict]:
@@ -123,6 +124,8 @@ def sites(cfg: dict) -> list[dict]:
                               f"(it becomes the Ansible group {SITE_GROUP_PREFIX}{name}).")
         if name in seen:
             raise ConfigError(f"site {name!r} is listed twice.")
+        if name == EVERY_SITE:
+            raise ConfigError(f"site name {name!r} is reserved (network.vlans site: {EVERY_SITE} = every site).")
         seen.add(name)
         own = i > 0 or s.get("proxmox") not in (None, {})
         if i == 0 and own and top.get("endpoint"):
@@ -151,9 +154,9 @@ def sites(cfg: dict) -> list[dict]:
 def _check_vlan_sites(cfg: dict, names: list[str]):
     for v in get(cfg, "network.vlans", []) or []:
         st = v.get("site") if isinstance(v, dict) else None
-        if st not in (None, "") and st not in names:
+        if st not in (None, "", EVERY_SITE) and st not in names:
             raise ConfigError(f"network.vlans: VLAN {v.get('id')} has site {st!r}, which is not in sites: "
-                              f"({', '.join(names) or 'none'}).")
+                              f"({', '.join(names) or 'none'}; {EVERY_SITE} = every site).")
 
 
 def default_proxmox(cfg: dict) -> dict:
@@ -297,6 +300,88 @@ def proxmox_snapshots(cfg: dict) -> list[tuple[dict, dict]]:
 def host_sites(groups) -> list[str]:
     """Site names of an inventory host from its site_<name> groups (normally zero or one)."""
     return sorted(g[len(SITE_GROUP_PREFIX):] for g in groups or [] if str(g).startswith(SITE_GROUP_PREFIX))
+
+
+def inventory_groups(inventory: dict) -> dict[str, set[str]]:
+    """{host: every group it is in, parents included} from `ansible-inventory --list` JSON."""
+    parents: dict[str, set[str]] = {}
+    out: dict[str, set[str]] = {}
+    for group, g in inventory.items():
+        if group == "_meta" or not isinstance(g, dict):
+            continue
+        for child in g.get("children") or []:
+            parents.setdefault(child, set()).add(group)
+        for h in g.get("hosts") or []:
+            out.setdefault(h, set()).add(group)
+
+    def up(group: str, seen: set) -> set:
+        found = set()
+        for p in parents.get(group, ()):
+            if p not in seen:
+                found |= {p} | up(p, seen | {p})
+        return found
+    for h, gs in out.items():
+        for g in list(gs):
+            gs |= up(g, {g})
+        gs -= {"all", "ungrouped"}
+    return out
+
+
+def site_ambiguities(cfg: dict, host_groups: dict | None = None) -> list[str]:
+    """With two or more sites, what "no site" makes ambiguous (GitHub issue #63): VLANs without a site, VLAN names
+    used by several entries one of which is not tied to a site, overlapping site ranges, sites without ranges,
+    inventory hosts in no site_<name> group and clusters across sites. host_groups: {host: all its groups}."""
+    all_sites = sites(cfg)
+    if len(all_sites) < 2:
+        return []
+    out = []
+    default = all_sites[0]["name"]
+    vl = [v for v in get(cfg, "network.vlans", []) or [] if isinstance(v, dict)]
+    for v in vl:
+        if v.get("site") in (None, ""):
+            out.append(f"network.vlans: VLAN {v.get('id')}{' (' + str(v['name']) + ')' if v.get('name') else ''} has "
+                       f"no site, so it applies to every site: tag it `site: <name>`, or `site: {EVERY_SITE}` if "
+                       "every site has it")
+    by_name: dict[str, list] = {}
+    for v in vl:
+        if v.get("name"):
+            by_name.setdefault(str(v["name"]).lower(), []).append(v)
+    for vs in by_name.values():
+        if len(vs) > 1 and any(v.get("site") in (None, "", EVERY_SITE) for v in vs):
+            out.append(f"network.vlans: the name {vs[0]['name']!r} is used by VLANs "
+                       f"{', '.join(str(v.get('id')) for v in vs)} and not all of them name one site: "
+                       f"`--vlan {vs[0]['name']}` is ambiguous at a site that has both")
+    for i, a in enumerate(all_sites):
+        for b in all_sites[i + 1:]:
+            for na in a["ranges"]:
+                for nb in b["ranges"]:
+                    if na.version == nb.version and na.overlaps(nb):
+                        out.append(f"sites: {a['name']} range {na} overlaps {b['name']} range {nb}: reports label an "
+                                   f"address there as {a['name']}")
+    for st in all_sites:
+        if not st["ranges"]:
+            out.append(f"sites: {st['name']} has no ranges, so reports don't label its addresses"
+                       + (f" (init_repo.py --name-default-site {default} --steps ranges proposes them)"
+                          if st["default"] else ""))
+    if host_groups is None:
+        return out
+    loose = sorted(h for h, gs in host_groups.items() if not host_sites(gs))
+    if loose:
+        out.append(f"{len(loose)} inventory host(s) in no site_<name> group, so counted as the default site "
+                   f"{default}: {', '.join(loose[:8])}{', …' if len(loose) > 8 else ''} — put them in "
+                   f"site_{default} (init_repo.py --name-default-site {default} --steps group) or their site's group")
+    for c in get(cfg, "clusters", []) or []:
+        g = c.get("ansible_group") if isinstance(c, dict) else None
+        members = sorted(h for h, gs in host_groups.items() if g and g in gs)
+        named = sorted({x for h in members for x in host_sites(host_groups[h])})
+        nosite = [h for h in members if not host_sites(host_groups[h])]
+        label = f"cluster {c.get('name') or g} (group {g})"
+        if len(named) > 1:
+            out.append(f"clusters: {label} spans sites {', '.join(named)}: a cluster should live at one site")
+        if nosite and named:
+            out.append(f"clusters: {label} has hosts in no site group ({', '.join(nosite[:5])}) next to hosts of "
+                       f"site {', '.join(named)}")
+    return out
 
 
 def site_of_address(cfg: dict, ip: str) -> dict | None:
@@ -655,11 +740,11 @@ def english_problems(text: str, min_words: int = 12) -> list[str]:
 
 def vlans(cfg: dict, site_name: str | None = None) -> list[dict]:
     """network.vlans entries with an integer id: [{id, name, cidr, gw, site}, …]. With site_name ('' = the
-    unnamed default site), only that site's VLANs and those without a site (the same at every site)."""
+    unnamed default site), only that site's VLANs and those without a site or with site: all (every site)."""
     out = []
     for v in get(cfg, "network.vlans", []) or []:
         if isinstance(v, dict) and str(v.get("id", "")).strip().isdigit():
-            if site_name is None or v.get("site") in (None, "", site_name):
+            if site_name is None or v.get("site") in (None, "", EVERY_SITE, site_name):
                 out.append({**v, "id": int(v["id"])})
     return out
 

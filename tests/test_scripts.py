@@ -1911,6 +1911,42 @@ class SitesTests(unittest.TestCase):  # issue 52
         self.assertIn("dup is in several site groups (site_home, site_offsite)", problems)
         self.assertEqual(len(problems), 2)
 
+    def test_site_ambiguities(self):  # issue 63
+        h = self.h
+        inv = {"all": {"children": ["site_home", "site_offsite", "linux", "k8s"]},
+               "site_home": {"children": ["home_rack"]}, "home_rack": {"hosts": ["web01", "k1"]},
+               "site_offsite": {"hosts": ["k2", "off01"]}, "linux": {"hosts": ["web01", "loose1", "k3"]},
+               "k8s": {"hosts": ["k1", "k2", "k3"]}}
+        groups = h.inventory_groups(inv)
+        self.assertEqual(groups["web01"], {"home_rack", "site_home", "linux"})          # parents included
+        cfg = {**self.cfg, "clusters": [{"name": "k8s", "ansible_group": "k8s"}],
+               "network": {"vlans": [{"id": 10, "name": "MGMT"}, {"id": 20, "name": "DMZ", "site": "home"},
+                                     {"id": 21, "name": "DMZ", "site": "offsite"},
+                                     {"id": 30, "name": "VPN", "site": "all"}, {"id": 31, "name": "vpn", "site": "home"}]}}
+        cfg["sites"] = [{"name": "home", "ranges": ["10.0.0.0/16"]}, cfg["sites"][1],
+                        {"name": "parents", "ranges": ["10.0.5.0/24"]}]
+        found = h.site_ambiguities(cfg, groups)
+        text = "\n".join(found)
+        self.assertIn("VLAN 10 (MGMT) has no site", text)
+        self.assertNotIn("VLAN 30", text.split("the name")[0])                          # site: all is deliberate
+        self.assertIn("the name 'VPN' is used by VLANs 30, 31", text)
+        self.assertNotIn("'DMZ'", text)                                                 # one per site: fine
+        self.assertIn("home range 10.0.0.0/16 overlaps parents range 10.0.5.0/24", text)
+        self.assertIn("2 inventory host(s) in no site_<name> group, so counted as the default site home: k3, loose1", text)
+        self.assertIn("cluster k8s (group k8s) spans sites home, offsite", text)
+        self.assertIn("cluster k8s (group k8s) has hosts in no site group (k3)", text)
+        self.assertNotIn("offsite has no ranges", text)
+        self.assertEqual(h.site_ambiguities({"network": {"vlans": [{"id": 10}]}}, groups), [])   # one site: nothing
+        self.assertEqual(h.resolve_vlan(cfg, "MGMT", "offsite"), 10)
+        with self.assertRaises(h.ConfigError):
+            h.resolve_vlan(cfg, "vpn", "home")                                          # the ambiguity warned about
+        self.assertEqual(h.resolve_vlan(cfg, "vpn", "offsite"), 30)
+        with self.assertRaises(h.ConfigError):
+            h.sites({"sites": [{"name": "home"}, {"name": "all"}]})                      # reserved
+        import check_env
+        res = check_env.check_site_ambiguity(cfg, inv)
+        self.assertTrue(res and all(r["check"] == "sites:ambiguous" and r["ok"] is False for r in res))
+
     def test_draft_goes_into_the_site_group(self):
         import proxmox_to_inventory
         text = proxmox_to_inventory.to_yaml({"backup01": {"ansible_host": "192.0.2.2", "_os": "debian"}}, [],
@@ -1948,6 +1984,8 @@ class SitesTests(unittest.TestCase):  # issue 52
         self.assertIn("`dns01` is in several site groups", out)
         self.assertIn("`rover` is in `site_moon`, but homelab.yaml has no site 'moon'", out)
         self.assertIn("192.0.2.9  — server [site offsite (Rented server)]", out)
+        self.assertIn("**Site ambiguity", out)                                  # issue 63
+        self.assertIn("sites: home has no ranges", out)
         import issues
         cfg = self.h.load_config(d)
         domains, hosts = issues.site_terms(cfg)

@@ -273,6 +273,9 @@ def load_ansible(root: Path):
             continue
         for h in g.get("hosts", []):
             hosts.setdefault(h, {"groups": [], **(hv.get(h) or {})})["groups"].append(group)
+    for h, gs in hmlib.inventory_groups(data).items():   # parent groups too (site_<name>: {children: …})
+        if h in hosts:
+            hosts[h]["_groups_all"] = sorted(gs)
     return hosts, f"ansible-inventory ({inv.relative_to(root)})"
 
 
@@ -429,7 +432,7 @@ def main():
         known_sites = {st["name"] for st in all_sites if st["name"]}
         site_problems = []
         for h, v in sorted(ans.items()):
-            hs = hmlib.host_sites(v.get("groups"))
+            hs = hmlib.host_sites(v.get("_groups_all") or v.get("groups"))
             if len(hs) > 1:
                 site_problems.append(f"- `{h}` is in several site groups ({', '.join('site_' + x for x in hs)}): keep one")
             site_problems += [f"- `{h}` is in `site_{x}`, but homelab.yaml has no site {x!r}" for x in hs
@@ -437,6 +440,11 @@ def main():
         if site_problems:
             issues += len(site_problems)
             L += [f"**Site groups ({len(site_problems)})**:", "", *site_problems, ""]
+        ambiguous = hmlib.site_ambiguities(cfg, {h: v.get("_groups_all") or v.get("groups") or []
+                                                 for h, v in ans.items()})
+        if ambiguous:   # two or more sites: what "no site" leaves open (GitHub issue #63)
+            issues += len(ambiguous)
+            L += [f"**Site ambiguity ({len(ambiguous)})**:", "", *[f"- {x}" for x in ambiguous], ""]
         if ghosts:
             issues += len(ghosts)
             L += [f"**Inventory hosts not found anywhere ({len(ghosts)})**:", "", *ghosts, ""]

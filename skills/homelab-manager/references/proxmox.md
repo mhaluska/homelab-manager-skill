@@ -160,8 +160,11 @@ config_set.py 'sites+={name: offsite, label: Rented server, ranges: [192.0.2.0/2
   tokens (`$W proxmox-offsite-rw $STATE -- tofu plan …`, from `tofu/environments/offsite`).
 - VMIDs: `--next-vmid vms --site offsite` checks that site's snapshot and environment only (IDs repeat across
   sites). A site may set its own `vmid_ranges`, `vmid_scheme` and `templates` (build network) in its entry;
-  otherwise the top-level ones apply. `network.vlans` entries may name a `site` (a VLAN only there; none = every
-  site): `--vlan <name>` resolves with the site's VLANs.
+  otherwise the top-level ones apply. `network.vlans` entries name a `site` (a VLAN only there; `site: all` =
+  every site on purpose; none = every site too): `--vlan <name>` resolves with the site's VLANs.
+- With two or more sites `check_env.py` (`sites:ambiguous`) and the drift report ("Site ambiguity") flag what
+  "no site" leaves open: VLANs without a site, a VLAN name shared by entries not all tied to one site,
+  overlapping or missing `ranges`, inventory hosts in no site group, `clusters:` groups across sites.
 - Templates: templates.md "Another site". Node patching: patching.md "Patch Proxmox nodes" with `--site`.
 
 ## Cloud-init and SSH keys

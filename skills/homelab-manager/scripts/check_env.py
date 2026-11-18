@@ -353,14 +353,37 @@ def site_group_problems(inventory: dict, cfg: dict) -> list[str]:
     return problems
 
 
-def check_ansible_targets(cfg):
+_INVENTORY: dict = {}
+
+
+def managed_inventory(cfg) -> dict | None:
+    """`ansible-inventory --list` of the managed inventory (once per run); None without Ansible or inventory."""
     root = Path(cfg["_root"]) if cfg else None
     if not root or not shutil.which("ansible") or not (root / "ansible" / "inventory" / "managed").exists():
+        return None
+    if root not in _INVENTORY:
+        rc, so, _ = run(["ansible-inventory", "-i", "inventory/managed", "--list"], timeout=60, cwd=root / "ansible")
+        _INVENTORY[root] = json.loads(so or "{}") if rc == 0 else None
+    return _INVENTORY[root]
+
+
+def check_site_ambiguity(cfg, inventory: dict | None = None):
+    """Two or more sites: what "no site" makes ambiguous (untagged VLANs, hosts in no site group, overlapping
+    ranges, clusters across sites — GitHub issue #63)."""
+    if not cfg:
         return []
-    rc, so, _ = run(["ansible-inventory", "-i", "inventory/managed", "--list"], timeout=60, cwd=root / "ansible")
-    if rc != 0:
+    try:
+        inventory = managed_inventory(cfg) if inventory is None else inventory
+        found = hmlib.site_ambiguities(cfg, hmlib.inventory_groups(inventory) if inventory else None)
+    except hmlib.ConfigError:
+        return []   # reported by check_config_and_secrets / proxmox TLS
+    return [{"check": "sites:ambiguous", "ok": False, "detail": f} for f in found]
+
+
+def check_ansible_targets(cfg):
+    inventory = managed_inventory(cfg)
+    if not inventory:
         return []
-    inventory = json.loads(so or "{}")
     out = []
     sites = site_group_problems(inventory, cfg)
     if sites:
@@ -419,6 +442,7 @@ def main(argv):
         results += check_keychain_selftest()
     cfg_results, cfg = check_config_and_secrets()
     results += (cfg_results + check_proxmox_tls(cfg) + check_tofu_sites(cfg) + check_ansible_targets(cfg)
+                + check_site_ambiguity(cfg)
                 + check_git_upstream(cfg))
     if "--json" in argv:
         print(json.dumps(results, indent=2))

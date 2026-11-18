@@ -29,7 +29,7 @@ network:
   excluded_hosts: []
   # VLANs by name, so "create a VM in DMZ" works: --vlan accepts a name, reports show the VLAN of an address.
   vlans: []                  # e.g. [{id: 20, name: DMZ, cidr: 10.0.20.0/24, gw: 10.0.20.1}]; site: <name>
-                             # for a VLAN of one site only (sites: below)
+                             # for a VLAN of one site only (sites: below), site: all for one every site has
   dns_servers: []
   gateway: ""
 
