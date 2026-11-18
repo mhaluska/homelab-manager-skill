@@ -380,6 +380,16 @@ class GuardConfigTests(unittest.TestCase):
         self.assertIsNone(self.d("ansible unifi -m raw -a 'mca-cli-op info'"))
         self.assertIsNone(self.d("python3 /p/with_secrets.py unifi-api -- ansible-playbook playbooks/unifi-info.yml"))
 
+    def test_unifi_classic_api(self):  # GitHub issue #77: login mode reads, device commands still ask
+        self.assertIsNone(self.d("python3 /p/with_secrets.py unifi -- ansible-playbook playbooks/unifi-info.yml"))
+        self.assertIsNone(self.d("python3 /p/with_secrets.py unifi -- ansible-playbook playbooks/unifi-info.yml "
+                                 "-e unifi_auth=login"))
+        self.assertEqual(self.d("curl -sk -b c.txt -X POST -d '{\"cmd\":\"restart\",\"mac\":\"aa\"}' "
+                                "https://ctl:8443/api/s/default/cmd/devmgr"), "ask")
+        self.assertEqual(self.d("curl -sk -b c.txt -X PUT https://ctl:8443/api/s/default/rest/device/d1 -d '{}'"), "ask")
+        self.assertIsNone(self.d("curl -sk -c c.txt -d '{}' https://ctl:8443/api/login"))
+        self.assertIsNone(self.d("curl -sk -b c.txt https://ctl:8443/api/s/default/stat/device"))
+
     def test_reboot_policy_asks(self):  # issue 39: reboot=always|if_required on any playbook
         self.assertEqual(self.d("ansible-playbook site.yml -e reboot=always"), "ask")
         self.assertEqual(self.d("ansible-playbook site.yml -e reboot=if_required"), "ask")
