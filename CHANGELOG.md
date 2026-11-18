@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.28.1 — 2026-11-18
+- BMC playbook keeps the vendor workarounds of #32 ([#74](https://github.com/mhaluska/homelab-manager-skill/issues/74)): `bmc-info.yml` reads one Redfish category per
+  call, so a BMC that refuses one (iLO 4 has no UpdateService, Supermicro X10 wants a DCMS licence for it) still
+  reports the rest and the refusal lands in its `errors`; unreadable chassis data (invalid UTF-8 in `Chassis/1`)
+  falls back to reading Thermal/Power directly; power draw prefers `PowerMetrics.AverageConsumedWatts`; BMC and
+  BIOS versions come from Manager/System. `discovery/bmc.json` gets a fuller summary: model, power state,
+  health, firmware, CPUs/RAM, power draw, hottest sensor, PSUs and components not OK.
+- BMCs with their own account: `bmc_secret_env` in host vars names the secret's env (`group_vars/bmc.yml`).
+- Upgrade note (repos with the 0.28.0 `bmc-info.yml` and local edits): take the template; `bmc-one-file` now
+  says the template keeps these workarounds.
+
 ## 0.28.0 — 2026-11-18
 - Discovery layout ([#73](https://github.com/mhaluska/homelab-manager-skill/issues/73)): `discovery/README.md` lists every file the scripts and playbooks write there, with the
   naming rule: a per-site file (`proxmox`, `network`, `pve-patch`) has no site in its name for the default site
