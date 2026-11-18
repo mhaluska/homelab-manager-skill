@@ -1023,6 +1023,23 @@ class GuestNetworkMappingTests(unittest.TestCase):
         self.assertIn("Warning: no guests visible: x.", s)
 
 
+class GuestNicTests(unittest.TestCase):  # GitHub issue #97: VLAN and IP of the same NIC
+    def test_nic_order_and_pairing(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import hmlib
+        g = {"config": {"net0": "virtio=BC:24:11:00:00:01,bridge=vmbr1",
+                        "net10": "virtio=BC:24:11:00:00:0A,bridge=vmbr0,tag=4051",
+                        "net2": "virtio=BC:24:11:00:00:02,bridge=vmbr0,tag=4040",
+                        "ipconfig2": "ip=10.9.40.1/24"},
+             "ips": [{"ip": "10.9.51.1", "mac": "bc:24:11:00:00:0a", "source": "agent"}]}
+        self.assertEqual([n["idx"] for n in hmlib.guest_nics(g)], [0, 2, 10])
+        self.assertEqual(hmlib.guest_nics(g)[2]["ips"], ["10.9.51.1"])          # agent address by MAC
+        self.assertEqual(hmlib._guest_net(g), ("10.9.40.1", 4040))               # first NIC with an IP, its tag
+        self.assertEqual(hmlib._guest_net(g, prefer_ip="10.9.51.1"), ("10.9.51.1", 4051))
+        self.assertEqual(hmlib._guest_net({"config": {"net0": "virtio=x,bridge=vmbr0,tag=7",
+                                                      "net1": "virtio=y,bridge=vmbr0,tag=8"}}), (None, 7))
+
+
 class VmidSchemeTests(unittest.TestCase):
     """#6: VMIDs that encode the network (vmid_scheme), and a warning when the ranges don't fit."""
 

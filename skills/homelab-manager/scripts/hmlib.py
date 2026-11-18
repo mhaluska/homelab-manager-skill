@@ -806,20 +806,44 @@ def rank_guest_addresses(g: dict, ranges: list | None = None) -> list[dict]:
     return [a for _, a in sorted(ranked, key=lambda x: x[0])]
 
 
-def _guest_net(g: dict) -> tuple[str | None, int | None]:
-    """(static IPv4, VLAN tag) of a guest's first NIC, from its snapshot config (--details)."""
+def guest_nics(g: dict) -> list[dict]:
+    """A guest's NICs from its snapshot config (--details) in netN order (net2 before net10), each
+    {idx, tag, mac, ips}: ips are the NIC's static IPv4/IPv6 (LXC `ip=`, VM `ipconfigN`) and the addresses the
+    guest agent / LXC interfaces report for its MAC (GitHub issue #97: VLAN and IP of the same NIC)."""
     conf = g.get("config") or {}
-    ip = vlan = None
-    for k in sorted(conf):
-        v = str(conf[k])
-        if k.startswith(("net", "ipconfig")):
-            m = re.search(r"(?<![\w])ip=(\d+\.\d+\.\d+\.\d+)", v)
-            ip = ip or (m.group(1) if m else None)
-            m = re.search(r"(?<![\w-])tag=(\d+)", v)
-            vlan = vlan if vlan is not None else (int(m.group(1)) if m else None)
-    if not ip:
-        ip = next((a["ip"] for a in rank_guest_addresses(g) if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", a["ip"])), None)
-    return ip, vlan
+    nics = []
+    for k in sorted((k for k in conf if re.fullmatch(r"net\d+", k)), key=lambda k: int(k[3:])):
+        v, idx = str(conf[k]), int(k[3:])
+        mac = _MAC_RE.search(v)
+        tag = re.search(r"(?<![\w-])tag=(\d+)", v)
+        ips = re.findall(r"(?<![\w])ip6?=([0-9A-Fa-f.:]+)(?:/\d+)?", v)
+        ips += re.findall(r"(?<![\w])ip6?=([0-9A-Fa-f.:]+)(?:/\d+)?", str(conf.get(f"ipconfig{idx}") or ""))
+        nics.append({"idx": idx, "tag": int(tag.group(1)) if tag else None,
+                     "mac": mac.group(0).lower() if mac else "", "ips": [i.lower() for i in ips]})
+    for a in g.get("ips") or []:
+        ip, mac = str(a.get("ip") or "").lower(), str(a.get("mac") or "").lower()
+        for n in nics:
+            if mac and n["mac"] == mac and ip and ip not in n["ips"]:
+                n["ips"].append(ip)
+    return nics
+
+
+def _guest_net(g: dict, prefer_ip: str | None = None) -> tuple[str | None, int | None]:
+    """(IPv4, VLAN tag) of one NIC of a guest, from its snapshot config (--details): the NIC holding prefer_ip
+    (e.g. its ansible_host), else the first NIC (netN order) with an IPv4, else the first NIC's tag with the best
+    reported address (rank_guest_addresses). Never a VLAN of one NIC with the IP of another (GitHub issue #97)."""
+    nics = guest_nics(g)
+    v4 = re.compile(r"\d+\.\d+\.\d+\.\d+")
+    if prefer_ip:
+        n = next((n for n in nics if prefer_ip in n["ips"]), None)
+        if n:
+            return prefer_ip, n["tag"]
+    for n in nics:
+        ip = next((i for i in n["ips"] if v4.fullmatch(i)), None)
+        if ip:
+            return ip, n["tag"]
+    ip = next((a["ip"] for a in rank_guest_addresses(g) if v4.fullmatch(a["ip"])), None)
+    return ip, (nics[0]["tag"] if nics else None)
 
 
 def vmid_fit(cfg: dict, guests: list[dict]) -> str | None:
