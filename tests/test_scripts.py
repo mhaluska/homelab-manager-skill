@@ -1207,11 +1207,12 @@ class UpgradeNotesTests(unittest.TestCase):
                         str(self.cfg)], check=True)                     # config notes of 0.16.0 settled
         out = run("upgrade_notes.py", "--json", cwd=self.d).stdout
         ids = [n["id"] for n in json.loads(out)]
-        self.assertEqual(ids, ["inventory-guest-ips"])
+        self.assertEqual(ids, ["inventory-guest-ips", "recheck-hidden-suggestions"])   # the latter: any reviewed repo
         ids = [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", "--all", cwd=self.d).stdout)]
         self.assertIn("proxmox-tls-check", ids)
         subprocess.run(["yq", "-i", ".components.proxmox = false", str(self.cfg)], check=True)
-        self.assertEqual(json.loads(run("upgrade_notes.py", "--json", cwd=self.d).stdout), [])
+        ids = [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", cwd=self.d).stdout)]
+        self.assertEqual(ids, ["recheck-hidden-suggestions"])                        # no component condition
 
     def test_guest_agent_section_only_when_agent_ips_unread_and_on_root(self):  # GitHub issue #14
         doc = self.make_old()
@@ -1286,6 +1287,7 @@ class UneditedTemplateTests(unittest.TestCase):  # GitHub issue #68
 
     def test_unedited_file_is_replaced_and_its_note_settled(self):
         run("config_set.py", "upgrades.reviewed=0.22.0", cwd=self.d)
+        run("upgrade_notes.py", "--done", "recheck-hidden-suggestions", cwd=self.d)
         for rel in ("ansible/playbooks/patch-linux.yml", "ansible/playbooks/check-updates.yml"):
             self.old("v0.22.0", rel)
         out = self.sync("--dry-run").stdout

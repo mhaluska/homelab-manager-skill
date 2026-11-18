@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.24.0 — 2026-11-18
+- `init_repo.py --sync-managed` replaces a template file you never edited with the current one instead of
+  suggesting a manual merge ([#68](https://github.com/mhaluska/homelab-manager-skill/issues/68)). It knows every released version of each template file
+  (`assets/template-history.json`, git blob hashes), adds new template files the replaced one uses (such as
+  `tasks/restart-check.yml`), and lists the upgrade notes the replacement settles, with any step still left.
+  Files with local edits, new opt-in files, `homelab.yaml`, `skill_issues.md` and `docs/proxmox-tokens.md` are
+  never replaced.
+- Upgrade suggestions stay offered until each is applied or declined ([#67](https://github.com/mhaluska/homelab-manager-skill/issues/67)): `--sync-managed` had recorded
+  `upgrades.reviewed` as soon as it listed them, so a postponed one was never offered again. New
+  `upgrade_notes.py --decline ID` / `--done ID` (`upgrades.declined`, `upgrades.done` in homelab.yaml);
+  `upgrades.reviewed` moves only when none is left.
+- Upgrade note: run `upgrade_notes.py --all` once to find suggestions an earlier run hid.
+
 ## 0.23.0 — 2026-11-18
 - Guard: a Python script or heredoc is checked by the commands it actually starts ([#60](https://github.com/mhaluska/homelab-manager-skill/issues/60)): `subprocess`,
   `os.system` and `exec*` calls and nmap argv lists, with the line named in the reason. The word nmap in strings,

@@ -357,6 +357,16 @@
       },
       "text": "check-updates.yml lists the packages autoremove would remove (autoremove_packages) and flags protected ones (autoremove_protected), and reports free space (free_mb, low_space) (#57, #58).",
       "action": "Replace ansible/playbooks/check-updates.yml with {template}, carrying over any local edits (show the user the diff first)."
+    },
+    {
+      "version": "0.24.0",
+      "id": "recheck-hidden-suggestions",
+      "kind": "manual",
+      "when": {
+        "config_set": "upgrades.reviewed"
+      },
+      "text": "Until 0.24.0, --sync-managed recorded upgrades.reviewed as soon as it listed suggestions, so ones that were postponed were never offered again (#67).",
+      "action": "Run `python3 {HM}/scripts/upgrade_notes.py --all` and go through the list with the user (this note is in it too): apply a suggestion they want, record each one they don't (or already turned down earlier) with `python3 {HM}/scripts/upgrade_notes.py --decline ID`, then `python3 {HM}/scripts/upgrade_notes.py --done recheck-hidden-suggestions` and run --sync-managed again."
     }
   ]
 }
