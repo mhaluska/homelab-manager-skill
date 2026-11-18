@@ -2140,6 +2140,13 @@ class SitesTests(unittest.TestCase):  # issue 52
         self.assertEqual(off["PROXMOX_VE_INSECURE"], "true")
         self.assertEqual((home["TF_VAR_proxmox_site"], off["TF_VAR_proxmox_site"], off["PKR_VAR_proxmox_site"]),
                          ("home", "offsite", "offsite"))
+        cfg["proxmox"] = {**cfg["proxmox"], "endpoint": "https://pve1.example:8006, https://pve2.example:8006"}
+        from unittest import mock
+        with mock.patch.object(self.h, "read_secret", return_value="homelab@pve!ro=s3cret"), \
+                mock.patch.object(self.h, "endpoint_reachable", side_effect=lambda ep: "pve2" in ep), \
+                contextlib.redirect_stderr(io.StringIO()):
+            home, _ = with_secrets.env_for(cfg, "proxmox-ro")
+        self.assertEqual(home["PROXMOX_VE_ENDPOINT"], "https://pve2.example:8006/")   # GitHub issue 98
 
     def test_site_group_problems(self):
         import check_env

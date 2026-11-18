@@ -81,9 +81,10 @@ def redact(text: str, cfg: dict) -> str:
     text = re.sub(r"\b(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b", "xx:xx:xx:xx:xx:xx", text)
     names = {str(hmlib.get(cfg, "site.domain", "") or "")}
     for s in hmlib.sites(cfg):
-        m = re.match(r"^\w+://([^:/]+)", str((s.get("proxmox") or {}).get("endpoint") or ""))
-        if m:
-            names.add(m.group(1))
+        for ep in hmlib.endpoint_list((s.get("proxmox") or {}).get("endpoint")):
+            m = re.match(r"^\w+://([^:/]+)", ep)
+            if m:
+                names.add(m.group(1))
     for n in sorted((n for n in names if len(n) > 2), key=len, reverse=True):
         text = text.replace(n, "redacted.example")
     return text

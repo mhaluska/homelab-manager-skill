@@ -196,7 +196,8 @@ site (`site_<name>` group): add `--site <name>` to both scripts; the playbook ta
    the node: shut down cleanly, started again after), **stays-stopped**. `--no-migrate` stops instead
    of migrating. Migration needs compatible CPU types; HA guests on local disks need replication.
    A standalone node (no cluster) has nowhere to move guests: every running one is down during the reboot —
-   say so and agree a time with the user.
+   say so and agree a time with the user. In a cluster whose `proxmox.endpoint` is only this node, the scripts
+   lose the API while it reboots: suggest adding another node's address (references/proxmox.md, API endpoints).
 2. Approval for the node and the plan.
 3. Upgrade only (guests keep running), reports `reboot_needed` and the plan as `planned_migrate` /
    `planned_ha` / `planned_stop` (`migrated`, `ha` and `stopped_and_restored` stay empty: nothing moved):

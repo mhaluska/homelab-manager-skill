@@ -10,7 +10,10 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
+import sys
+import urllib.parse
 from pathlib import Path
 
 CONFIG_NAME = "homelab.yaml"
@@ -229,20 +232,60 @@ def site_title(s: dict) -> str:
     return (f"{s['name']} ({s['label']})" if s["label"] else s["name"]) or "default"
 
 
+def endpoint_list(value) -> list[str]:
+    """Proxmox API addresses in priority order (GitHub issue #98): `endpoint` is one URL, a comma-separated list of
+    them, or a YAML list. Any node of a cluster serves the whole cluster's API."""
+    items = value if isinstance(value, list) else str(value or "").split(",")
+    return [str(x).strip() for x in items if str(x or "").strip()]
+
+
 def proxmox_site(cfg: dict, name: str | None = None) -> dict:
-    """The Proxmox block of a site, with `_site` (its name) and `_where` (its config path); endpoint required."""
+    """The Proxmox block of a site, with `_site` (its name) and `_where` (its config path); endpoint required.
+    `endpoints` lists every configured address; `endpoint` is the first (pick_endpoint chooses one that answers)."""
     s = site(cfg, name)
     px = s["proxmox"]
-    if not px or not px.get("endpoint"):
+    eps = endpoint_list(px.get("endpoint")) if px else []
+    if not eps:
         where = px["_where"] if px else f"sites[{s['name']}].proxmox"
         raise ConfigError(f"{where}.endpoint is empty in homelab.yaml"
                           + (f" (site {s['name']!r} has no Proxmox)." if not s["default"] else "."))
-    return {**px, "_site": s["name"]}
+    for ep in eps:
+        u = urllib.parse.urlsplit(ep)
+        if u.scheme not in ("http", "https") or not u.hostname:
+            raise ConfigError(f"{px['_where']}.endpoint: {ep!r} is not a URL like https://pve1.example:8006.")
+    return {**px, "endpoint": eps[0], "endpoints": eps, "_site": s["name"]}
+
+
+def endpoint_reachable(ep: str, timeout: float = 3.0) -> bool:
+    u = urllib.parse.urlsplit(ep)
+    try:
+        with socket.create_connection((u.hostname, u.port or (443 if u.scheme == "https" else 80)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def pick_endpoint(px: dict, reachable=None) -> str:
+    """The first of a site's Proxmox addresses that accepts a connection (GitHub issue #98), checked only when
+    there are several; when none answers, the first (its error is the one to report). Says on stderr when it is
+    not the first. A refused token or certificate is not a reason to move on: every node would refuse it."""
+    eps = px.get("endpoints") or endpoint_list(px.get("endpoint"))
+    reachable = reachable or endpoint_reachable
+    if len(eps) < 2:
+        return eps[0] if eps else ""
+    for i, ep in enumerate(eps):
+        if reachable(ep):
+            if i:
+                site_name = px.get("_site")
+                print(f"Proxmox{' ' + site_name if site_name else ''}: {', '.join(eps[:i])} not reachable, "
+                      f"using {ep}", file=sys.stderr)
+            return ep
+    return eps[0]
 
 
 def proxmox_sites(cfg: dict) -> list[dict]:
     """The Proxmox block of every site that has one with an endpoint."""
-    return [proxmox_site(cfg, s["name"]) for s in sites(cfg) if s["proxmox"] and s["proxmox"].get("endpoint")]
+    return [proxmox_site(cfg, s["name"]) for s in sites(cfg) if s["proxmox"] and endpoint_list(s["proxmox"].get("endpoint"))]
 
 
 # Storage a guest gets on a node (GitHub issue #54): proxmox.nodes.<node> replaces default_storage and

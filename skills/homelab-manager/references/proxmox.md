@@ -126,6 +126,17 @@ changing anything, show the user the jobs (`jq .backup_jobs discovery/proxmox.js
   in `docs/proxmox-tokens.md` ("Backup jobs") — the user runs it on a node — or the GUI instead:
   Datacenter → Backup → the job → Edit → add the guests. Re-run `proxmox_inventory.py` and drift afterwards.
 
+## API endpoints
+
+Any node of a cluster serves the whole cluster's API. `proxmox.endpoint` (and `sites[].proxmox.endpoint`) takes
+several addresses in priority order, as a YAML list or comma-separated:
+`config_set.py 'proxmox.endpoint=["https://pve1…:8006", "https://pve2…:8006"]'`. The scripts, and `with_secrets.py`
+for OpenTofu and Packer, use the first that accepts a connection and say on stderr when it isn't the first; a
+refused token or certificate does not move on (every node would refuse it). All addresses share `ca_cert`,
+`verify_tls` and the tokens. `check_env.py` checks each (`proxmox:tls#N`): one that is down is a warning while
+another answers. Suggest a second node when the cluster has one and the only endpoint is a node that gets
+patched. A DNS name or a keepalived VIP in front of the nodes is the alternative (one address, no list).
+
 ## Several sites
 
 A site is a location: home, a rented server, family's house reached over VPN. One site needs nothing (no

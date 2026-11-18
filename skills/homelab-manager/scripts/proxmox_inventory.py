@@ -419,7 +419,7 @@ def inventory_site(cfg: dict, px: dict, a) -> None:
     s = hmlib.site(cfg, px["_site"])
     ctx = hmlib.proxmox_ssl_context(cfg, px)
     token = hmlib.read_secret(cfg, a.secret or hmlib.proxmox_token_name(px, "read_only"))
-    inv = collect(PVE(px["endpoint"], token, ctx), a.details)
+    inv = collect(PVE(hmlib.pick_endpoint(px), token, ctx), a.details)
     if s["name"]:
         inv = {"site": s["name"], **inv}
     if not a.summary:

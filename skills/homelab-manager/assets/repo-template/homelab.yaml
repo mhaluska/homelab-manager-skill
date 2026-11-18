@@ -37,7 +37,7 @@ network:
   gateway: ""
 
 proxmox:
-  endpoint: ""               # e.g. https://pve1.home.arpa:8006
+  endpoint: ""               # e.g. https://pve1.home.arpa:8006; a cluster: several, first that answers wins
   verify_tls: true           # false only for self-signed certs; better: set ca_cert
   ca_cert: ""                # path to the Proxmox CA (pve-root-ca.pem)
   default_node: ""

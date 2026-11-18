@@ -10,7 +10,8 @@ secret that gets echoed is replaced by ***REDACTED***.
 Secret kinds (secrets.<name>.kind):
   proxmox_token  value "user@realm!tokenid=uuid" → PROXMOX_VE_ENDPOINT, PROXMOX_VE_API_TOKEN (OpenTofu bpg),
                  PROXMOX_URL, PROXMOX_USERNAME, PROXMOX_TOKEN (Packer); the endpoint is that of the site
-                 whose proxmox tokens name the secret (sites: in homelab.yaml), else proxmox.endpoint;
+                 whose proxmox tokens name the secret (sites: in homelab.yaml), else proxmox.endpoint
+                 (with several addresses, the first that answers);
                  TF_VAR_proxmox_site / PKR_VAR_proxmox_site name that site, so an OpenTofu environment or a
                  Packer site file of another site refuses to run with it
   s3_credentials value "ACCESS_KEY_ID:SECRET_ACCESS_KEY" → AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
@@ -37,7 +38,7 @@ def env_for(cfg: dict, name: str) -> tuple[dict, str]:
     if kind == "proxmox_token":
         # the site whose tokens name this secret (several sites: each has its own endpoint)
         px = hmlib.site_of_secret(cfg, name) or {**(hmlib.site(cfg)["proxmox"] or {}), "_site": hmlib.site(cfg)["name"]}
-        endpoint = px.get("endpoint")
+        endpoint = hmlib.pick_endpoint(px)   # the first address that answers (GitHub issue #98)
         if not endpoint:
             raise hmlib.ConfigError(f"{px.get('_where', 'proxmox')}.endpoint is not set in homelab.yaml.")
         if "=" not in value or "!" not in value.split("=", 1)[0]:

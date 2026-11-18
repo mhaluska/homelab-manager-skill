@@ -161,7 +161,7 @@ def main() -> int:
         site = a.site if a.site else infer_site(cfg, a.guests)
         px = hmlib.proxmox_site(cfg, site)
         secret = hmlib.proxmox_token_name(px, "read_only" if a.action in ("list", "check") else "provisioning")
-        pve = PVE(px["endpoint"], hmlib.read_secret(cfg, secret), hmlib.proxmox_ssl_context(cfg, px))
+        pve = PVE(hmlib.pick_endpoint(px), hmlib.read_secret(cfg, secret), hmlib.proxmox_ssl_context(cfg, px))
     except hmlib.ConfigError as e:
         print(f"pve_snapshot: {e}", file=sys.stderr)
         return 3

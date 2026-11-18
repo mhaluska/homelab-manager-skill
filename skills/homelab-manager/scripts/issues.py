@@ -358,11 +358,11 @@ def site_terms(cfg) -> tuple[list[str], list[str]]:
     root = Path(cfg["_root"])
     domains = {d for d in [hmlib.get(cfg, "site.domain")] if d}
     hosts = set()
-    endpoints = [hmlib.get(cfg, "proxmox.endpoint") or ""]
-    for st in cfg.get("sites") or []:   # every site: its name, label and Proxmox endpoint are site data
+    endpoints = hmlib.endpoint_list(hmlib.get(cfg, "proxmox.endpoint"))
+    for st in cfg.get("sites") or []:   # every site: its name, label and Proxmox endpoints are site data
         if isinstance(st, dict):
             hosts.update(str(st[k]) for k in ("name", "label") if st.get(k))
-            endpoints.append(str((st.get("proxmox") or {}).get("endpoint") or ""))
+            endpoints += hmlib.endpoint_list((st.get("proxmox") or {}).get("endpoint"))
     for ep in endpoints:
         m = re.match(r"^\w+://([^/:]+)", ep)
         if m:
