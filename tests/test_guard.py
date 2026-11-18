@@ -213,6 +213,38 @@ class GuardInfraTests(unittest.TestCase):
     def test_heredoc_is_scanned(self):
         self.assertEqual(decision("bash <<'EOF'\nssh pve1 qm destroy 101\nEOF", self.d), "ask")
 
+    def test_python_script_mentioning_nmap_is_no_scan(self):  # GitHub issue #60
+        p = Path(self.d, "guest_map.py")
+        p.write_text('#!/usr/bin/env python3\nimport json\ncols = "ip | nmap | ansible"\n'
+                     'def extra(a):\n    return f"+{a} (VIP/extra)"\nprint("nmap", extra(1))\n'
+                     'rows = ["nmap", "ssh"]\n# nmap 8.8.8.8\n')
+        self.assertIsNone(decision("python3 guest_map.py > discovery/guest-map.md", self.d))
+        self.assertIsNone(decision(f"{p}", self.d))
+        # a heredoc that is a script's stdin is data, not code
+        self.assertIsNone(decision("python3 issues.py add --body-file - <<'EOF'\nnmap + refused; nmap -iR 5\nEOF", self.d))
+        self.assertIsNone(decision("bash x.sh <<'EOF'\nnmap 8.8.8.8\nEOF", self.d))
+
+    def test_python_script_running_nmap_is_checked(self):
+        cases = {"subprocess.run(['nmap', '-sn', '10.0.10.0/24'])": None,
+                 "subprocess.run(['nmap', '-sn', '192.168.0.0/24'])": "deny",
+                 "subprocess.run(['sudo', 'nmap', '-O', '10.0.10.5'])": "ask",
+                 "subprocess.run('nmap -sn 8.8.8.8 | tee x', shell=True)": "deny",
+                 "os.system(f'nmap -sn {net}')": "ask",
+                 "cmd = ['nmap', '-sn', '8.8.8.8']\nsubprocess.run(cmd)": "deny",
+                 "cmd = ['nmap', '-sn', net]\nsubprocess.run(cmd)": "ask",
+                 "subprocess.run([sys.executable, f'{hm}/nmap_scan.py', net])": "ask",
+                 "subprocess.run('ssh pve1 qm destroy 101', shell=True)": "ask",
+                 "import nmap\nnmap.PortScanner().scan('8.8.8.8')": "ask"}
+        Path(self.d, "homelab.yaml").write_text(CONFIG)
+        for body, want in cases.items():
+            Path(self.d, "s.py").write_text("import os, subprocess, sys\n" + body + "\n")
+            self.assertEqual(decision("python3 s.py", self.d), want, body)
+        out = guard.decide(guard.evaluate("python3 s.py", self.d))
+        self.assertIn("script s.py: line 2", out["hookSpecificOutput"]["permissionDecisionReason"])
+        self.assertEqual(decision("python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['nmap', '8.8.8.8'])\nEOF",
+                                  self.d), "deny")
+        self.assertEqual(decision("python3 <<'EOF'\nimport os\nos.system('nmap 8.8.8.8')\nEOF", self.d), "deny")
+
 
 class HookProcessTests(unittest.TestCase):
     """Run the hook the way Claude Code does: JSON on stdin, decision JSON on stdout."""

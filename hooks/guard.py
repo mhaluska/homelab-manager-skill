@@ -15,6 +15,7 @@ related, it asks.
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -123,6 +124,12 @@ NMAP_SCAN_VALUE_OPTS = {"--profile", "--ports", "--top-ports", "--out", "--inter
 SSH_PROBE_VALUE_OPTS = {"--user", "--port", "--timeout", "--jobs"}
 
 SCRIPT_RUNNERS = {"bash", "sh", "zsh", "dash", "ksh", "python", "python3", "perl", "ruby", "node", "source", "."}
+PYTHON_RE = re.compile(r"^python[0-9.]*$")
+# a token whose value a Python script only knows at run time (a variable, an f-string field)
+UNKNOWN = "__hm_runtime_value__"
+# Python calls that run a program: subprocess.*, os.system/popen/exec*/spawn*, asyncio subprocesses
+PY_EXEC_CALLS = re.compile(r"^(run|call|check_call|check_output|Popen|getoutput|getstatusoutput|system|popen"
+                           r"|exec[lv]p?e?|spawn[lv]p?e?|create_subprocess_exec|create_subprocess_shell)$")
 INFRA_HINT = re.compile(r"\b(tofu|terraform|packer|ansible|ansible-playbook|nmap|qm|pct|pvesh|ssh|security)\b")
 
 
@@ -136,14 +143,15 @@ class Shell:
     data unless a command on their line runs them (bash <<EOF, cat <<EOF | sh, ssh host <<EOF).
 
     segments   — simple commands, in order
-    code       — heredoc bodies that a shell/interpreter executes (checked like commands)
+    code       — (language, body) of heredocs that a shell/interpreter executes (checked like commands);
+                 language is "python" for a Python interpreter reading its program from stdin, else "shell"
     rule_text  — the command without data heredoc bodies (for the RULES regexes)
     """
 
     def __init__(self, command: str):
         self.s = command
         self.segments: list[str] = []
-        self.code: list[str] = []
+        self.code: list[tuple[str, str]] = []
         self.data_spans: list[tuple[int, int]] = []
         end = self.parse(0, None)
         while end < len(self.s):  # stray `)` or backtick at top level: keep going
@@ -215,10 +223,10 @@ class Shell:
     def heredoc_bodies(self, i: int, pending: list, line_start: int) -> int:
         """At the newline after `<<WORD`: consume the bodies, classify each as code or data."""
         s, n = self.s, len(self.s)
-        runs = False
+        runs = None
         for seg in self.segments[line_start:]:
-            tok = strip_prefix(tokens(seg))
-            runs |= bool(tok) and Path(tok[0]).name in HEREDOC_RUNNERS
+            lang = stdin_language(strip_prefix(tokens(seg)))
+            runs = runs or lang
         for word, strip in pending:
             start = i
             while i < n:
@@ -232,7 +240,7 @@ class Shell:
             else:
                 body_end = n
             if runs:
-                self.code.append(s[start:body_end])
+                self.code.append((runs, s[start:body_end]))
             else:
                 self.data_spans.append((start, body_end))
         pending.clear()
@@ -316,6 +324,33 @@ def strip_prefix(tok: list[str]) -> list[str]:
     return out
 
 
+def stdin_language(tok: list[str]) -> str | None:
+    """"python"/"shell" when this command runs a heredoc on its stdin as code, else None.
+
+    `bash <<EOF` and `python3 - <<EOF` run the body; `python3 issues.py add <<EOF` or `bash x.sh <<EOF` only
+    feed it to a script as data (GitHub issue #60). ssh, eval, xargs and osascript always count as running it.
+    """
+    if not tok:
+        return None
+    name = Path(tok[0]).name
+    if name not in HEREDOC_RUNNERS:
+        return None
+    lang = "python" if PYTHON_RE.match(name) else "shell"
+    if name not in SCRIPT_RUNNERS or name in ("source", "."):
+        return lang
+    operands, skip = [], False
+    for t in tok[1:]:
+        if skip:
+            skip = False
+        elif re.match(r"^\d*(<<?|>>?|&>|<>)", t):  # a redirection; `> file`: the file too
+            skip = re.fullmatch(r"\d*(<|>>?|&>|<>)", t) is not None
+        elif not t.startswith("-") or t == "-":
+            operands.append(t)
+    if not operands or operands[0] == "-" or (lang == "shell" and "-s" in tok[1:]):
+        return lang
+    return None
+
+
 # --------------------------------------------------------------------------- checks
 
 def check_text(text: str) -> list[tuple[str, str]]:
@@ -351,6 +386,8 @@ def nmap_targets(args: list[str], cwd: str) -> tuple[list[str], list[str]]:
 
 def check_nmap(argv: list[str], cwd: str, label: str = "nmap") -> list[tuple[str, str]]:
     targets, problems = nmap_targets(argv, cwd)
+    if any(UNKNOWN in t for t in targets):
+        return [(ASK, f"{label} gets scan targets computed at run time; this hook cannot verify them.")]
     root = hmlib.find_repo_root(cwd)
     if not root:
         return [(ASK, f"{label} outside a homelab-infrastructure repo: no homelab.yaml, so no authorized ranges to check against.")]
@@ -452,6 +489,16 @@ def check_gh_language(tok: list[str], cwd: str) -> list[tuple[str, str]]:
                    f"(not English: {'; '.join(problems)}).")]
 
 
+def is_python(script: Path, tok: list[str], content: str) -> bool:
+    """Run by a Python interpreter: python3 x.py, a .py file, or a python shebang."""
+    if PYTHON_RE.match(Path(tok[0]).name):
+        return True
+    if Path(tok[0]).name in SCRIPT_RUNNERS:
+        return False
+    first = content.split("\n", 1)[0]
+    return script.suffix == ".py" if not first.startswith("#!") else "python" in first
+
+
 def script_path(tok: list[str], cwd: str) -> Path | None:
     if not tok:
         return None
@@ -486,12 +533,95 @@ def inner_command(tok: list[str]) -> str | None:
     return None
 
 
+def py_words(node: ast.AST) -> list[str] | None:
+    """Words of a string expression ('a b', f'a {x}'), UNKNOWN for what is only known at run time."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    if isinstance(node, ast.JoinedStr):
+        return ["".join(v.value if isinstance(v, ast.Constant) else UNKNOWN for v in node.values)]
+    return None
+
+
+def py_argv(node: ast.AST) -> list[str] | None:
+    """An argv list/tuple literal; elements not known before run time become UNKNOWN."""
+    if not isinstance(node, (ast.List, ast.Tuple)):
+        return None
+    out = []
+    for e in node.elts:
+        w = py_words(e)
+        out.append(w[0] if w else UNKNOWN)
+    return out
+
+
+def py_call_name(node: ast.Call) -> str:
+    f = node.func
+    return f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else ""
+
+
+SCAN_SCRIPT_RE = re.compile(r"(^|/)(nmap_scan|ssh_probe)\.py$")
+
+
+def evaluate_python(content: str, cwd: str, depth: int) -> list[tuple[str, str]]:
+    """A Python program: the RULES regexes over its text, and the commands it starts (subprocess, os.system,
+    exec*), checked like shell commands. The word nmap in strings, comments or column labels is no scan
+    (GitHub issue #60); an nmap argv whose targets are only known at run time asks."""
+    findings = check_text(content)
+    try:
+        tree = ast.parse(content)
+    except (SyntaxError, ValueError):
+        m = re.search(r"""^.*['"](\S*/)?nmap(_scan\.py)?\b.*$""", content, re.M)
+        if m:
+            line = content.count("\n", 0, m.start()) + 1
+            findings.append((ASK, f"line {line} may run nmap and the program could not be parsed: "
+                                  f"{m.group(0).strip()[:120]}"))
+        return findings
+    commands: list[tuple[int, list[str], bool]] = []  # (line, argv or ["__shell__", cmd], started by a call)
+    in_calls: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import) or isinstance(node, ast.ImportFrom):
+            names = [a.name for a in node.names] + ([node.module] if isinstance(node, ast.ImportFrom) else [])
+            if any((n or "").split(".")[0] == "nmap" for n in names):
+                findings.append((ASK, f"line {node.lineno} imports python-nmap: scan targets this hook cannot verify."))
+        if not isinstance(node, ast.Call) or not node.args or not PY_EXEC_CALLS.match(py_call_name(node)):
+            continue
+        first = node.args[0]
+        argv = py_argv(first)
+        if argv is not None:
+            in_calls.add(id(first))
+        elif len(node.args) > 1 and py_call_name(node) not in ("system", "popen", "getoutput", "getstatusoutput"):
+            argv = [(py_words(a) or [UNKNOWN])[0] for a in node.args]  # os.execlp / create_subprocess_exec style
+            argv = argv[1:] if py_call_name(node).startswith(("exec", "spawn")) and len(argv) > 1 \
+                and argv[0] == argv[1] else argv
+        else:
+            words = py_words(first)
+            if words is None:
+                continue  # a variable: list literals that start with nmap are found below
+            commands.append((node.lineno, ["__shell__", words[0]], True))
+            continue
+        commands.append((node.lineno, argv, True))
+    for node in ast.walk(tree):  # argv lists built before the call: cmd = ["nmap", "-sn", net]
+        if isinstance(node, (ast.List, ast.Tuple)) and id(node) not in in_calls:
+            argv = py_argv(node)
+            # an argv shape (nmap plus an option), not a list of labels such as ["nmap", "ssh"]
+            if argv and Path(argv[0]).name in ("nmap", "sudo") and "nmap" in [Path(a).name for a in argv[:2]] \
+                    and any(a.startswith("-") for a in argv[1:]):
+                commands.append((node.lineno, argv, False))
+    for line, argv, _ in commands:
+        text = argv[1] if argv[0] == "__shell__" else shlex.join(argv)
+        sub = evaluate(text, cwd, depth + 1)
+        if not sub and UNKNOWN in text and any(SCAN_SCRIPT_RE.search(t) for t in tokens(text)):
+            sub.append((ASK, "starts a scan script whose path or targets are computed at run time; "
+                             "this hook cannot verify them."))
+        findings += [(d, f"line {line}: {r}") for d, r in sub]
+    return findings
+
+
 def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
     sh = Shell(command)
     findings = check_text(sh.rule_text)
     if depth < 3:
-        for body in sh.code:  # heredoc a shell or interpreter runs: same checks as a command
-            findings += evaluate(body, cwd, depth + 1)
+        for lang, body in sh.code:  # heredoc a shell or interpreter runs: same checks as a command
+            findings += evaluate_python(body, cwd, depth + 1) if lang == "python" else evaluate(body, cwd, depth + 1)
     for seg in sh.segments:
         tok = strip_prefix(tokens(seg))
         if not tok:
@@ -526,10 +656,14 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
                     content = script.read_text(errors="replace")[:500_000]
                 except OSError:
                     content = ""
-                for decision, reason in evaluate(content, str(script.parent), depth + 1):
+                if is_python(script, tok, content):
+                    sub = evaluate_python(content, str(script.parent), depth + 1)
+                else:
+                    sub = evaluate(content, str(script.parent), depth + 1)
+                    if re.search(r"\bnmap\b", content):
+                        sub.append((ASK, "runs nmap with targets this hook cannot verify."))
+                for decision, reason in sub:
                     findings.append((decision, f"script {script.name}: {reason}"))
-                if re.search(r"\bnmap\b", content):
-                    findings.append((ASK, f"script {script.name} runs nmap with targets this hook cannot verify."))
     return findings
 
 
