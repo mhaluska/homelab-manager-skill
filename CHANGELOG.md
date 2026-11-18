@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.33.0 — 2026-11-18
+- Overview page ([#87](https://github.com/mhaluska/homelab-manager-skill/issues/87)): `overview.py` writes `OVERVIEW.md` in the repository root, one readable page
+  about the whole homelab from what the repo already holds (homelab.yaml, `discovery/*.json`, the managed
+  inventory). Per site: a Mermaid map (routers, VLANs, Proxmox nodes with guest counts per VLAN, UniFi devices),
+  VLANs with addresses used, nodes, storage (⚠ from 80 % full), guests (VLAN, IP, autostart, HA, tags), backup jobs
+  and guests in none, network devices and other scanned addresses; with several sites a sites diagram first. Then
+  containers, Ansible groups, clusters and critical hosts, health (pending updates, reboots, RouterOS findings,
+  capacity and backup warnings, links to drift.md, guest-map.md and the latest security audit) and when each source
+  was collected. Deterministic output (no "generated at" time); `--check` exits 1 when stale. Untrusted names are
+  escaped for Markdown and Mermaid. New `overview.redact` in homelab.yaml masks addresses, MACs, the domain and the
+  Proxmox hosts for a shared or public repo. The operating loop (step 9) regenerates it with every change.
+  references/discovery.md "Overview page".
+- Upgrade note (opt-in): `overview-md`.
+
 ## 0.32.0 — 2026-11-18
 - Ubuntu release upgrade ([#88](https://github.com/mhaluska/homelab-manager-skill/issues/88)): `playbooks/dist-upgrade-ubuntu.yml -e target=<host>
   -e target_release=<codename>`, one release per run, one host at a time. `target_release` must be the release
