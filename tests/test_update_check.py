@@ -73,7 +73,7 @@ class UpdateCheckTests(unittest.TestCase):
         (repo / "discovery").mkdir(exist_ok=True)
         (repo / "discovery" / "proxmox.json").write_text(json.dumps(
             {"guests": [], "nodes": [{"node": "pve1", "pveversion": "pve-manager/9.1.11/x"}],
-             "guest_ip_sources": {"agent": "forbidden: needs VM.GuestAgent.Audit", "lxc": "ok"}}))
+             "guest_ip_sources": {"agent": "forbidden: needs VM.GuestAgent.Audit", "lxc": "ok", "backups": "ok"}}))
         out = json.loads(subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True,
                                         env=self.env, cwd=repo).stdout)
         self.assertIn("1 suggested opt-in change(s)", out["systemMessage"])

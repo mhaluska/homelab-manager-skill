@@ -1232,7 +1232,7 @@ class UpgradeNotesTests(unittest.TestCase):
         out = run("upgrade_notes.py", "--json", cwd=self.d).stdout
         ids = [n["id"] for n in json.loads(out)]
         self.assertEqual(ids, ["inventory-guest-ips", "recheck-hidden-suggestions",   # the latter: any reviewed repo
-                               "inventory-node-versions"])
+                               "inventory-node-versions", "overview-recovery-proxmox"])
         ids = [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", "--all", cwd=self.d).stdout)]
         self.assertIn("proxmox-tls-check", ids)
         subprocess.run(["yq", "-i", ".components.proxmox = false", str(self.cfg)], check=True)
@@ -1563,6 +1563,105 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertEqual(run("overview.py", "--no-ansible", "--check", cwd=self.d).returncode, 1)
         Path(self.d, "OVERVIEW.md").unlink()
         self.assertEqual(run("overview.py", "--no-ansible", "--check", cwd=self.d).returncode, 2)
+
+    def test_recovery_impact_exposure_expirations_access(self):  # GitHub issue #89
+        sys.path.insert(0, str(SCRIPTS))
+        import hmlib
+        import overview
+        d = Path(self.d)
+        r = run("config_set.py", "network.vlans+={id: 30, name: APPS, cidr: 10.9.30.0/24, gw: rtr1}",
+                "network.vlans+={id: 40, name: LAN, cidr: 10.9.40.0/24, gw: core1}",
+                "overview.backup_max_age_days=3", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        snap = json.loads((d / "discovery/proxmox.json").read_text())
+        snap["guest_ip_sources"] = {"backups": "ok (2 vzdump task logs)"}
+        snap["nodes"][0].update(subscription={"status": "active", "level": "c", "next_due": "2026-01-20"},
+                                certificate={"not_after": "2030-01-01T00:00:00Z", "subject": "pve1", "issuer": "Lab CA"})
+        snap["storage"].append({"storage": "pbs1", "node": "pve1", "type": "pbs", "shared": True, "server": "10.9.20.99",
+                                "content": "backup"})
+        g101, g102 = snap["guests"][0], snap["guests"][1]
+        g101["config"]["startup"] = "order=2,up=30"
+        g101["last_backup"] = {"at": "2026-01-02T01:00:00Z", "storage": "pbs1"}
+        g102["last_backup"] = {"at": "2025-12-20T01:00:00Z", "storage": "pbs1"}
+        g102["backup_error"] = {"at": "2026-01-02T01:00:00Z", "storage": "pbs1", "error": "disk|full"}
+        g102["status"] = "running"
+        snap["guests"].append({"vmid": 103, "name": "rtr1", "type": "vm", "node": "pve1", "status": "running",
+                               "template": False, "config": {"net0": "virtio=x,bridge=vmbr0,tag=30", "onboot": 1,
+                                                             "startup": "order=1", "scsi0": "pbs1:vm-103-disk-0"}})
+        snap["backup_jobs"] = [{"id": "daily", "enabled": True, "all": True}]
+        (d / "discovery/proxmox.json").write_text(json.dumps(snap))
+        (d / "discovery/routeros.json").write_text(json.dumps({"devices": {"10.9.40.1": {
+            "identity": {"name": "core1"}, "collected_at": "2026-01-02T00:00:00",
+            "license": {"level": "p1", "deadline-at": "2026-01-25 10:00:00", "next-renewal-at": "2025-12-26 10:00:00"},
+            "addresses": [{"address": "203.0.113.7/24", "interface": "ether1"}, {"address": "10.9.40.1/24"}],
+            "nat": [{"chain": "dstnat", "action": "dst-nat", "protocol": "tcp", "dst-port": "443", "in-interface-list": "WAN",
+                     "to-addresses": "10.9.20.5", "comment": "web|x", "_flags": ""},
+                    {"chain": "dstnat", "action": "dst-nat", "to-addresses": "10.9.20.53", "connection-mark": "dns",
+                     "src-address-list": "IOT", "_flags": ""},
+                    {"chain": "dstnat", "action": "dst-nat", "to-addresses": "10.9.20.6", "_flags": "X"},
+                    {"chain": "srcnat", "action": "masquerade", "_flags": ""}]}}}))
+        (d / "discovery/network.json").write_text(json.dumps({"hosts": {"10.9.20.5": {"ip": "10.9.20.5", "ports": [
+            {"port": 22, "proto": "tcp", "service": "ssh"}, {"port": 8443, "proto": "tcp", "service": "http", "tunnel": "ssl",
+             "tls": {"subject": "web", "issuer": "Lab CA", "not_after": "2026-01-10T00:00:00"}},
+            {"port": 80, "proto": "tcp", "service": "http"}, {"port": 3306, "proto": "tcp", "service": "mysql"}],
+            "last_seen": "2026-01-03T00:00:00"}}}))
+        (d / "discovery/qnap-containers.json").write_text(json.dumps({"collected_at": "x", "hosts": {"nas1": {
+            "site": "", "containers": [{"name": "ct-pbs1", "runtime": "lxd", "image": "Debian 12", "ips": ["10.9.20.99"],
+                                        "state": "running"},
+                                       {"name": "app", "runtime": "docker", "image": "nginx", "ports": ["8080->80/tcp"]}]}}}))
+        managed = {"pve1": {"ansible_host": "10.9.20.2", "ansible_user": "root", "_groups_all": ["proxmox_nodes"]},
+                   "web|x": {"ansible_host": "10.9.20.5", "ansible_user": "{{ x }}", "ansible_port": 2222,
+                             "_groups_all": ["linux", "web_cluster"]},
+                   "rtr1": {"ansible_host": "10.9.30.1", "_groups_all": ["linux"], "patch_requires_approval": True},
+                   "nas1": {"ansible_host": "10.9.20.100", "_groups_all": ["qnap"]}}
+        self.assertEqual(run("config_set.py", "clusters+={name: web, ansible_group: web_cluster, vip: 10.9.20.80}",
+                             cwd=self.d).returncode, 0)
+        md = overview.render(hmlib.load_config(self.d), managed, "test")
+        sec = lambda name: re.search(rf"### {name}\n.*?(?=\n##)", md, re.S).group(0)
+        # last backup: column, a newer failure, the age limit from homelab.yaml, judged against the snapshot time
+        self.assertIn("| yes | – | 2026-01-02 | dmz |", md)
+        self.assertIn("| failed 2026-01-02, last OK 2025-12-20 |", md)
+        back = sec("Backups")
+        self.assertIn("as of 2026-01-02): 1 of 3 guests in a job within 3 days.", back)
+        self.assertIn("No successful backup within 3 days: 102 db (2025-12-20), 103 rtr1 (none in the task logs).", back)
+        self.assertIn("Newest backup failed: 102 db (disk\\|full).", back)
+        self.assertIn("2 guests without a recent successful backup", md.split("## Contents")[0])
+        # start order: Proxmox order then VMID; what each guest does; running guests without autostart
+        start = sec("Start order")
+        self.assertIn("| pve1 | 1 | 103 | rtr1 | 1 | – | gateway of VLAN 30, critical |", start)
+        self.assertIn("| pve1 | 2 | 101 |", start)
+        self.assertIn("| 2 | 30 s | – |", start)
+        self.assertIn("Running now without autostart (start by hand after an outage): 102 db.", start)
+        # impact: node, a gateway that is no guest here, a NAS whose container serves a storage
+        imp = sec("If it goes down")
+        self.assertIn("- **Proxmox node pve1**: 3 running guests stop; rtr1: routing lost for VLAN 30 APPS (1 guest there)."
+                      , imp)
+        self.assertIn("- **core1**: routing lost for VLAN 40 LAN (0 guests there).", imp)
+        self.assertIn("- **ct-pbs1**: storage pbs1 unavailable: 1 guest with disks or ISOs there can't start.", imp)
+        self.assertIn("- **nas1**: 2 containers on it stop; ct-pbs1: storage pbs1 unavailable", imp)
+        # port forwards: enabled dst-nat only, every matcher, known targets, public addresses
+        fwd = sec("Port forwards")
+        self.assertIn("Public addresses on RouterOS interfaces: core1 203.0.113.7/24 on ether1.", fwd)
+        self.assertIn("| core1 | tcp 443 | in-interface-list WAN | any | 10.9.20.5 (web\\|x) | web\\|x |", fwd)
+        self.assertIn("| core1 | all traffic | connection-mark dns | address-list IOT | 10.9.20.53 | – |", fwd)
+        self.assertNotIn("10.9.20.6 ", fwd)
+        # access: inventory user (not a template) and port, web links, other services, the Proxmox UI
+        acc = sec("Access")
+        self.assertIn("| web\\|x | 10.9.20.5 | ssh 10.9.20.5 -p 2222 | https://10.9.20.5:8443, http://10.9.20.5 | "
+                      "mysql/3306 |", acc)
+        self.assertIn("| pve1 | 10.9.20.2 | ssh root@10.9.20.2 | https://10.9.20.2:8006 | – |", acc)
+        # expirations: soonest first, against the newest data, not today
+        exp = md[md.index("## Expirations"):md.index("## Sources")]
+        self.assertIn("judged against the newest data (2026-01-03)", exp)
+        rows = [l for l in exp.splitlines() if l.startswith("| 20")]
+        self.assertEqual([l.split(" | ")[0] for l in rows], ["| 2026-01-10", "| 2026-01-20", "| 2026-01-25", "| 2030-01-01"])
+        self.assertIn("| 2026-01-10 | TLS certificate web (issuer Lab CA) | web\\|x:8443 | ⚠ within 30 days |", exp)
+        self.assertIn("| Proxmox VE subscription Community | pve1 | ⚠ within 30 days |", exp)
+        self.assertIn("| CHR licence p1 | core1 | ⚠ within 30 days; renews automatically 2025-12-26", exp)
+        self.assertIn("3 expiries within 30 days", md.split("## Contents")[0])
+        # NAS containers in the containers.json layout qnap-containers.yml writes
+        self.assertIn("| nas1 | – | ct-pbs1 | LXD: Debian 12 (running) | 10.9.20.99 | – |", md)
+        self.assertIn("| nas1 | – | app | nginx | 8080-&gt;80/tcp | – |", md)
 
     def test_inventory_devices_known_addresses_and_health(self):  # GitHub issues #93-#97
         sys.path.insert(0, str(SCRIPTS))
@@ -3621,6 +3720,117 @@ class NmapInterfaceTests(unittest.TestCase):  # issue 18
         self.assertEqual(h["device_type_guess"], "linux")
 
 
+class OverviewCollectorTests(unittest.TestCase):  # GitHub issue #89: data for the remaining OVERVIEW.md sections
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import proxmox_inventory
+        self.inv = proxmox_inventory
+
+    LOG_NEW = ["INFO: starting new backup job: vzdump 101 102 --mode snapshot --storage pbs1 --mailnotification always",
+               "INFO: Starting Backup of VM 101 (qemu)",
+               "INFO: creating Proxmox Backup Server archive 'vm/101/2026-03-02T01:00:11Z'",
+               "ERROR: unable to freeze guest fs - failed to open /data: Permission denied",
+               "INFO: Finished Backup of VM 101 (00:00:19)",
+               "INFO: Starting Backup of VM 102 (lxc)",
+               "ERROR: Backup of VM 102 failed - unable to open file '/etc/pve/nodes/pve1/lxc/102.conf.tmp'",
+               "INFO: Backup job finished with errors"]
+    LOG_OLD = ["INFO: starting new backup job: vzdump 101 102 --storage nfs1",
+               "INFO: Starting Backup of VM 102 (lxc)",
+               "INFO: creating vzdump archive '/mnt/pve/nfs1/dump/vzdump-lxc-102-2026_03_01-01_00_00.tar.zst'",
+               "INFO: Finished Backup of VM 102 (00:00:30)"]
+
+    def test_parse_backup_log(self):
+        r = self.inv.parse_backup_log(self.LOG_NEW, 1772413200)
+        self.assertEqual(r[101], {"ok": True, "at": "2026-03-02T01:00:11Z", "storage": "pbs1"})  # a freeze error is no failure
+        self.assertFalse(r[102]["ok"])
+        self.assertIn("unable to open file", r[102]["error"])
+        self.assertEqual(r[102]["at"], "2026-03-02T01:00:00Z")                                   # task start time
+        self.assertEqual(self.inv.parse_backup_log(["INFO: Starting Backup of VM 7 (qemu)"], None)[7]["ok"], False)
+
+    def fake(self, routes):
+        import urllib.error
+        pve = self.inv.PVE("https://pve.example:8006", "homelab@pve!ro=s3cret", None)
+        calls = []
+
+        def get(path, **_):
+            calls.append(path)
+            for key, val in routes.items():
+                if path.endswith(key):
+                    if val == 403:
+                        raise urllib.error.HTTPError(path, 403, "Forbidden", {}, None)
+                    return val
+            raise AssertionError(path)
+        pve._get = get
+        return pve, calls
+
+    def test_last_backups_from_task_logs(self):
+        nodes = [{"node": "pve1", "status": "online"}, {"node": "pve2", "status": "offline"}]
+        guests = [{"vmid": 101, "node": "pve1"}, {"vmid": 102, "node": "pve1"}, {"vmid": 103, "node": "pve1"}]
+        pve, calls = self.fake({
+            "/nodes/pve1/tasks": [{"upid": "UPID:pve1:new", "status": "job errors", "starttime": 1772413200},
+                                  {"upid": "UPID:pve1:run", "status": None, "starttime": 1772413300},
+                                  {"upid": "UPID:pve1:old", "status": "OK", "starttime": 1772326800}],
+            "UPID%3Apve1%3Anew/log": [{"t": t} for t in self.LOG_NEW],
+            "UPID%3Apve1%3Aold/log": [{"t": t} for t in self.LOG_OLD]})
+        found, how = self.inv.last_backups(pve, nodes, guests)
+        self.assertEqual(how, "ok (2 vzdump task logs)")
+        self.assertEqual(found[101], {"last_backup": {"at": "2026-03-02T01:00:11Z", "storage": "pbs1"}})
+        self.assertEqual(found[102]["last_backup"], {"at": "2026-03-01T01:00:00Z", "storage": "nfs1"})  # older success
+        self.assertEqual(found[102]["backup_error"]["storage"], "pbs1")                                 # newer failure
+        self.assertNotIn(103, found)
+        self.assertFalse(any("pve2" in c for c in calls))
+        pve, _ = self.fake({"/nodes/pve1/tasks": 403})
+        self.assertTrue(self.inv.last_backups(pve, nodes, guests)[1].startswith("not read"))
+
+    def test_subscription_certificate_and_kept_backups(self):
+        pve, _ = self.fake({"/subscription": {"status": "active", "level": "c", "nextduedate": "2027-01-31",
+                                              "key": "pve2c-secret", "serverid": "ABC"},
+                            "/certificates/info": [
+                                {"filename": "pve-ssl.pem", "notafter": 1830919537, "subject": "/CN=pve1"},
+                                {"filename": "pveproxy-ssl.pem", "notafter": 1800000000,
+                                 "subject": "/C=CZ/O=Home/CN=Proxmox VE", "issuer": "/CN=Home CA"}]})
+        self.assertEqual(self.inv.subscription(pve, "pve1"), {"status": "active", "level": "c", "next_due": "2027-01-31"})
+        self.assertEqual(self.inv.web_certificate(pve, "pve1"), {"file": "pveproxy-ssl.pem", "subject": "Proxmox VE",
+                                                                 "issuer": "Home CA", "not_after": "2027-01-15T08:00:00Z"})
+        pve, _ = self.fake({"/subscription": 403, "/certificates/info": 403})
+        self.assertIsNone(self.inv.subscription(pve, "pve1"))
+        self.assertIsNone(self.inv.web_certificate(pve, "pve1"))
+        old = {"guests": [{"vmid": 101, "type": "vm", "config": {}, "last_backup": {"at": "x"}}]}
+        new = self.inv.keep_details(old, {"guests": [{"vmid": 101, "type": "vm"}]})
+        self.assertEqual(new["guests"][0]["last_backup"], {"at": "x"})
+
+    def test_nmap_reads_tls_certificate(self):
+        import nmap_scan
+        self.assertIn("ssl-cert", nmap_scan.PROFILES["services"])
+        self.assertNotIn("--script", nmap_scan.PROFILES["ping"])
+        f = Path(tempfile.mkdtemp()) / "s.xml"
+        self.addCleanup(shutil.rmtree, f.parent)
+        f.write_text('<nmaprun><host><status state="up"/><address addr="10.0.20.11" addrtype="ipv4"/><ports>'
+                     '<port protocol="tcp" portid="443"><state state="open"/><service name="https"/>'
+                     '<script id="ssl-cert" output="..."><table key="subject"><elem key="commonName">web|x</elem>'
+                     '</table><table key="issuer"><elem key="organizationName">Home CA</elem></table>'
+                     '<table key="extensions"><table><elem key="name">X509v3 Subject Alternative Name</elem>'
+                     '<elem key="value">DNS:web.lab.example, IP Address:10.0.20.11, DNS:www.lab.example</elem></table>'
+                     '</table><table key="validity"><elem key="notBefore">2026-01-01T00:00:00</elem>'
+                     '<elem key="notAfter">2026-04-01T00:00:00</elem></table></script></port>'
+                     '<port protocol="tcp" portid="22"><state state="open"/><service name="ssh"/></port>'
+                     '</ports></host></nmaprun>')
+        (h,) = nmap_scan.parse_xml(f)
+        self.assertEqual(h["ports"][0]["tls"], {"subject": "web|x", "issuer": "Home CA", "not_after": "2026-04-01T00:00:00",
+                                                "names": ["web.lab.example", "www.lab.example"]})
+        self.assertNotIn("tls", h["ports"][1])
+
+    def test_routeros_reads_nat_rules(self):
+        import routeros_audit as ra
+        self.assertIn("/ip firewall nat print", ra.COMMANDS["nat"][0])
+        out = (' 0    comment=web chain=dstnat action=dst-nat to-addresses=10.0.20.5 to-ports=443 protocol=tcp '
+               'in-interface-list=WAN dst-port=443\n 1 X  chain=srcnat action=masquerade out-interface-list=WAN\n')
+        dev = ra.collect("r1", "u", 22, 5, runner=lambda h, u, p, t, cmd: (True, out if "nat" in cmd else
+                                                                              "board-name: hEX\nversion: 7.20\n"))
+        self.assertEqual([(r.get("chain"), r.get("to-addresses"), r["_flags"]) for r in dev["nat"]],
+                         [("dstnat", "10.0.20.5", ""), ("srcnat", None, "X")])
+
+
 class GitUpstreamTests(unittest.TestCase):  # issue 27
     def setUp(self):
         sys.path.insert(0, str(SCRIPTS))
@@ -3877,6 +4087,8 @@ out = {
    " 1 D address=10.0.0.41 mac-address=AA:BB:CC:00:00:02 host-name=\"ev';rm -rf ~;'charger\" status=bound\n"
    " 2 D address=10.0.0.99 mac-address=AA:BB:CC:00:00:03 host-name=phone status=bound\n"),
  "/ip arp print terse without-paging": " 0   address=10.0.0.42 mac-address=AA:BB:CC:00:00:02 interface=bridge\n",
+ "/ip firewall nat print terse without-paging": "" if chr_ else (
+   " 0    comment=web chain=dstnat action=dst-nat to-addresses=10.0.0.5 to-ports=443 protocol=tcp dst-port=443\n"),
 }
 if cmd not in out or (chr_ and "routerboard" in cmd):
     print("bad command name routerboard (line 1 column 9)"); sys.exit(1)
