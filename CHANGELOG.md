@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.30.1 — 2026-11-18
+- `ssh_probe.py <ip>` without `--site` files each address under its own site ([#82](https://github.com/mhaluska/homelab-manager-skill/issues/82)): its inventory host's
+  `site_<name>` group, else the site whose `ranges` hold it, else the default site; a range goes to the site holding
+  its first address. It logs in as `--user`, else the inventory host's `ansible_user`, else `defaults.admin_user`.
+  Before, a host of another site was probed as the default user and merged into the default site's part.
+- `init_repo.py --sync-managed` drops the redundant `"site"` key the 0.29.0 move left inside a site's part of
+  `discovery/network.json` (the next probe or scan of that site dropped it, as an unexpected diff).
+- `pve_snapshot.py <guest>` without `--site` uses the site of the guest's inventory `site_<name>` group (else of its
+  `ansible_host`) instead of reporting "not a Proxmox guest" on the default site ([#83](https://github.com/mhaluska/homelab-manager-skill/issues/83)). VMIDs still use the
+  default site; guests of different sites are refused.
+
 ## 0.30.0 — 2026-11-18
 - RouterOS remediation ([#79](https://github.com/mhaluska/homelab-manager-skill/issues/79)): `playbooks/routeros-disable-services.yml` disables the plain-text IP
   services `routeros_audit.py` flags (`routeros_disable_services`, default `api`, `www`; never `ssh`). Run it with
