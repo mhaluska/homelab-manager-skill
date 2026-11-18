@@ -317,6 +317,7 @@ def main():
         snaps = hmlib.proxmox_snapshots(cfg)
         nets = hmlib.network_snapshots(cfg)   # per site, from network.json (GitHub #72, #75)
         ignores = {st["name"]: hmlib.site_entries(cfg, "discovery.ignore_unmanaged", st["name"]) for st in all_sites}
+        known_devices = hmlib.known_devices(cfg)
     except hmlib.ConfigError as e:
         print(f"drift_report: {e}", file=sys.stderr)
         return 3
@@ -481,7 +482,7 @@ def main():
             if agent.startswith("forbidden"):
                 L += ["", f"VM IPs from the guest agent were not read{in_site(st)} — {agent}."]
         seen = {(g["_site"], g["vmid"]) for g, _ in matched.values()}
-        silent = [g for g in all_guests if g["status"] == "running" and not g.get("template")
+        silent = [g for g in all_guests if g.get("status") == "running" and not g.get("template")
                   and (g["_site"], g["vmid"]) not in seen]
         if silent:
             L += ["", f"Running guests not matched to any scanned address ({len(silent)}) — outside the scanned "
@@ -515,11 +516,16 @@ def main():
             ignore = ignores[st["name"]]
             ignored = lambda ip: any(ipaddress.ip_address(ip) in n for n in ignore
                                      if n.version == ipaddress.ip_address(ip).version)
-            unknown = [(ip, h) for ip, h in hosts_here.items() if ip not in known_ips and not ignored(ip)]
+            named = [e for e in known_devices if belongs(e["site"], st)]   # GitHub issue #100
+            by_mac = {e["mac"]: e for e in named if e["mac"]}
+            mac_of = lambda h: str(h.get("mac") or "").lower()
+            unknown = [(ip, h) for ip, h in hosts_here.items()
+                       if ip not in known_ips and not ignored(ip) and mac_of(h) not in by_mac]
             L += [f"## Network devices not in managed inventory{in_site(st) if per_site else ''}", ""]
             if unknown:
                 L += [f"{len(unknown)} device(s) — add to inventory, or list in `discovery.ignore_unmanaged`"
-                      + (f" (`{{ip: …, site: {st['name']}}}` for this site only)" if multi else "")
+                      + f" (`{{ip: …, name: …, mac: …{', site: ' + st['name'] if multi else ''}}}`; "
+                        "`routeros_audit.py --leases` proposes names)"
                       + (" (Proxmox guests are listed above, not here)" if matched else "") + ":", ""]
                 L += [f"- {ip} {(h.get('hostnames') or [''])[0]} — {h.get('device_type_guess')} {h.get('vendor') or ''}".rstrip()
                       + vlan_suffix(cfg, ip) + (site_suffix(cfg, ip) if multi and st["default"] else "")
@@ -529,6 +535,17 @@ def main():
             else:
                 L.append("None.")
             L.append("")
+            seen_named = []
+            for e in named:
+                at = [ip for ip, h in hosts_here.items() if ip == e["ip"] or (e["mac"] and mac_of(h) == e["mac"])]
+                if at:
+                    moved = [ip for ip in at if ip != e["ip"]]
+                    seen_named.append((e["ip"], f"- {e['ip']} {e['name']}" + (f" ({e['mac']})" if e["mac"] else "")
+                                       + (f" — seen at {', '.join(sorted(moved))}" if moved else "")))
+            if seen_named:
+                L += [f"Known unmanaged devices (`discovery.ignore_unmanaged`, {len(seen_named)} seen):", ""]
+                L += [row for _, row in sorted(seen_named, key=lambda x: ipaddress.ip_address(x[0].split("/")[0]))]
+                L.append("")
         seen_secondary = sorted((ip for ip in secondary if ip in net["hosts"]), key=ipaddress.ip_address)
         if seen_secondary:
             L += [f"Secondary addresses of inventory hosts (`hm_extra_ips`, {len(seen_secondary)}):", ""]

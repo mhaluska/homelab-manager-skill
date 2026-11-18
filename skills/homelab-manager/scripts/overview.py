@@ -255,10 +255,17 @@ def build_known(cfg: dict, docs: dict, managed: dict, snaps: list[dict]) -> Know
     for nas, d in (docs["qnap-containers.json"] or {}).items():
         for c in (d or {}).get("lxd") or [] if isinstance(d, dict) else []:
             k.add(str(c.get("ipv4") or "").split(" ")[0], f"{c.get('name')} (on {nas})", "NAS container")
+    named = hmlib.known_devices(cfg)   # discovery.ignore_unmanaged entries with a name (GitHub issue #100)
+    for e in named:
+        k.add(e["ip"], e["name"], "known device")
+    by_mac = {e["mac"]: e for e in named if e["mac"]}
     # an address whose nmap / ssh_probe hostname is a known host's name is that host's (another NIC)
     names = {n.lower(): kind for n, kind in k.addr.values()}
     for part in hmlib_parts(docs["network.json"]):
         for ip, h in sorted((part.get("hosts") or {}).items()):
+            if str(h.get("mac") or "").lower() in by_mac:   # a known device at a new (DHCP) address
+                k.add(ip, by_mac[str(h["mac"]).lower()]["name"], "known device")
+                continue
             for hn in [(h.get("ssh_probe") or {}).get("hostname")] + list(h.get("hostnames") or []):
                 short = str(hn or "").split(".")[0].lower()
                 if short in names:
@@ -348,6 +355,16 @@ def device_rows(cfg: dict, st: dict, docs: dict, managed: dict, net: dict, unifi
                      "address": host, "firmware": res.get("version") or "",
                      "state": f"{len(d.get('findings') or [])} audit findings, not in inventory",
                      "seen": stamp((scanned.get(host) or {}).get("last_seen"))})
+    inventory = {str(v.get("ansible_host") or "") for v in managed.values()}
+    for e in hmlib.known_devices(cfg):   # named in discovery.ignore_unmanaged (GitHub issue #100)
+        if e["site"] != st["name"] or e["ip"] in inventory:
+            continue
+        h = scanned.get(e["ip"]) or next((h for h in scanned.values()
+                                          if e["mac"] and str(h.get("mac") or "").lower() == e["mac"]), {})
+        moved = h.get("ip") if h.get("ip") and h.get("ip") != e["ip"] else None
+        rows.append({"kind": "Known device", "name": e["name"], "model": "", "address": e["ip"], "firmware": "",
+                     "state": "not managed" + (f", MAC {e['mac']}" if e["mac"] else "")
+                     + (f", seen at {moved}" if moved else ""), "seen": stamp(h.get("last_seen"))})
     return rows
 
 

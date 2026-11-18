@@ -173,7 +173,8 @@ config_set.py 'sites+={name: offsite, label: Rented server, ranges: [192.0.2.0/2
   `ssh_probe.py <ip>` without `--site` files each address under its inventory host's site (else the site whose
   ranges hold it) and logs in as that host's `ansible_user`.
   `network.excluded_hosts` and `discovery.ignore_unmanaged` take `{ip: 10.0.0.5, site: offsite}` next to plain
-  addresses (plain = every site) — needed when sites reuse the same private ranges.
+  addresses (plain = every site) — needed when sites reuse the same private ranges. A named
+  `ignore_unmanaged` entry (`{ip, name, mac}`) without `site` applies at every site.
 - With two or more sites `check_env.py` (`sites:ambiguous`) and the drift report ("Site ambiguity") flag what
   "no site" leaves open: VLANs without a site, a VLAN name shared by entries not all tied to one site,
   overlapping or missing `ranges`, inventory hosts in no site group, `clusters:` groups across sites, plain

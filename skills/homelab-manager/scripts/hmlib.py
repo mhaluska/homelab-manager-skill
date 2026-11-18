@@ -157,11 +157,15 @@ def sites(cfg: dict) -> list[dict]:
 
 
 def _check_vlan_sites(cfg: dict, names: list[str]):
-    for key in ("network.excluded_hosts", "discovery.ignore_unmanaged"):   # {ip, site} entries (GitHub issue #66)
+    for key in SITE_LISTS:   # {ip, site} entries (GitHub issue #66); ignore_unmanaged: {ip, name, mac, site?} (#100)
         for item in get(cfg, key, []) or []:
-            if isinstance(item, dict) and (not item.get("ip") or str(item.get("site") or "") not in names
-                                           or not item.get("site")):
-                raise ConfigError(f"{key}: {item!r} needs ip and a site from sites: ({', '.join(names) or 'none'}).")
+            if not isinstance(item, dict):
+                continue
+            site_needed = key != IGNORE_KEY
+            st = str(item.get("site") or "")
+            if not item.get("ip") or (site_needed and not st) or (st and st not in names):
+                raise ConfigError(f"{key}: {item!r} needs ip and {'a' if site_needed else 'an optional'} site from "
+                                  f"sites: ({', '.join(names) or 'none'}).")
     for v in get(cfg, "network.vlans", []) or []:
         st = v.get("site") if isinstance(v, dict) else None
         if st not in (None, "", EVERY_SITE) and st not in names:
@@ -431,7 +435,9 @@ def site_ambiguities(cfg: dict, host_groups: dict | None = None) -> list[str]:
     for key in SITE_LISTS:
         for item in get(cfg, key, []) or []:
             if isinstance(item, dict):
-                continue
+                if item.get("site") or not item.get("ip"):
+                    continue
+                item = item["ip"]
             for n in _networks([item]):
                 hit = next((x for x in shared if any(n.version == r.version and n.overlaps(r) for r in x[2:])), None)
                 if hit:
@@ -546,7 +552,8 @@ def _networks(items) -> list:
     return nets
 
 
-SITE_LISTS = ("network.excluded_hosts", "discovery.ignore_unmanaged")
+IGNORE_KEY = "discovery.ignore_unmanaged"
+SITE_LISTS = ("network.excluded_hosts", IGNORE_KEY)
 
 
 def site_entries(cfg: dict, key: str, site_name: str | None = None) -> list:
@@ -555,7 +562,11 @@ def site_entries(cfg: dict, key: str, site_name: str | None = None) -> list:
     known = {s["name"] for s in sites(cfg) if s["name"]}
     out = []
     for item in get(cfg, key, []) or []:
-        if isinstance(item, dict):
+        if isinstance(item, dict) and key == IGNORE_KEY and not item.get("site"):   # {ip, name, mac}: every site
+            if not item.get("ip"):
+                raise ConfigError(f"{key}: {item!r} needs ip ({{ip: 10.0.0.5, name: TV}}).")
+            out += _networks([item["ip"]])
+        elif isinstance(item, dict):
             st = str(item.get("site") or "")
             if not item.get("ip") or not st:
                 raise ConfigError(f"{key}: {item!r} needs ip and site ({{ip: 10.0.0.5, site: <name>}}).")
@@ -567,6 +578,20 @@ def site_entries(cfg: dict, key: str, site_name: str | None = None) -> list:
             out += _networks([item["ip"]])
         else:
             out += _networks([item])
+    return out
+
+
+def known_devices(cfg: dict) -> list[dict]:
+    """Named entries of discovery.ignore_unmanaged (GitHub issue #100): [{ip, name, mac, site}], site being the entry's
+    site, else the site whose ranges hold the address, else the default site; mac lower-case or ''."""
+    default = site(cfg)["name"]
+    out = []
+    for item in get(cfg, IGNORE_KEY, []) or []:
+        if not isinstance(item, dict) or not item.get("name") or not item.get("ip"):
+            continue
+        ip = str(item["ip"])
+        st = str(item.get("site") or "") or (site_of_address(cfg, ip.split("/")[0]) or {}).get("name") or default
+        out.append({"ip": ip, "name": str(item["name"]), "mac": str(item.get("mac") or "").lower(), "site": st})
     return out
 
 

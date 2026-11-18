@@ -1499,6 +1499,39 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
                 "backup_jobs": [{"id": "daily", "enabled": True, "all": False, "vmid": [101]}]}
         Path(self.d, "discovery/proxmox.json").write_text(json.dumps(snap))
 
+    def test_named_unmanaged_devices(self):  # issue 100
+        r = run("config_set.py", "network.authorized_ranges+=10.9.20.0/24",
+                "discovery.ignore_unmanaged+={ip: 10.9.20.40, name: Living room TV}",
+                "discovery.ignore_unmanaged+={ip: 10.9.20.50, name: EV charger, mac: AA:BB:CC:00:00:01}",
+                "discovery.ignore_unmanaged+=10.9.20.60", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        Path(self.d, "discovery/network.json").write_text(json.dumps({"hosts": {
+            "10.9.20.40": {"ip": "10.9.20.40", "device_type_guess": "camera"},
+            "10.9.20.41": {"ip": "10.9.20.41", "mac": "aa:bb:cc:00:00:01", "device_type_guess": "water heater"},
+            "10.9.20.42": {"ip": "10.9.20.42", "device_type_guess": "linux"},
+            "10.9.20.60": {"ip": "10.9.20.60"}}}))
+        r = run("drift_report.py", "--no-tofu", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sec = r.stdout[r.stdout.index("## Network devices not in managed inventory"):]
+        self.assertIn("1 device(s)", sec)
+        self.assertIn("- 10.9.20.42", sec)
+        self.assertIn("routeros_audit.py --leases", sec)
+        self.assertIn("Known unmanaged devices (`discovery.ignore_unmanaged`, 2 seen):\n\n"
+                      "- 10.9.20.40 Living room TV\n- 10.9.20.50 EV charger (aa:bb:cc:00:00:01) — seen at 10.9.20.41\n",
+                      sec)
+        r = run("overview.py", "--no-ansible", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        md = Path(self.d, "OVERVIEW.md").read_text()
+        self.assertIn("| Known device | Living room TV | – | 10.9.20.40 | – | not managed | – |", md)
+        self.assertIn("| Known device | EV charger | – | 10.9.20.50 | – | not managed, MAC aa:bb:cc:00:00:01, seen at "
+                      "10.9.20.41 | – |", md)
+        other = md[md.index("### Other scanned addresses"):md.index("## Containers") if "## Containers" in md else None]
+        self.assertIn("| 10.9.20.42 |", other)
+        self.assertNotIn("10.9.20.40", other)
+        self.assertNotIn("10.9.20.41", other)
+        for bad in ("{name: x}", "{ip: 10.9.20.7, site: moon}"):
+            self.assertNotEqual(run("config_set.py", f"discovery.ignore_unmanaged+={bad}", cwd=self.d).returncode, 0)
+
     def test_render_check_and_escaping(self):
         r = run("overview.py", "--no-ansible", cwd=self.d)
         self.assertEqual(r.returncode, 0, r.stderr)

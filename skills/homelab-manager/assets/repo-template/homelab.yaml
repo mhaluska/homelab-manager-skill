@@ -130,7 +130,7 @@ secrets:
   # unifi:      {service: homelab/unifi,        kind: user_password, env: UNIFI} # UniFi read-only admin (unifi_auth: login)
 
 discovery:
-  ignore_unmanaged: []       # IPs you know about and don't want flagged (phones, TVs, …); {ip, site}: one site
+  ignore_unmanaged: []       # IPs you know about and don't want flagged (phones, TVs, …); {ip, name, mac, site}
 
 issues:
   file: skill_issues.md            # problems with / ideas for the homelab-manager skill itself (not the homelab)
