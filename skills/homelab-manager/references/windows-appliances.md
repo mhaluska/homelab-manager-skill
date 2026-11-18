@@ -102,7 +102,11 @@ python3 $HM/scripts/routeros_audit.py --group routeros     # hosts, users and po
 It prints a Markdown report (save it as `docs/security-audit-<date>.md` when the user wants one) and keeps
 the data in `discovery/routeros.json`. Fixing a finding is a change: `/system routerboard upgrade` and a
 RouterOS upgrade need a reboot (approval), disabling a service can cut off whoever uses it — ask first.
-Use a dedicated user in group `read` for audits. `--leases` also reads DHCP leases and ARP and proposes names for
+Use a dedicated user in group `read` for audits. Free flash is judged by device class: on 16 MiB flash (hAP, small
+CRS) a few MiB free is normal on RouterOS 7, so only less than `routeros_audit.min_free_flash` (homelab.yaml, default
+`512KiB`) is an `info` — such a device may need extra packages removed before an upgrade; on larger flash under 10 %
+or 5 MiB is `low`. `--recompute` applies changed rules or thresholds to `discovery/routeros.json` without
+connecting. `--leases` also reads DHCP leases and ARP and proposes names for
 unknown scanned addresses (references/discovery.md, drift report).
 
 Plain-text services the audit flags: `playbooks/routeros-disable-services.yml` (the report prints the command

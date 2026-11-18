@@ -3829,6 +3829,31 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         self.assertEqual(sum("plain-text service `api`" in t for t in texts), 1)
         self.assertEqual(self.ra.plaintext_enabled(dev), ["api"])
 
+    def test_flash_by_device_class(self):  # GitHub issue #112
+        f = lambda free, total, **kw: self.ra.flash_finding(self.ra.size_bytes(free), self.ra.size_bytes(total),
+                                                            free, total, **kw)
+        self.assertIsNone(f("2992.0KiB", "16.0MiB"))                    # normal on 16 MiB flash
+        self.assertEqual(f("300.0KiB", "16.0MiB")[0], "info")
+        self.assertIsNone(f("700.0KiB", "16.0MiB"))
+        self.assertEqual(f("700.0KiB", "16.0MiB", min_free=2**20)[0], "info")
+        self.assertEqual(f("3.1MiB", "128.0MiB")[0], "low")
+        self.assertIsNone(f("80.0MiB", "128.0MiB"))
+        run("config_set.py", "routeros_audit.min_free_flash=1MiB", cwd=self.d)
+        self.assertEqual(self.ra.min_free_flash(self.ra.hmlib.load_config(self.d)), 2**20)
+        run("config_set.py", "routeros_audit.min_free_flash=lots", cwd=self.d)
+        with self.assertRaises(self.ra.hmlib.ConfigError):
+            self.ra.min_free_flash(self.ra.hmlib.load_config(self.d))
+
+    def test_recompute_without_connecting(self):  # GitHub issue #112
+        (self.d / "discovery").mkdir(exist_ok=True)
+        (self.d / "discovery/routeros.json").write_text(json.dumps({"devices": {"10.0.0.7": {
+            "reachable": True, "resource": {"free-hdd-space": "2.5MiB", "total-hdd-space": "16.0MiB"},
+            "findings": [{"severity": "medium", "text": "low free flash: 2.5MiB of 16.0MiB"}]}}}))
+        r = self.audit("--recompute")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads((self.d / "discovery/routeros.json").read_text())["devices"]["10.0.0.7"]["findings"], [])
+        self.assertFalse(self.log.exists() and self.log.read_text().strip())   # nothing collected
+
     def test_parsers(self):
         rows = self.ra.parse_terse(' 0 X name=ftp port=21 address=""\n 1   name=ssh comment="a b=c"\nFlags: X\n')
         self.assertEqual(rows, [{"name": "ftp", "port": "21", "address": "", "_flags": "X"},
@@ -3868,7 +3893,7 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         self.assertIn("**low** — plain-text service `www` enabled (port 80, limited to 10.0.0.0/24): disable it and use www-ssl\n", sw)
         self.assertNotIn("`ftp`", sw)                                                 # disabled (X flag)
         self.assertIn("RouterBOOT firmware 7.12 is behind 7.16.1", sw)
-        self.assertIn("low free flash: 3.1MiB of 128.0MiB", sw)
+        self.assertIn("**low** — low free flash: 3.1MiB of 128.0MiB", sw)
         self.assertIn("default user `admin` is enabled", sw)
         self.assertIn("- Fix: `ansible-playbook playbooks/routeros-disable-services.yml -l sw-rack "   # GitHub #79
                       "-e '{\"routeros_disable_services\": [\"telnet\", \"www\"]}' --check`", sw)
