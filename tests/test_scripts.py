@@ -1245,7 +1245,7 @@ class UpgradeNotesTests(unittest.TestCase):
             self.assertLessEqual(upgrade_notes.vtuple(n["version"]), upgrade_notes.vtuple(have))
             self.assertIn(f"## {n['version']} ", changelog)
             self.assertTrue(set(n["when"]) <= {"component", "config_empty", "config_set", "file_lacks", "file_has", "file_missing",
-                                               "vmids_outside_ranges", "agent_ips_unread", "default_site_implicit"}, n["id"])
+                                               "vmids_outside_ranges", "agent_ips_unread", "default_site_implicit", "multi_site"}, n["id"])
             if "after_replace" in n:      # only a note a file replacement can settle has a leftover step
                 self.assertTrue({"file_lacks", "file_has"} & set(n["when"]), n["id"])
             if "file_lacks" in n["when"] and n["kind"] == "template":
@@ -2688,6 +2688,9 @@ class PerSiteScanTests(unittest.TestCase):  # GitHub #72, #66: scans know their 
         self.assertIn("- 10.0.0.9", offsite)
         self.assertNotIn("10.0.0.5", offsite.split("##")[0])
         self.assertIn("| Network scan — site offsite |", out)
+        import upgrade_notes
+        note = next(n for n in upgrade_notes.all_notes() if n["id"] == "network-scans-per-site")
+        self.assertTrue(upgrade_notes._check(note, self.h.load_config(self.d), self.d)[0])
 
 
 class NmapInterfaceTests(unittest.TestCase):  # issue 18

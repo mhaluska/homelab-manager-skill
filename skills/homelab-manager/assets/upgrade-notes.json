@@ -13,7 +13,8 @@
     "file_missing path (a file a release added is not in the repo; {template} is its template),",
     "vmids_outside_ranges (snapshot VMIDs don't fit), agent_ips_unread (discovery/proxmox.json says the guest",
     "agent IPs were not read: guest_ip_sources.agent present and not ok), default_site_implicit (two or more sites",
-    "and the default one has no ranges, VLANs without a site or no site_<default> group).",
+    "and the default one has no ranges, VLANs without a site or no site_<default> group), multi_site (two or more",
+    "sites).",
     "Placeholders in action and after_replace: {HM} skill dir, {template} template file of file_lacks, {detail} computed hint,",
     "{site} the default site's name (default_site_implicit)."
   ],
@@ -379,6 +380,17 @@
       },
       "text": "With two or more sites, a VLAN without a site applies to every site and an inventory host in no site group counts as the default site; the default site also needs ranges for reports to label its addresses (#65). check_env.py now warns about these (#63).",
       "action": "Run `python3 {HM}/scripts/init_repo.py --name-default-site {site} --dry-run`, show the user each step (ranges, VLAN tags, site_{site} group) and run the ones they accept with `--steps`; a VLAN every site has gets `site: all` instead."
+    },
+    {
+      "version": "0.27.0",
+      "id": "network-scans-per-site",
+      "kind": "manual",
+      "when": {
+        "component": "discovery",
+        "multi_site": true
+      },
+      "text": "Network scans know their site (#72): nmap_scan.py / ssh_probe.py --site <name> write discovery/network-<name>.json for a site other than the default, and network.excluded_hosts / discovery.ignore_unmanaged take {ip, site} entries (#66). discovery/network.json may still hold other sites' devices from earlier scans.",
+      "action": "Ask the user which sites were scanned into discovery/network.json. Rescan each other site from there with `nmap_scan.py <its ranges> --site <name>`, then remove its addresses from network.json if the ranges don't overlap the default site's (with overlapping ranges, start network.json over with a scan at the default site). Turn excluded or ignored addresses that hold at one site only into {ip, site} entries; check_env.py lists the ones inside shared ranges."
     }
   ]
 }

@@ -90,6 +90,12 @@ def _check(note: dict, cfg: dict, root: Path) -> tuple[bool, dict]:
         if (root / rel).exists():
             return False, ph
         ph["template"] = str(TEMPLATE / rel)
+    if w.get("multi_site"):   # two or more sites in homelab.yaml
+        try:
+            if len(hmlib.sites(cfg)) < 2:
+                return False, ph
+        except hmlib.ConfigError:
+            return False, ph
     if w.get("default_site_implicit"):   # two or more sites, the default one not explicit (GitHub issue #65)
         try:
             if len(hmlib.sites(cfg)) < 2 or not hmlib.default_site_gaps(cfg, root):
