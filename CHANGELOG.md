@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.30.0 — 2026-11-18
+- RouterOS remediation ([#79](https://github.com/mhaluska/homelab-manager-skill/issues/79)): `playbooks/routeros-disable-services.yml` disables the plain-text IP
+  services `routeros_audit.py` flags (`routeros_disable_services`, default `api`, `www`; never `ssh`). Run it with
+  `--check` first. It changes nothing unless run with `-e homelab_read_only=false`, and it reads the services
+  again afterwards. The audit report prints the command for each device in the inventory. `requirements.yml`
+  gains `ansible.netcommon` and `community.routeros`.
+- Guard: a playbook run with `homelab_read_only=false` asks, unless it is in `--check` mode.
+- QNAP NAS ([#78](https://github.com/mhaluska/homelab-manager-skill/issues/78)): a `qnap` group (`group_vars/qnap.yml`, raw only) and the read-only
+  `playbooks/qnap-containers.yml`. It lists Container Station's LXD instances and Docker containers into
+  `discovery/qnap-containers.json` (the `containers.json` layout), so the drift report lists their addresses as
+  containers.
+- Upgrade notes (opt-in): `routeros-disable-services`, `qnap-containers`.
+
 ## 0.29.1 — 2026-11-18
 - `init_repo.py --sync-managed` no longer says "has local edits, so --sync-managed did not replace it" about a
   file the same run replaces ([#76](https://github.com/mhaluska/homelab-manager-skill/issues/76)). A note about several files stays a suggestion while an edited one is

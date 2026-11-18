@@ -1,6 +1,6 @@
 {
   "name": "homelab-manager",
-  "version": "0.29.1",
+  "version": "0.30.0",
   "description": "Homelab infrastructure orchestrator: discovery, Proxmox, Packer templates, OpenTofu, Ansible, patching — with enforced safety guardrails.",
   "author": {
     "name": "Marek Haluška"
