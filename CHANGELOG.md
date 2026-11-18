@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.37.0 — 2026-11-18
+- OVERVIEW.md shows every item of a list cell ([#115](https://github.com/mhaluska/homelab-manager-skill/issues/115)): an Ansible group lists all its members (no cap at 12), and
+  no name, port mapping or address is cut in half by the cell length limit; each item is escaped and limited on
+  its own.
+- `bmc-info.yml` records why a BMC's health is not OK ([#103](https://github.com/mhaluska/homelab-manager-skill/issues/103)): `health_causes` lists `chassis_intrusion` (the
+  chassis intrusion sensor, read from Redfish PhysicalSecurity) and every component not OK, and `intrusion` keeps
+  the sensor state. Supermicro's invalid UTF-8 chassis JSON is read as raw bytes and parsed leniently. The host var
+  `bmc_health_accept` (e.g. `[chassis_intrusion]`) accepts a known cause: OVERVIEW.md shows the health as accepted
+  and counts no warning; a new cause still warns.
+- OVERVIEW.md identifies network devices from facts ([#104](https://github.com/mhaluska/homelab-manager-skill/issues/104), [#105](https://github.com/mhaluska/homelab-manager-skill/issues/105)): Model is the host var `hm_model`, else the
+  audit, controller, BMC or QNAP data, else what `ssh_probe.py` read, else the Proxmox guest the device runs as; a
+  RouterOS CHR shows as `CHR (VM <vmid> on <node>)`. An nmap OS guess is never a model, only "nmap guess: …" in
+  State. The OS column of "Other scanned addresses" is "OS guess (nmap, match %)"; on tied matches a vendor/product
+  match beats a generic "Linux x - y", and the MAC vendor is shown in "Looks like".
+- At a glance lists every warning category Health shows, most severe first ([#108](https://github.com/mhaluska/homelab-manager-skill/issues/108)): BMCs not OK (unless
+  accepted), RouterOS findings of medium severity and above, failed update checks, hosts with security updates,
+  guests in no backup job, full storage, node memory. Before, only capacity and backup coverage were counted.
+- OVERVIEW.md has a Contents list ([#113](https://github.com/mhaluska/homelab-manager-skill/issues/113)): every section and each site's sub-sections, with anchors that work on
+  GitHub and GitLab (with several sites the sub-sections are named "Guests (home)", so they are unique); each site
+  ends with "↑ Contents", At a glance links to Health, and Guests, Containers and Other scanned addresses tables
+  longer than 15 rows are collapsed with their row count.
+- Upgrade notes: `bmc-health-causes` (template), `bmc-health-causes-refresh` (regenerate).
+
 ## 0.36.0 — 2026-11-18
 - OVERVIEW.md counts every NIC of a guest in the VLAN table and the site map ([#107](https://github.com/mhaluska/homelab-manager-skill/issues/107)): a router or firewall VM
   shows on each VLAN it has a NIC in again (a regression in 0.34.0), a tagged VLAN missing from `network.vlans` is
