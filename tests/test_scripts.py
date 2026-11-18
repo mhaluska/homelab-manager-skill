@@ -2990,6 +2990,41 @@ class ProxmoxTlsAndPermissionTests(unittest.TestCase):
         self.assertIn("/pool/lab", str(e.exception))
         self.assertIn("pveum user token permissions homelab@pve ro", str(e.exception))
 
+    def test_fallback_endpoints(self):  # GitHub issue 98
+        from unittest import mock
+        h, ce = self.hmlib, self.check_env
+        one, two, three = "https://pve1.example:8006", "https://pve2.example:8006", "https://pve3.example:8006"
+        self.assertEqual(h.endpoint_list(one), [one])
+        self.assertEqual(h.endpoint_list(f"{one}, {two},{three}"), [one, two, three])
+        self.assertEqual(h.endpoint_list([one, two]), [one, two])
+        self.assertEqual(h.endpoint_list(None), [])
+        cfg = {"proxmox": {"endpoint": [one, two, three]}}
+        px = h.proxmox_site(cfg)
+        self.assertEqual((px["endpoint"], px["endpoints"]), (one, [one, two, three]))
+        self.assertEqual(len(h.proxmox_sites(cfg)), 1)
+        with self.assertRaises(h.ConfigError):
+            h.proxmox_site({"proxmox": {"endpoint": f"{one},pve2:8006"}})
+        calls = []
+        def up(*alive):
+            return lambda ep: calls.append(ep) or ep in alive
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(h.pick_endpoint({**px, "_site": "home"}, up(two, three)), two)
+        self.assertIn(f"Proxmox home: {one} not reachable, using {two}", err.getvalue())
+        self.assertEqual(h.pick_endpoint(px, up(one)), one)
+        self.assertEqual(h.pick_endpoint(px, up()), one)                      # none answers: the first's error
+        calls.clear()
+        self.assertEqual(h.pick_endpoint(h.proxmox_site({"proxmox": {"endpoint": one}}), up()), one)
+        self.assertEqual(calls, [])                                           # one address: no probe
+        down = OSError("Connection refused")
+        with mock.patch.object(ce, "_handshake", side_effect=lambda host, port, ctx: down if host == "pve1.example" else None):
+            rows = ce.check_proxmox_tls(cfg)
+        self.assertEqual([r["check"] for r in rows], ["proxmox:tls#1", "proxmox:tls#2", "proxmox:tls#3"])
+        self.assertEqual([r["ok"] for r in rows], [None, True, True])
+        self.assertIn("the first endpoint is down", rows[0]["detail"])
+        with mock.patch.object(ce, "_handshake", return_value=down):
+            self.assertEqual([r["ok"] for r in ce.check_proxmox_tls(cfg)], [False, False, False])
+
     def test_ca_cert_path_expanded_and_relative_to_repo(self):
         cfg = {"_root": "/repo", "proxmox": {"ca_cert": "certs/ca.pem"}}
         self.assertEqual(self.hmlib.proxmox_ca_file(cfg), "/repo/certs/ca.pem")

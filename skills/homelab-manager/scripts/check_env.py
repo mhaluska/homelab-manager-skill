@@ -211,7 +211,26 @@ def check_proxmox_tls(cfg):
         targets = hmlib.proxmox_sites(cfg)
     except hmlib.ConfigError as e:
         return [{"check": "sites", "ok": False, "detail": str(e)}]
-    return [r for px in targets for r in _check_tls(cfg, px)]
+    return [r for px in targets for r in _check_endpoints(cfg, px)]
+
+
+def _check_endpoints(cfg, px):
+    """Every address of a site's Proxmox (GitHub issue #98). One that cannot be reached is a warning while another
+    answers: scripts use the first that answers (a node being patched, say)."""
+    eps = px.get("endpoints") or [px["endpoint"]]
+    if len(eps) == 1:
+        return _check_tls(cfg, px)
+    rows = []
+    for i, ep in enumerate(eps, 1):
+        r = _check_tls(cfg, {**px, "endpoint": ep})[0]
+        rows.append({**r, "check": f"{r['check']}#{i}"})
+    if any(r["ok"] for r in rows):
+        for i, r in enumerate(rows):
+            if r["ok"] is False and r["detail"].startswith("cannot connect"):
+                r["ok"] = None
+                r["detail"] += (" — the first endpoint is down: scripts use the next one that answers" if i == 0
+                                else " — a fallback endpoint is down")
+    return rows
 
 
 def _check_tls(cfg, px):
