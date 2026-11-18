@@ -17,7 +17,7 @@ the live cluster, and prints the plan with each guest's autostart and storage. E
 patched safely now (cluster not quorate, another node offline, unknown node, snapshot without --details).
 Another site (sites: in homelab.yaml): --site NAME reads and writes that site's part of both files (node names
 repeat across sites). A standalone node (no cluster) has no other node: every running guest is stopped for the
-reboot.
+reboot. Local LVM-thin pools are listed with the guests that stop on them and the node's uptime (GitHub issue #91).
 """
 from __future__ import annotations
 
@@ -137,7 +137,21 @@ def make_plan(inv: dict, node: str, max_pct: float = 85, migrate: bool = True) -
                 row.update(action="migrate", target=t, reason="shared storage only")
             else:
                 row.update(action="stop", reason=f"no node has room below {max_pct:g}% memory")
+    # local LVM-thin pools whose guests stop (GitHub issue #91): the pool is thin_check'ed only when activated,
+    # so stopping all its guests or rebooting is the first check since boot; patch-proxmox-node.yml checks first
+    up = next((n.get("uptime_s") for n in nodes if n["node"] == node), None)
+    thin = []
+    for s in sorted(inv.get("storage") or [], key=lambda s: s.get("storage") or ""):
+        if s.get("node") != node or s.get("shared") or s.get("type") != "lvmthin":
+            continue
+        on = [r["vmid"] for r in rows if s["storage"] in r["storage"]]
+        if not on:
+            continue
+        thin.append({"storage": s["storage"], "used_pct": round(100 * s["used_gib"] / s["size_gib"])
+                     if s.get("size_gib") and isinstance(s.get("used_gib"), (int, float)) else None,
+                     "guests": on, "stop": [r["vmid"] for r in rows if r["vmid"] in on and r["action"] == "stop"]})
     plan = {"node": node, "site": inv.get("site") or "", "standalone": not cluster and len(nodes) == 1,
+            "uptime_days": round(up / 86400) if isinstance(up, (int, float)) else None, "lvm_thin": thin,
             "created_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
             "snapshot_at": inv.get("collected_at"), **({"details_at": inv["details_at"]} if inv.get("details_at") else {}),
             "max_mem_pct": max_pct, "guests": rows,
@@ -167,6 +181,15 @@ def render(plan: dict, blockers: list[str]) -> str:
     for r in plan["guests"]:
         counts[r["action"]] = counts.get(r["action"], 0) + 1
     lines += ["", "Summary: " + (", ".join(f"{v} {k}" for k, v in sorted(counts.items())) or "nothing to move")]
+    if plan.get("lvm_thin"):
+        days = plan.get("uptime_days")
+        lines += ["", "LVM-thin pools on this node (checked only when activated: the reboot is their first thin_check"
+                  + (f" in {days} days" if days is not None else "") + "):"]
+        for t in plan["lvm_thin"]:
+            lines.append(f"  {t['storage']}: " + (f"{t['used_pct']}% used, " if t["used_pct"] is not None else "")
+                         + f"{len(t['guests'])} guests, {len(t['stop'])} stopped for the reboot")
+        lines += ["  patch-proxmox-node.yml checks their health and metadata use before stopping anything; add",
+                  "  -e thin_check=true to also run thin_check on a metadata snapshot (references/patching.md)."]
     if blockers:
         lines += ["", "Do NOT patch this node now:"] + [f"  - {b}" for b in blockers]
     return "\n".join(lines)

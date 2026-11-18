@@ -581,6 +581,15 @@
       "text": "patch-proxmox-node.yml polls the 'Nothing runs on the node any more' check (pvestatd lags ~10 s behind a shutdown) and shares a rescue with the shutdowns: if either fails, the stopped guests are started again and HA maintenance is turned off instead of leaving every pinned guest down (#90).",
       "edited": "This repo's copy has local edits, so --sync-managed did not replace it.",
       "action": "Replace ansible/playbooks/patch-proxmox-node.yml with {template}, carrying over any local edits (show the user the diff first), then `ansible-playbook playbooks/patch-proxmox-node.yml --syntax-check`."
+    },
+    {
+      "version": "0.34.0",
+      "id": "patch-proxmox-node-lvm-thin",
+      "kind": "template",
+      "when": {"component": "proxmox", "file_lacks": ["ansible/playbooks/patch-proxmox-node.yml", "GitHub issue #91"]},
+      "text": "patch-proxmox-node.yml checks every LVM-thin pool on the node before stopping anything (health flags, metadata below 90 %); -e thin_check=true also runs thin_check on a metadata snapshot. pve_node_plan.py lists local LVM-thin storages with the guests that stop on them and the node's uptime (#91).",
+      "edited": "This repo's copy has local edits, so --sync-managed did not replace it.",
+      "action": "Replace ansible/playbooks/patch-proxmox-node.yml with {template}, carrying over any local edits (show the user the diff first), then `ansible-playbook playbooks/patch-proxmox-node.yml --syntax-check`; see references/patching.md \"LVM-thin pools\"."
     }
   ]
 }

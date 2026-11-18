@@ -13,6 +13,8 @@
 #   ha       → HA node maintenance mode moves them off and back
 #   stop     → clean shutdown in reverse startup order (never forced; if one fails, the stopped ones are
 #              started again and nothing reboots), started again after the reboot
+# Before anything stops: every LVM-thin pool on the node must be healthy with metadata room; -e thin_check=true
+# also runs thin_check on a metadata snapshot of each (GitHub issue #91, references/patching.md "LVM-thin pools").
 # Finally every guest that ran before must run again (on this node, unless -e migrate_back=false).
 # The Proxmox node name defaults to the inventory short name; set proxmox_node_name if it differs.
 - name: Patch one Proxmox VE node
@@ -137,6 +139,65 @@
 
     - ansible.builtin.set_fact:
         needs_reboot: "{{ pve_reboot_flag.stat.exists or (pve_kernel.stdout | trim) != ansible_facts.kernel }}"
+
+    # LVM-thin pools (GitHub issue #91): a pool is thin_check'ed only when it is activated, so stopping all its
+    # guests or the reboot is its first check since boot; on PVE 9 a pool that failed it (status:64) left every
+    # guest on it unable to start. Check before anything stops, while the guests still run.
+    - name: LVM-thin pools before the reboot
+      when: needs_reboot | bool and allow_reboot | bool
+      block:
+        - name: LVM-thin pools on the node
+          ansible.builtin.command: >-
+            lvs --reportformat json -o vg_name,lv_name,lv_attr,data_percent,metadata_percent -S segtype=thin-pool
+          register: pve_thin
+          changed_when: false
+          check_mode: false
+
+        - name: Pools are healthy and have metadata room
+          ansible.builtin.assert:
+            that:
+              - item.lv_attr[8] | default('-') == '-'
+              - (item.metadata_percent | default(0, true) | float) < 90
+            fail_msg: >-
+              LVM-thin pool {{ item.vg_name }}/{{ item.lv_name }}: attr {{ item.lv_attr }} (9th character: F failed,
+              M metadata read-only, D out of data), metadata {{ item.metadata_percent }}% used. Don't stop its guests
+              or reboot: back them up first. See references/patching.md "LVM-thin pools".
+            quiet: true
+          loop: "{{ (pve_thin.stdout | from_json).report[0].lv | default([]) }}"
+          loop_control:
+            label: "{{ item.vg_name }}/{{ item.lv_name }}"
+
+        # -e thin_check=true: thin_check on a metadata snapshot of each active pool (reserved and released through
+        # dm messages; the guests keep running). A failure stops the run before any guest is touched.
+        - name: thin_check on a metadata snapshot
+          ansible.builtin.shell: |
+            set -u
+            DM={{ (item.vg_name | replace('-', '--')) ~ '-' ~ (item.lv_name | replace('-', '--')) }}
+            T=/dev/mapper/$DM-tpool; [ -e "$T" ] || T=/dev/mapper/$DM
+            dmsetup message "$T" 0 reserve_metadata_snap || exit 3
+            rc=0; thin_check -m "/dev/mapper/${DM}_tmeta" || rc=$?
+            dmsetup message "$T" 0 release_metadata_snap
+            exit $rc
+          register: pve_thin_check
+          changed_when: false
+          failed_when: false
+          loop: "{{ (pve_thin.stdout | from_json).report[0].lv | default([]) | selectattr('lv_attr', 'match', '^....a') | list }}"
+          loop_control:
+            label: "{{ item.vg_name }}/{{ item.lv_name }}"
+          when: thin_check | default(false) | bool and not ansible_check_mode
+
+        - name: thin_check passed
+          ansible.builtin.fail:
+            msg: >-
+              {{ 'Could not reserve a metadata snapshot of' if item.rc == 3 else 'thin_check failed (rc ' ~ item.rc ~ ') on' }}
+              LVM-thin pool {{ item.item.vg_name }}/{{ item.item.lv_name }}{{ (': ' ~ detail) if detail else '' }}.
+              Nothing was stopped. Don't stop its guests or reboot: back them up or move them first.
+              See references/patching.md "LVM-thin pools".
+          vars:
+            detail: "{{ (item.stderr | default('') or item.stdout | default('')) | trim | truncate(300) }}"
+          loop: "{{ pve_thin_check.results | default([]) | selectattr('rc', 'defined') | rejectattr('rc', 'equalto', 0) | list }}"
+          loop_control:
+            label: "{{ item.item.vg_name }}/{{ item.item.lv_name }}"
 
     - name: Move guests off, reboot, bring them back
       when: needs_reboot | bool and allow_reboot | bool and not ansible_check_mode

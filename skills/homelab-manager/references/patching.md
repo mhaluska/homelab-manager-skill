@@ -205,8 +205,28 @@ site (`site_<name>` group): add `--site <name>` to both scripts; the playbook ta
    the live cluster (stale → refresh steps 1–2), records the guests in the node's plan (`state_before` in
    `discovery/pve-patch.json`), moves them off, reboots, waits for quorum and Proxmox services, restores them,
    migrates them back (`-e migrate_back=false` leaves them where they are) and asserts every guest that ran runs again.
-   A guest that won't shut down cleanly aborts the run before the reboot, with the stopped ones started again.
+   A guest that won't shut down cleanly, or a node that still runs guests ~2 minutes later, aborts the run before
+   the reboot, with the stopped ones started again and HA maintenance off.
 5. Report: migrated, stopped/restored, still pending. Commit `discovery/pve-patch.json`.
+
+### LVM-thin pools
+
+A thin pool's metadata is checked (`thin_check`) only when the pool is activated: stopping every guest on it, or
+the reboot, is its first check since the node booted. On Proxmox VE 9 (lvm2 2.03.31, thin-provisioning-tools
+1.1) a pool that had run for months failed that check (`Check of pool <vg>/<pool> failed (status:64). Manual
+repair required!`) and every guest on it was down until restored from backup (GitHub issue #91).
+- `pve_node_plan.py` lists the node's local LVM-thin storages with the guests that stop on them and the node's
+  uptime (the time since their last check).
+- Before stopping anything, the reboot run refuses a pool whose `lv_attr` health character is set (F failed,
+  M metadata read-only, D out of data) or whose metadata is 90 % used or more.
+- `-e thin_check=true` also runs `thin_check -m` on a metadata snapshot of each active pool (reserved and released
+  with `dmsetup message … reserve_metadata_snap` / `release_metadata_snap`; the guests keep running). Suggest it for
+  a node with local LVM-thin guests and a long uptime. A failure stops the run with every guest still running:
+  back the guests up (or move them) before anything else.
+- After a failed activation: don't run `lvconvert --repair` first. Take a raw copy of the metadata LV
+  (`<pool>_tmeta`, activated read-only, `dd` to another disk) so a later repair attempt can start from it, then
+  `lvconvert --repair` (it failed with "no compatible roots found" in the reported case). Restoring the guests from
+  backup into a recreated pool is the reliable way back; each step is a change on the node, with the user's yes.
 
 ## Windows
 

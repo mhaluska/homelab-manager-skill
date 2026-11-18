@@ -2390,6 +2390,29 @@ class PveNodePlanTests(unittest.TestCase):  # issue 23
     def actions(self, plan):
         return {r["vmid"]: (r["action"], r["target"]) for r in plan["guests"]}
 
+    def test_lvm_thin_pools_listed(self):  # GitHub issue #91
+        inv = json.loads(json.dumps(self.inv))
+        inv["nodes"][0]["uptime_s"] = 200 * 86400
+        inv["storage"] += [{"storage": "lvm-data", "node": "pve1", "shared": False, "type": "lvmthin",
+                            "size_gib": 200, "used_gib": 50},
+                           {"storage": "lvm-empty", "node": "pve1", "shared": False, "type": "lvmthin"},
+                           {"storage": "lvm-data", "node": "pve2", "shared": False, "type": "lvmthin"}]
+        inv["guests"][2]["config"]["scsi1"] = "lvm-data:vm-103-disk-1"
+        plan, _ = self.p.make_plan(inv, "pve1")
+        self.assertEqual(plan["lvm_thin"], [{"storage": "lvm-data", "used_pct": 25, "guests": [103], "stop": [103]}])
+        out = self.p.render(plan, [])
+        self.assertIn("first thin_check in 200 days", out)
+        self.assertIn("lvm-data: 25% used, 1 guests, 1 stopped for the reboot", out)
+        self.assertEqual(self.p.make_plan(self.inv, "pve1")[0]["lvm_thin"], [])
+        pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/patch-proxmox-node.yml").read_text()
+        pre = pb.split("- name: LVM-thin pools before the reboot")[1].split("- name: Move guests off")[0]
+        self.assertIn("item.lv_attr[8] | default('-') == '-'", pre)
+        self.assertIn("< 90", pre)
+        self.assertIn("thin_check -m", pre)
+        self.assertIn("release_metadata_snap", pre.split("thin_check -m")[1])   # released after the check, always
+        self.assertIn("thin_check | default(false) | bool and not ansible_check_mode", pre)
+        self.assertLess(pb.index("LVM-thin pools before the reboot"), pb.index("Shutdown (reverse startup order"))
+
     def test_shared_storage_guests_migrate_and_spread(self):
         plan, blockers = self.p.make_plan(self.inv, "pve1")
         self.assertEqual(blockers, [])
