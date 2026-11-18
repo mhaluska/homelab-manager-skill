@@ -1453,6 +1453,59 @@ class OnboardingTests(unittest.TestCase):  # issue 20
         self.assertEqual(check_env.el8_without_interpreter(inv), [])
 
 
+class OverviewTests(unittest.TestCase):  # GitHub issue #87
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d)
+        run("init_repo.py", self.d, "--components", "proxmox,ansible,discovery", cwd=self.d)
+        run("config_set.py", "network.vlans+={id: 20, name: DMZ, cidr: 10.9.20.0/24, gw: 10.9.20.1}",
+            "site.domain=lab.example", cwd=self.d)
+        snap = {"collected_at": "2026-01-02T03:04:05+00:00", "version": "9.1", "cluster": {"name": "c1", "quorate": 1},
+                "nodes": [{"node": "pve1", "status": "online", "cpus": 8, "mem_gib": 64, "mem_used_gib": 60}],
+                "storage": [{"storage": "local-zfs", "node": "pve1", "type": "zfspool", "shared": False,
+                             "size_gib": 100, "used_gib": 90, "content": "images"}],
+                "guests": [{"vmid": 101, "name": "web|<b>x</b>\"[a](http://e)", "type": "vm", "node": "pve1",
+                            "status": "running", "template": False, "cpus": 2, "mem_gib": 4, "disk_gib": 20,
+                            "tags": "dmz", "config": {"net0": "virtio=BC:24:11:00:00:01,bridge=vmbr0,tag=20",
+                                                      "ipconfig0": "ip=10.9.20.5/24,gw=10.9.20.1", "onboot": 1}},
+                           {"vmid": 102, "name": "db", "type": "lxc", "node": "pve1", "status": "stopped",
+                            "template": False, "config": {"net0": "name=eth0,bridge=vmbr0,tag=20,ip=10.9.20.6/24"}},
+                           {"vmid": 9050, "name": "tpl", "type": "vm", "node": "pve1", "template": True}],
+                "backup_jobs": [{"id": "daily", "enabled": True, "all": False, "vmid": [101]}]}
+        Path(self.d, "discovery/proxmox.json").write_text(json.dumps(snap))
+
+    def test_render_check_and_escaping(self):
+        r = run("overview.py", "--no-ansible", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        md = Path(self.d, "OVERVIEW.md").read_text()
+        self.assertIn("```mermaid", md)
+        self.assertIn('pve1 (2 guests)"]', md)
+        self.assertIn('-->|"2"| ', md)                                       # both guests on VLAN 20
+        self.assertIn("| 20 | DMZ | 10.9.20.0/24 | 10.9.20.1 | 2 | 2/254 |", md)
+        self.assertIn("local-zfs on pve1 90% full", md)
+        self.assertIn("In no enabled backup job: 102 db.", md)
+        self.assertIn("| 101 | web\\|&lt;b&gt;x&lt;/b&gt;\"\\[a\\](http://e) | vm |", md)  # untrusted name
+        self.assertNotIn("<b>", md)
+        self.assertIn("discovery/proxmox.json | 2026-01-02 03:04 |", md)
+        self.assertIn("Templates: 1 (tpl).", md)
+        self.assertEqual(run("overview.py", "--no-ansible", "--check", cwd=self.d).returncode, 0)   # deterministic
+        Path(self.d, "OVERVIEW.md").write_text(md.replace("DMZ", "LAN"))
+        self.assertEqual(run("overview.py", "--no-ansible", "--check", cwd=self.d).returncode, 1)
+        Path(self.d, "OVERVIEW.md").unlink()
+        self.assertEqual(run("overview.py", "--no-ansible", "--check", cwd=self.d).returncode, 2)
+
+    def test_mermaid_label_and_redaction(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import overview
+        self.assertEqual(overview.label('a"b<c>[d]|e;f'), "a'b'c''d''e'f")
+        run("config_set.py", "overview.redact=true", cwd=self.d)
+        md = run("overview.py", "--no-ansible", "--out", "-", cwd=self.d).stdout
+        self.assertNotIn("10.9.20.", md)
+        self.assertNotIn("lab.example", md)
+        self.assertNotIn("BC:24:11", md)
+        self.assertIn("x.x.x.x", md)
+
+
 class GuestMapTests(unittest.TestCase):  # GitHub issue #62
     def setUp(self):
         self.d = Path(tempfile.mkdtemp())

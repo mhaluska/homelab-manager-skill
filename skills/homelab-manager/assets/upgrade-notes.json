@@ -564,6 +564,14 @@
       "when": {"component": "ansible", "file_missing": "ansible/playbooks/dist-upgrade-ubuntu.yml"},
       "text": "New playbooks/dist-upgrade-ubuntu.yml upgrades an Ubuntu host with do-release-upgrade, LTS to the next LTS (pre-flight with --check, snapshot, backup, removed packages checked against autoremove_protect, sshd -t before the reboot, health afterwards) (#88).",
       "action": "Copy {template} into ansible/playbooks/; see references/patching.md \"Ubuntu release upgrade\"."
+    },
+    {
+      "version": "0.33.0",
+      "id": "overview-md",
+      "kind": "config",
+      "when": {"config_empty": "overview.redact", "file_missing": "OVERVIEW.md"},
+      "text": "New overview.py writes OVERVIEW.md in the repository root: one readable page about the whole homelab (every site, Mermaid maps, VLANs, nodes, storage, guests, backups, containers, Ansible groups, health), regenerated after every change (#87). New homelab.yaml key overview.redact.",
+      "action": "Ask whether the repository is shared or public, then `python3 {HM}/scripts/config_set.py 'overview.redact=true'` (shared/public) or `'overview.redact=false'`. Then `python3 {HM}/scripts/overview.py`, show the user the result and commit OVERVIEW.md. See references/discovery.md \"Overview page\"."
     }
   ]
 }

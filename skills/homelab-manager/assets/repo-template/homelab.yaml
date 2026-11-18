@@ -97,6 +97,9 @@ opentofu:
     use_path_style: true
   state_secret: s3-state     # keychain secret with the S3 keys (only for state_backend: s3)
 
+overview:                    # OVERVIEW.md (overview.py), regenerated after every change
+  redact: false              # true for a shared or public repo: mask IPs, MACs, domain and Proxmox hosts
+
 ansible:
   default_linux_group: linux
   patch_serial: 5            # patch-linux.yml batch size for independent hosts (n or "25%");

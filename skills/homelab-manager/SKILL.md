@@ -75,14 +75,13 @@ Write answers with `python3 $HM/scripts/config_set.py 'site.domain=home.arpa' 'n
 Node, storage and bridge names are discovered later from the Proxmox API (storage that differs between nodes:
 `proxmox.nodes`, references/proxmox.md "Storage per node"); don't ask for them.
 
-**Round 3 — credentials, done by the user**: show the token setup from
-`docs/proxmox-tokens.md` (only if Proxmox is selected). The **user** runs those commands on
-Proxmox and stores each value with
-`security add-generic-password -U -T /usr/bin/security -a "$USER" -s <service> -w`
-(nothing after `-w` → it prompts, so the secret never enters shell history or this chat).
-For S3 state the value is `ACCESS_KEY_ID:SECRET_ACCESS_KEY` under `homelab/s3-state`.
-Never ask the user to paste a token into the conversation. Remove `secrets:` entries for
-parts they don't use. Then `python3 $HM/scripts/tofu_init.py` (S3: under `with_secrets.py s3-state --`).
+**Round 3 — credentials, done by the user**: show the token setup from `docs/proxmox-tokens.md` (only if Proxmox
+is selected). The **user** runs those commands on Proxmox and stores each value with
+`security add-generic-password -U -T /usr/bin/security -a "$USER" -s <service> -w` (nothing after `-w` → it
+prompts, so the secret never enters shell history or this chat). For S3 state the value is
+`ACCESS_KEY_ID:SECRET_ACCESS_KEY` under `homelab/s3-state`. Never ask the user to paste a token into the
+conversation. Remove `secrets:` entries for parts they don't use. Then `python3 $HM/scripts/tofu_init.py` (S3:
+under `with_secrets.py s3-state --`).
 
 **Finish**: re-run `check_env.py`; list anything left unresolved (missing token, unreachable
 Proxmox) in your final message and in `docs/README.md` under "Pending setup"; commit
@@ -101,7 +100,7 @@ For every request, in this order. Skip steps that don't apply, but never skip 4�
 6. **Approval** — for anything in the approval list below, present the plan compactly and wait for an explicit yes. Approval covers exactly what was shown; a new plan needs a new yes.
 7. **Execute** — Packer / OpenTofu / Ansible, secrets via `with_secrets.py`.
 8. **Verify** — the resource exists and is healthy: Proxmox snapshot, guest agent IP, SSH reachable, services active, `tofu plan` shows no changes.
-9. **Record** — refresh `discovery/`, `tofu_to_inventory.py`, `docs/templates.md`, `docs/decisions.md` where relevant.
+9. **Record** — refresh `discovery/`, `tofu_to_inventory.py`, `docs/templates.md`, `docs/decisions.md` where relevant, then `overview.py` (OVERVIEW.md, same commit).
 10. **Commit** — to `main` when `git.auto_commit` is true and the change is verified. One logical change per commit, message (in `site.language`) says what and why. Never commit secrets, state or plans (the pre-commit hook also blocks them). When `git.auto_push` is true, `git push` after it (never force) and check `git status -sb` isn't ahead; a rejected or failed push goes in the report.
 11. **Report** — what changed, what failed, what's left, in a few lines. Report only what actually ran; anything skipped or assumed is labelled as such, never as a result. Skill problems hit and ideas noticed during the task are already in `skill_issues.md` (§6): name their SKILL-IDs.
 
@@ -204,7 +203,7 @@ Read the reference that matches the task (only that one):
 
 | Task | Read |
 |---|---|
-| Discover devices, scan or "fully scan" a network, Proxmox inventory, containers (Docker, NAS), drift, "compare against Git" | `references/discovery.md` |
+| Discover devices, scan or "fully scan" a network, Proxmox inventory, containers (Docker, NAS), drift, "compare against Git", OVERVIEW.md | `references/discovery.md` |
 | Create/clone/resize/start/stop/migrate VMs and LXC, cloud-init, import existing | `references/proxmox.md` |
 | Build or update templates (Rocky, Debian, Ubuntu) | `references/templates.md` |
 | OpenTofu state, backend, modules, imports, plan review details | `references/opentofu.md` |
@@ -229,6 +228,7 @@ Scripts (all in `$HM/scripts/`):
 | `drift_report.py [--tofu-json F]` / `--stale` | Proxmox ↔ OpenTofu ↔ Ansible ↔ network / is drift.md out of date | `discovery/drift.md` |
 | `tofu_to_inventory.py [--site N]` | OpenTofu output → Ansible inventory | `ansible/inventory/managed/tofu_hosts[-<site>].yml` |
 | `proxmox_to_inventory.py [--vlan N] [--range CIDR] [--type vm\|lxc]` | draft inventory entries for existing Linux guests (review before use) | — (stdout) |
+| `overview.py [--check] [--no-ansible]` | readable page of the whole homelab, every site, Mermaid maps (`overview.redact`: shared repos) | `OVERVIEW.md` |
 | `guest_map.py [--site N]` | per-NIC guest map: VLAN, IPs, subnet/ansible_host/VMID checks | `discovery/guest-map.md` |
 | `ssh_probe.py [targets] [--user U] [--draft] [--site N]` | read-only SSH probe of discovered hosts: hostname, OS, usable Python, OS group | `discovery/network.json` |
 | `routeros_audit.py <hosts> [--group G] [--user U]` | read-only MikroTik RouterOS inspection + audit findings (Markdown report) | `discovery/routeros.json` |
