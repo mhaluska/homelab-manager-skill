@@ -249,6 +249,12 @@ def collect(pve: PVE, details: bool) -> dict:
             nets = pve.get(f"/nodes/{n['node']}/network") or []
         except SystemExit:
             nets = []
+        try:  # GitHub issue #97: the node's own Proxmox VE version and running kernel (Sys.Audit, PVEAuditor)
+            ns = pve.get(f"/nodes/{n['node']}/status") or {}
+        except SystemExit:
+            ns = {}
+        n["pveversion"] = clean(ns.get("pveversion"))
+        n["kernel"] = clean((ns.get("current-kernel") or {}).get("release") or ns.get("kversion"))
         networks[n["node"]] = [{"iface": clean(x.get("iface")), "type": x.get("type"), "cidr": x.get("cidr"),
                                 "gateway": x.get("gateway"), "bridge_ports": clean(x.get("bridge_ports")),
                                 "vlan_aware": bool(x.get("bridge_vlan_aware")), "active": bool(x.get("active"))}
@@ -258,7 +264,8 @@ def collect(pve: PVE, details: bool) -> dict:
         backup_jobs = [{"id": clean(j.get("id")), "enabled": j.get("enabled", 1) not in (0, "0"),
                         "schedule": clean(j.get("schedule")), "storage": clean(j.get("storage")),
                         "all": bool(j.get("all")), "vmid": id_list(j.get("vmid")), "exclude": id_list(j.get("exclude")),
-                        "pool": clean(j.get("pool")), "node": clean(j.get("node"))}
+                        "pool": clean(j.get("pool")), "node": clean(j.get("node")),
+                        "comment": clean(j.get("comment"))}
                        for j in (pve.get("/cluster/backup") or [])]
     except SystemExit:
         backup_jobs = None
