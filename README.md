@@ -25,9 +25,10 @@ folder is fine for a first setup) and install there:
 Updates: once a day the plugin checks for a newer release and tells you; then run
 `/plugin marketplace update homelab-manager-skill`. Release notes: [Releases](https://github.com/mhaluska/homelab-manager-skill/releases).
 When an update changes what the plugin puts in your homelab repo, the next session tells you and
-Claude applies it after you agree (`init_repo.py --sync-managed`). It also lists what newer releases
-suggest you adopt (new config keys, template sections, snapshots to refresh, steps on Proxmox) and
-which of your reported skill issues the release fixed.
+Claude applies it after you agree (`init_repo.py --sync-managed`): template files you never edited are
+replaced with the new version. It also lists what newer releases suggest you adopt (new config keys,
+changes to files you edited, snapshots to refresh, steps on Proxmox) until you apply or decline each one,
+and which of your reported skill issues the release fixed.
 
 Then open Claude Code in an empty `homelab-infrastructure` repository and say e.g.
 *"set up this repo for my homelab"*. The skill asks which parts you use (Proxmox/OpenTofu, Packer,

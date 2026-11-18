@@ -32,9 +32,9 @@ are Python 3 standard library only; run them as `python3 $HM/scripts/<name>.py`.
 6. **Updates.** A session-start hook checks once a day for a newer release. If the session
    context says one is available, tell the user once (version + the update command).
    "Is there a new version?" → `python3 $HM/../../hooks/update_check.py --force`. After an upgrade:
-   `init_repo.py --sync-managed --dry-run` lists one-time updates it applies, opt-in **suggestions** of newer
-   releases (config keys, template sections, snapshots to regenerate, Proxmox steps) and reported skill issues
-   the release fixed. Show them apart; on the user's yes run it for real, apply each accepted suggestion,
+   `init_repo.py --sync-managed --dry-run` lists one-time updates it applies (unedited template files replaced
+   whole), opt-in **suggestions** of newer releases (config keys, sections of edited files, snapshots to
+   regenerate, Proxmox steps) and reported skill issues the release fixed. Show them apart; on the user's yes run it for real, apply each accepted suggestion,
    `upgrade_notes.py --decline ID` for each refused one (`--done ID` for a manual step), run it again to record
    the review, `issues.py fixed --apply`, commit (`Update repo for homelab-manager`).
 
