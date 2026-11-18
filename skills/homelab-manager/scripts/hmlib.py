@@ -49,7 +49,51 @@ def load_config(root: str | os.PathLike | None = None) -> dict:
         raise ConfigError(f"{CONFIG_NAME} is not valid YAML: {res.stderr.strip()}")
     cfg = json.loads(res.stdout or "{}") or {}
     cfg["_root"] = str(root)
+    # only for this plugin's scripts run as commands: hooks (guard.py) and imports in tests are not checked
+    script = Path(sys.argv[0]).resolve() if sys.argv and sys.argv[0] else None
+    level, msg = (plugin_version_check(cfg, script.name) if script and script.parent == Path(__file__).resolve().parent
+                  else ("ok", ""))
+    if level == "refuse":
+        raise ConfigError(msg)
+    if level == "warn":
+        print(f"warning: {msg}", file=sys.stderr)
     return cfg
+
+
+# Scripts that only read the repository (or act outside it): an older plugin version only warns (GitHub issue #111).
+# issues.py stays usable so a problem with the old version can still be reported.
+WARN_ONLY_SCRIPTS = {"check_env.py", "pve_node_plan.py", "pve_guest.py", "with_secrets.py", "tofu_init.py",
+                     "issues.py", "upgrade_notes.py"}
+
+
+def plugin_version() -> str:
+    """The version of the plugin these scripts belong to (its .claude-plugin/plugin.json); '' when unreadable."""
+    try:
+        return str(json.loads((PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text()).get("version") or "")
+    except (OSError, ValueError):
+        return ""
+
+
+def _vtuple(v) -> tuple[int, ...] | None:
+    m = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", str(v or "").strip())
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def plugin_version_check(cfg: dict, script: str, mine: str | None = None) -> tuple[str, str]:
+    """('ok' | 'warn' | 'refuse', message): is this plugin version older than the one the repository was upgraded to
+    (upgrades.reviewed)? Several installed versions sit side by side in the plugin cache, and a session that started
+    on an old one keeps calling its scripts; one that writes repo files would undo the newer version's changes
+    (GitHub issue #111). Scripts in WARN_ONLY_SCRIPTS only warn."""
+    mine = plugin_version() if mine is None else mine
+    reviewed = get(cfg, "upgrades.reviewed")
+    a, b = _vtuple(mine), _vtuple(reviewed)
+    if not a or not b or a >= b:
+        return "ok", ""
+    msg = (f"{script or 'this script'} is from homelab-manager {mine}, but this repository was upgraded to {reviewed} "
+           f"(upgrades.reviewed in {CONFIG_NAME}). Run the {reviewed} (or newer) version's script: the plugin cache "
+           f"keeps old versions, so call it by the current version's path. If the plugin was downgraded on purpose, "
+           f"set upgrades.reviewed={mine} with config_set.py.")
+    return ("warn" if script in WARN_ONLY_SCRIPTS else "refuse"), msg
 
 
 def get(cfg: dict, dotted: str, default=None):

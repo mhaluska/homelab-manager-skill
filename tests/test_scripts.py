@@ -3759,6 +3759,36 @@ sys.stdout.write(out[cmd])
 '''
 
 
+class PluginVersionGuardTests(unittest.TestCase):  # GitHub issue #111
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d)
+        run("init_repo.py", self.d, "--components", "proxmox,ansible,discovery", cwd=self.d)
+
+    def test_older_plugin_than_repo(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import hmlib
+        cfg = {"upgrades": {"reviewed": "0.36.0"}}
+        self.assertEqual(hmlib.plugin_version_check(cfg, "overview.py", "0.36.0")[0], "ok")
+        self.assertEqual(hmlib.plugin_version_check(cfg, "overview.py", "0.37.1")[0], "ok")
+        self.assertEqual(hmlib.plugin_version_check({}, "overview.py", "0.1.0")[0], "ok")
+        level, msg = hmlib.plugin_version_check(cfg, "overview.py", "0.35.0")
+        self.assertEqual(level, "refuse")
+        self.assertIn("from homelab-manager 0.35.0, but this repository was upgraded to 0.36.0", msg)
+        self.assertEqual(hmlib.plugin_version_check(cfg, "check_env.py", "0.35.0")[0], "warn")
+        self.assertEqual(hmlib.plugin_version_check(cfg, "issues.py", "0.35.0")[0], "warn")
+
+    def test_scripts_refuse_or_warn(self):
+        self.assertEqual(run("config_set.py", "upgrades.reviewed=99.0.0", cwd=self.d).returncode, 0)
+        r = run("overview.py", "--no-ansible", cwd=self.d)
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("was upgraded to 99.0.0", r.stderr)
+        self.assertFalse(Path(self.d, "OVERVIEW.md").exists())
+        r = run("issues.py", "list", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("warning: issues.py is from homelab-manager", r.stderr)
+
+
 class SshProbeMergeTests(unittest.TestCase):  # GitHub issue #110
     def test_failure_keeps_last_good_facts(self):
         sys.path.insert(0, str(SCRIPTS))
