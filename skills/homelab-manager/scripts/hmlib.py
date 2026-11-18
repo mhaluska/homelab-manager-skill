@@ -459,6 +459,62 @@ def next_vmid(cfg: dict, kind: str, used: dict[int, str], ip: str | None = None,
     return free
 
 
+# interfaces whose addresses are no way to reach the guest: tunnels, container and VM bridges, overlays
+VIRTUAL_IFACE_RE = re.compile(r"^(lo|wg|tun|tap|docker|br-|veth|virbr|cni|flannel|cali|vxlan|kube|tailscale|zt"
+                              r"|podman|lxc|lxd|incus|nebula|ppp)", re.I)
+_MAC_RE = re.compile(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}")
+
+
+def guest_nic_addresses(g: dict) -> list[dict]:
+    """Every address of a guest's snapshot (--details), one {ip, source, iface, mac} each, in the order found:
+    static addresses from its config (LXC `ip=`, VM cloud-init `ipconfigN`), then reported ones (guest agent,
+    LXC interfaces). A config address carries its NIC's name and MAC where the config names them."""
+    out, seen = [], set()
+    conf = g.get("config") or {}
+    for k in sorted(conf, key=lambda k: (re.sub(r"\d+$", "", k), int(re.search(r"(\d*)$", k).group(1) or 0))):
+        v = str(conf[k])
+        if not k.startswith(("net", "ipconfig")):
+            continue
+        nic = conf.get("net" + k[len("ipconfig"):]) if k.startswith("ipconfig") else v
+        mac = _MAC_RE.search(str(nic or ""))
+        name = re.search(r"(?<![\w])name=([^,]+)", str(nic or ""))
+        for ip in re.findall(r"(?<![\w])ip6?=([0-9A-Fa-f.:]+)(?:/\d+)?", v):
+            if ip.lower() not in seen:
+                seen.add(ip.lower())
+                out.append({"ip": ip.lower(), "source": "config", "iface": name.group(1) if name else "",
+                            "mac": mac.group(0).lower() if mac else ""})
+    for a in g.get("ips") or []:
+        ip = str(a.get("ip") or "").lower()
+        if ip and ip not in seen:
+            seen.add(ip)
+            out.append({"ip": ip, "source": a.get("source") or "agent", "iface": str(a.get("iface") or ""),
+                        "mac": str(a.get("mac") or "").lower()})
+    return out
+
+
+def rank_guest_addresses(g: dict, ranges: list | None = None) -> list[dict]:
+    """guest_nic_addresses, the best way to reach the guest first (GitHub issue #56): on a NIC of the guest's
+    Proxmox config (a config address, or a reported one whose MAC is a netN MAC), inside `ranges` (e.g. the
+    site's ranges and authorized_ranges), not on a tunnel/bridge/container interface or a zero MAC, IPv4,
+    a config address, then the order found. Loopback, link-local, multicast and unparsable addresses are left out."""
+    nic_macs = {m.lower() for k, v in (g.get("config") or {}).items() if k.startswith("net")
+                for m in _MAC_RE.findall(str(v))}
+    ranked = []
+    for i, a in enumerate(guest_nic_addresses(g)):
+        try:
+            addr = ipaddress.ip_address(a["ip"])
+        except ValueError:
+            continue
+        if addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_unspecified:
+            continue
+        on_nic = a["source"] == "config" or (a["mac"] and a["mac"] in nic_macs)
+        in_ranges = not ranges or any(addr in n for n in ranges if n.version == addr.version)
+        virtual = bool(VIRTUAL_IFACE_RE.match(a["iface"])) or (a["source"] != "config"
+                                                                and a["mac"] in ("", "00:00:00:00:00:00"))
+        ranked.append(((not on_nic, not in_ranges, virtual, addr.version != 4, a["source"] != "config", i), a))
+    return [a for _, a in sorted(ranked, key=lambda x: x[0])]
+
+
 def _guest_net(g: dict) -> tuple[str | None, int | None]:
     """(static IPv4, VLAN tag) of a guest's first NIC, from its snapshot config (--details)."""
     conf = g.get("config") or {}
@@ -471,7 +527,7 @@ def _guest_net(g: dict) -> tuple[str | None, int | None]:
             m = re.search(r"(?<![\w-])tag=(\d+)", v)
             vlan = vlan if vlan is not None else (int(m.group(1)) if m else None)
     if not ip:
-        ip = next((a["ip"] for a in g.get("ips") or [] if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", str(a.get("ip")))), None)
+        ip = next((a["ip"] for a in rank_guest_addresses(g) if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", a["ip"])), None)
     return ip, vlan
 
 

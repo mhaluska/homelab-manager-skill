@@ -953,6 +953,44 @@ class GuestNetworkMappingTests(unittest.TestCase):
         self.assertEqual(inv.guest_ips(pve, vm(901), "lxc", {}, src)[0]["ip"], "10.0.10.53")
 
 
+    def test_lxc_lists_configured_ip_and_marks_extra(self):  # GitHub issue #61
+        sys.path.insert(0, str(SCRIPTS))
+        import proxmox_inventory as inv
+        pve = inv.PVE("https://pve.example:8006", "homelab@pve!ro=s3cret", None)
+        pve._get = lambda path, **_: [{"name": "eth0", "hwaddr": "bc:24:11:00:00:01", "inet": "10.0.10.250/24"},
+                                      {"name": "eth1", "hwaddr": "bc:24:11:00:00:02", "inet": "10.0.20.251/24"}]
+        conf = {"net0": "name=eth0,bridge=vmbr0,hwaddr=BC:24:11:00:00:01,ip=10.0.10.251/24,tag=10",
+                "net1": "name=eth1,bridge=vmbr0,hwaddr=BC:24:11:00:00:02,ip=10.0.20.251/24",
+                "net2": "name=eth2,bridge=vmbr0,ip=dhcp"}
+        out = inv.guest_ips(pve, {"node": "pve1", "vmid": 901}, "lxc", conf, {"lxc": ""})
+        self.assertEqual([(a["iface"], a["ip"], a["source"], a.get("extra", False)) for a in out],
+                         [("eth0", "10.0.10.251", "config", False), ("eth1", "10.0.20.251", "config", False),
+                          ("eth0", "10.0.10.250", "lxc", True)])
+        self.assertEqual(out[0]["mac"], "bc:24:11:00:00:01")
+
+    def test_reachable_address_ranked_first(self):  # GitHub issue #56
+        sys.path.insert(0, str(SCRIPTS))
+        import ipaddress
+        import hmlib
+        import proxmox_to_inventory as p2i
+        g = {"type": "vm", "config": {"net0": "virtio=BC:24:11:AA:BB:01,bridge=vmbr0,tag=20"},
+             "ips": [{"iface": "wg0", "mac": "00:00:00:00:00:00", "ip": "10.99.0.2", "source": "agent"},
+                     {"iface": "docker0", "mac": "02:42:ac:11:00:01", "ip": "172.17.0.1", "source": "agent"},
+                     {"iface": "ens18", "mac": "bc:24:11:aa:bb:01", "ip": "fe80::1", "source": "agent"},
+                     {"iface": "ens18", "mac": "bc:24:11:aa:bb:01", "ip": "192.168.20.15", "source": "agent"}]}
+        site = [ipaddress.ip_network("192.168.20.0/24")]
+        self.assertEqual(p2i.pick_ip(g, [], site), "192.168.20.15")
+        self.assertEqual(p2i.pick_ip(g, [], None), "192.168.20.15")      # NIC MAC wins without ranges too
+        self.assertEqual(p2i.pick_ip(g, [ipaddress.ip_network("10.99.0.0/24")], site), "10.99.0.2")  # --range
+        g["config"] = {"net0": "virtio,bridge=vmbr0"}                     # no MAC to match: the range decides
+        self.assertEqual(p2i.pick_ip(g, [], site), "192.168.20.15")
+        g["ips"] = g["ips"][:2]                                           # only virtual interfaces left
+        self.assertEqual([a["ip"] for a in hmlib.rank_guest_addresses(g, site)], ["10.99.0.2", "172.17.0.1"])  # order found
+        lxc = {"type": "lxc", "config": {"net0": "name=eth0,hwaddr=BC:24:11:00:00:01,ip=10.0.10.251/24"},
+               "ips": [{"iface": "eth0", "mac": "bc:24:11:00:00:01", "ip": "10.0.10.250", "source": "lxc",
+                        "extra": True}]}
+        self.assertEqual(p2i.pick_ip(lxc, [], None), "10.0.10.251")       # configured, not the VIP
+
     def test_details_keep_what_pins_a_guest_to_its_node(self):  # issue 23
         sys.path.insert(0, str(SCRIPTS))
         import proxmox_inventory as inv

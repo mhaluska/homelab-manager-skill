@@ -142,6 +142,20 @@ def guest_ips(pve: "PVE", g: dict, kind: str, conf: dict, sources: dict) -> list
                     out.append({"iface": clean(nic.get("name")), "mac": clean(nic.get("hardware-address")),
                                 "ip": clean(a.get("ip-address")), "source": "agent"})
     else:
+        # Proxmox reports one address per family and interface, so a second one (e.g. a keepalived VIP) can
+        # hide the container's own: its configured ip= is listed too, and other reported addresses on that
+        # interface are marked extra (GitHub issue #61)
+        configured: dict[str, set[str]] = {}
+        for k in sorted(conf, key=lambda k: int(k[3:]) if k[3:].isdigit() else 0):
+            if not re.fullmatch(r"net\d+", k):
+                continue
+            opts = dict(o.split("=", 1) for o in str(conf[k]).split(",") if "=" in o)
+            for key in ("ip", "ip6"):
+                ip = opts.get(key, "").split("/")[0]
+                if re.fullmatch(r"[0-9A-Fa-f.:]+", ip) and usable_ip(ip):  # not dhcp / manual / auto
+                    configured.setdefault(opts.get("name", ""), set()).add(ip.lower())
+                    out.append({"iface": clean(opts.get("name")), "mac": clean((opts.get("hwaddr") or "").lower()),
+                                "ip": clean(ip), "source": "config"})
         try:
             data = pve._get(f"/nodes/{g['node']}/lxc/{g['vmid']}/interfaces") or []
         except (urllib.error.URLError, OSError, ValueError):
@@ -150,11 +164,15 @@ def guest_ips(pve: "PVE", g: dict, kind: str, conf: dict, sources: dict) -> list
         for nic in data:
             if nic.get("name") == "lo":
                 continue
+            name = str(nic.get("name") or "")
             for key in ("inet", "inet6"):
-                for ip in str(nic.get(key) or "").split():
-                    if usable_ip(ip):
-                        out.append({"iface": clean(nic.get("name")), "mac": clean(nic.get("hwaddr")),
-                                    "ip": clean(ip.split("/")[0]), "source": "lxc"})
+                val = nic.get(key) or ""
+                for ip in (val if isinstance(val, list) else str(val).split()):
+                    ip = str(ip).split("/")[0]
+                    if not usable_ip(ip) or ip.lower() in configured.get(name, set()):
+                        continue
+                    out.append({"iface": clean(name), "mac": clean(nic.get("hwaddr")), "ip": clean(ip), "source": "lxc",
+                                **({"extra": True} if configured.get(name) else {})})
     return out
 
 

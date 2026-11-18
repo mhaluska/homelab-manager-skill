@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hmlib  # noqa: E402
-from drift_report import guest_addresses, load_ansible  # noqa: E402
+from drift_report import load_ansible  # noqa: E402
 
 LINUX_VM_OSTYPES = {"l26", "l24"}
 # LXC ostypes are all Linux; "unmanaged" too (Proxmox just doesn't set it up)
@@ -41,27 +41,22 @@ def vlans(g: dict) -> set[int]:
             for t in re.findall(r"(?<![\w])tag=(\d+)", str(v))}
 
 
-def pick_ip(g: dict, ranges: list) -> str | None:
-    """IPv4 first, static config before reported; inside --range when given; never loopback/link-local."""
-    cands = []
-    for ip, src in guest_addresses(g)[0].items():
-        try:
-            a = ipaddress.ip_address(ip)
-        except ValueError:
-            continue
-        if a.is_loopback or a.is_link_local or a.is_multicast or a.is_unspecified:
-            continue
-        if ranges and not any(a in n for n in ranges if n.version == a.version):
-            continue
-        cands.append((a.version != 4, src != "config", ip))
-    return min(cands)[2] if cands else None
+def pick_ip(g: dict, ranges: list, preferred: list | None = None) -> str | None:
+    """The address to reach the guest by (hmlib.rank_guest_addresses): on a NIC of its Proxmox config, inside
+    `preferred` (the site's ranges and authorized_ranges), not a tunnel/bridge address, IPv4 first, never
+    loopback/link-local. Only addresses inside --range (`ranges`) when given."""
+    for a in hmlib.rank_guest_addresses(g, preferred):
+        ip = ipaddress.ip_address(a["ip"])
+        if not ranges or any(ip in n for n in ranges if n.version == ip.version):
+            return a["ip"]
+    return None
 
 
 def host_name(name: str) -> str:
     return re.sub(r"[^a-z0-9_.-]+", "-", (name or "").lower()).strip("-.") or "guest"
 
 
-def plan(guests, managed: dict, a, ranges) -> tuple[dict[str, dict], list[str]]:
+def plan(guests, managed: dict, a, ranges, preferred: list | None = None) -> tuple[dict[str, dict], list[str]]:
     known_names = {h.lower().split(".")[0] for h in managed}
     known_ips = {str(v.get("ansible_host") or "").lower() for v in managed.values()} - {""}
     hosts, skipped = {}, []
@@ -82,7 +77,7 @@ def plan(guests, managed: dict, a, ranges) -> tuple[dict[str, dict], list[str]]:
         if g.get("status") != "running" and not a.all_status:
             skipped.append(f"{label}: {g.get('status')} (--all-status to include)")
             continue
-        ip = pick_ip(g, ranges)
+        ip = pick_ip(g, ranges, preferred)
         if not ip:
             if ranges:
                 continue  # not in the requested ranges (or no address known)
@@ -147,7 +142,8 @@ def main():
               "proxmox_inventory.py --details.", file=sys.stderr)
         return 4
     managed, _ = load_ansible(root)
-    hosts, skipped = plan(guests, managed, a, ranges)
+    preferred = site["ranges"] + hmlib.scan_scope(cfg)[0]
+    hosts, skipped = plan(guests, managed, a, ranges, preferred)
     text = to_yaml(hosts, skipped, a.group, f"{rel} ({inv.get('collected_at', '?')})",
                    hmlib.SITE_GROUP_PREFIX + site["name"] if site["name"] else "")
     if a.out:
