@@ -633,6 +633,19 @@
       },
       "text": "containers.json now records where each Compose project lives; OVERVIEW.md shows it in a Compose column (#102).",
       "action": "Refresh it: `ansible-playbook playbooks/docker-containers.yml` (read-only; QNAP: playbooks/qnap-containers.yml), then `python3 {HM}/scripts/overview.py` when the repo has an OVERVIEW.md."
+    },
+    {
+      "version": "0.36.0",
+      "id": "routeros-flash-findings",
+      "kind": "regenerate",
+      "when": {
+        "file_has": [
+          "discovery/routeros.json",
+          "needs room for the package"
+        ]
+      },
+      "text": "routeros_audit.py judges free flash by device class: a few MiB free on 16 MiB flash is no longer a medium finding (#112).",
+      "action": "Recompute the stored findings without connecting: `python3 {HM}/scripts/routeros_audit.py --recompute`, then `python3 {HM}/scripts/overview.py` when the repo has an OVERVIEW.md."
     }
   ]
 }

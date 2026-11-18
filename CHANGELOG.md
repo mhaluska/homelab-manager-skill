@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.36.0 — 2026-11-18
+- OVERVIEW.md counts every NIC of a guest in the VLAN table and the site map ([#107](https://github.com/mhaluska/homelab-manager-skill/issues/107)): a router or firewall VM
+  shows on each VLAN it has a NIC in again (a regression in 0.34.0), a tagged VLAN missing from `network.vlans` is
+  shown, and untagged NICs are grouped per bridge ("untagged on vmbr1"). The Guests table keeps one NIC per guest.
+- OVERVIEW.md wording ([#109](https://github.com/mhaluska/homelab-manager-skill/issues/109)): "1 node", "1 guest"; the Sites map draws no links between sites (the repository
+  has none to show); a site without VLANs says "flat network (untagged)"; a backup job without a comment is named by
+  schedule and storage whatever its id (Proxmox's `backup-xxxxxxxx-xxxx` ids were shown raw); a collapsed list
+  shows which known host each scanned address was attributed to.
+- `overview.py` and `drift_report.py` resolve scanned addresses the same way ([#106](https://github.com/mhaluska/homelab-manager-skill/issues/106)): `discovery.ignore_unmanaged`
+  in every form (plain, `{ip, site}`, `{ip, name, mac}`) keeps an address out of OVERVIEW.md's "Other scanned
+  addresses", and the drift report counts an audited RouterOS device's interface addresses (routeros.json) as the
+  router's and lists them, so they no longer need copying into `hm_extra_ips`.
+- `ssh_probe.py`: a failed probe keeps the last good facts of the host in network.json and records `last_error`,
+  `last_error_at` and `last_error_user` beside them; a good probe clears them ([#110](https://github.com/mhaluska/homelab-manager-skill/issues/110)).
+- `routeros_audit.py` judges free flash by device class ([#112](https://github.com/mhaluska/homelab-manager-skill/issues/112)): on 16 MiB flash a few MiB free is normal on
+  RouterOS 7 and is no finding; less than `routeros_audit.min_free_flash` (homelab.yaml, default `512KiB`) is
+  `info`; larger flash under 10 % or 5 MiB is `low` (was `medium`). `--recompute` applies the rules to
+  routeros.json without connecting.
+- A script from a plugin version older than the repository's `upgrades.reviewed` refuses to write repo files and
+  names the version to use; read-only scripts and `issues.py` only warn ([#111](https://github.com/mhaluska/homelab-manager-skill/issues/111)). The plugin cache keeps old
+  versions, and a session that started on one undid a newer version's OVERVIEW.md.
+- `issues.auto_send: true` in homelab.yaml (only on the user's request; the guard asks when it is set) lets
+  `issues.py report` send without the guard's prompt; raw `gh issue` writes still ask ([#114](https://github.com/mhaluska/homelab-manager-skill/issues/114)).
+- Upgrade notes: `routeros-flash-findings` (regenerate).
+
 ## 0.35.0 — 2026-11-18
 - `proxmox.endpoint` (and `sites[].proxmox.endpoint`) takes several addresses in priority order, as a YAML list or
   comma-separated ([#98](https://github.com/mhaluska/homelab-manager-skill/issues/98)). `proxmox_inventory.py`, `pve_snapshot.py`, `pve_guest.py` and `with_secrets.py`
