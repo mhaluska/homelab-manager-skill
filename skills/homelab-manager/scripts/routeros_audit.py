@@ -15,7 +15,8 @@ carries console options (`<user>+ct512w`: no colours, no terminal detection, 512
 skipped on CHR, and a command that fails doesn't stop the others.
 
 Collects identity, resource, routerboard, package update status, licence, interfaces, addresses, bridges
-and VLANs, IP services, users, the MAC server and neighbour discovery. Flags: plain-text services enabled
+and VLANs, IP services, users, the MAC server, neighbour discovery and the NAT rules (port forwards, listed in
+OVERVIEW.md). Flags: plain-text services enabled
 (telnet, ftp, www, api), ssh/winbox/www-ssl/api-ssl open to any address, the MAC server, MAC Winbox or
 neighbour discovery on all interfaces, RouterBOOT
 firmware behind the installed RouterOS, an update RouterOS already knows about (no check is triggered), low
@@ -64,6 +65,7 @@ COMMANDS = {
     "mac_server": ("/tool mac-server print without-paging", False),
     "mac_winbox": ("/tool mac-server mac-winbox print without-paging", False),
     "discovery": ("/ip neighbor discovery-settings print without-paging", False),
+    "nat": ("/ip firewall nat print terse without-paging", True),   # port forwards in OVERVIEW.md (GitHub #89)
 }
 LEASE_COMMANDS = {   # --leases (GitHub issue #100): names for unknown scanned addresses
     "leases": ("/ip dhcp-server lease print terse without-paging", True),
