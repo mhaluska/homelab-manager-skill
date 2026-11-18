@@ -1500,7 +1500,8 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertIn('-->|"2"| ', md)                                       # both guests on VLAN 20
         self.assertIn("| 20 | DMZ | 10.9.20.0/24 | 10.9.20.1 | 2 | 2/254 |", md)
         self.assertIn("local-zfs on pve1 90% full", md)
-        self.assertIn("In no enabled backup job: 102 db.", md)
+        self.assertIn("In no enabled backup job (1 of 2): 102 db.", md)
+        self.assertIn('subgraph default_g0["gateway 10.9.20.1"]', md)          # issue #93: VLANs under their gateway
         self.assertIn("| 101 | web\\|&lt;b&gt;x&lt;/b&gt;\"\\[a\\](http://e) | vm |", md)  # untrusted name
         self.assertNotIn("<b>", md)
         self.assertIn("discovery/proxmox.json | 2026-01-02 03:04 |", md)
@@ -1510,6 +1511,84 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertEqual(run("overview.py", "--no-ansible", "--check", cwd=self.d).returncode, 1)
         Path(self.d, "OVERVIEW.md").unlink()
         self.assertEqual(run("overview.py", "--no-ansible", "--check", cwd=self.d).returncode, 2)
+
+    def test_inventory_devices_known_addresses_and_health(self):  # GitHub issues #93-#97
+        sys.path.insert(0, str(SCRIPTS))
+        import hmlib
+        import overview
+        d = Path(self.d)
+        snap = json.loads((d / "discovery/proxmox.json").read_text())
+        snap["nodes"][0].update(pveversion="pve-manager/9.1.11/abc", kernel="7.0.2-4-pve")
+        snap["networks"] = {"pve1": [{"iface": "vmbr0", "cidr": "10.9.20.2/24"}, {"iface": "vmbr1", "cidr": "10.9.30.2/24"}]}
+        snap["guests"].append({"vmid": 103, "name": "rtr1", "type": "vm", "node": "pve1", "status": "running",
+                               "template": False, "config": {"net0": "virtio=x,bridge=vmbr0,tag=99",
+                                                             "net2": "virtio=y,bridge=vmbr0,tag=20",
+                                                             "net10": "virtio=z,bridge=vmbr0,tag=99"}})
+        snap["backup_jobs"] = [{"id": "94303c4493efac4f203cefc5732a1514c671842c:1", "enabled": True, "vmid": [101, 103]}]
+        (d / "discovery/proxmox.json").write_text(json.dumps(snap))
+        (d / "discovery/network.json").write_text(json.dumps({"hosts": {
+            "10.9.20.1": {"os": [{"name": "MikroTik RouterOS 7", "accuracy": 98}, {"name": "Linux", "accuracy": 90}]},
+            "10.9.20.2": {"os": []}, "10.9.30.2": {"os": []}, "10.9.20.7": {"os": [], "ssh_probe": {"hostname": "rtr1.lan"}},
+            "10.9.20.66": {"os": [{"name": "Linux 5.0 - 5.14", "accuracy": 95}], "device_type_guess": "linux"}}}))
+        (d / "discovery/routeros.json").write_text(json.dumps({"devices": {"10.9.20.1": {
+            "identity": {"name": "sw1"}, "resource": {"board-name": "CRS317", "version": "7.21.4"},
+            "addresses": [{"address": "10.9.20.1/24"}], "findings": [{"severity": "low", "text": "x"}],
+            "update": {"installed-version": "7.21.4", "latest-version": "7.21.5"}, "collected_at": "2026-01-02T00:00:00"}}}))
+        (d / "discovery/bmc.json").write_text(json.dumps({"hosts": {"bmc1": {"model": "ML350", "health": "Critical",
+                                                                              "not_ok": ["psu"], "power_state": "On"}}}))
+        (d / "discovery/qnap-containers.json").write_text(json.dumps({"nas1": {"lxd": [
+            {"name": "ct-pbs1", "state": "RUNNING", "ipv4": "10.9.20.99 (eth0)"}], "docker": []}}))
+        (d / "discovery/updates.json").write_text(json.dumps({"hosts": {
+            "pve1": {"os": "Debian 13", "pending": 0, "collected_at": "2026-01-10T00:00:00"},
+            "web": {"os": "Rocky 9", "pending": 3, "collected_at": "2026-01-01T00:00:00"}}}))
+        (d / "discovery/drift.md").write_text("# Drift report — 2026-01-02 03:04\n**Not managed by OpenTofu (2)** — x\n"
+                                              "3 device(s) — add\n**Total findings: 2**\n")
+        managed = {"pve1": {"ansible_host": "10.9.20.2", "_groups_all": ["linux", "proxmox_nodes"],
+                            "patch_requires_approval": True},
+                   "sw1": {"ansible_host": "10.9.20.1", "_groups_all": ["appliances", "routeros"]},
+                   "sw2": {"ansible_host": "10.9.20.3", "_groups_all": ["appliances", "routeros"]},
+                   "bmc1": {"ansible_host": "10.9.20.9", "_groups_all": ["appliances", "bmc"]},
+                   "web": {"ansible_host": "10.9.20.5", "_groups_all": ["linux"]},
+                   "rtr1": {"ansible_host": "10.9.20.8", "_groups_all": ["linux"]},
+                   "db": {"ansible_host": "10.9.20.6", "_groups_all": ["linux"]}}
+        md = overview.render(hmlib.load_config(self.d), managed, "test")
+        self.assertIn("| 103 | rtr1 | vm | pve1 | running | – | – | – | VLAN 20 DMZ | 10.9.20.8 |", md)   # #97 NIC
+        self.assertIn("| pve1 | online | 9.1.11 | 7.0.2-4-pve |", md)                                     # #97 node
+        self.assertIn("| job 1 | yes |", md)                                                            # #97 job id
+        self.assertIn("| 2 listed |", md)
+        self.assertIn("| nas1 | – | ct-pbs1 | LXD (RUNNING) | 10.9.20.99 (eth0) |", md)                  # #97 NAS
+        self.assertIn("Drift (2026-01-02 03:04): 2 findings — 2 not managed by OpenTofu; 3 network devices", md)
+        self.assertIn("| RouterOS | sw1 | CRS317 | 10.9.20.1 | 7.21.4 | 1 audit findings (2026-01-02) |", md)  # #94
+        self.assertIn("| RouterOS | sw2 | – | 10.9.20.3 | – | not audited", md)
+        self.assertIn("| BMC | bmc1 | ML350 |", md)
+        other = md.split("### Other scanned addresses")[1].split("##")[0]                          # #96
+        self.assertIn("| 10.9.20.66 | – | linux | Linux 5.0 - 5.14 (95%) |", other)
+        for ip in ("10.9.20.1 ", "10.9.20.2 ", "10.9.30.2 ", "10.9.20.7 "):
+            self.assertNotIn(ip, other)
+        self.assertNotIn("accuracy", md)
+        health = md.split("## Health")[1]                                                          # #95
+        self.assertIn("| pve1 | Debian 13 | – | 0 | – | – | 2026-01-10 | up to date |", health)
+        self.assertIn("| web | Rocky 9 | – | 3 | – | – | 2026-01-01 (stale) | updates pending |", health)
+        self.assertIn("Not checked yet (`check-updates.yml`): db, rtr1.", health)
+        self.assertIn("Not covered by `check-updates.yml` (see Network devices): bmc1, sw1, sw2.", health)
+        self.assertIn("BMC health: bmc1 Critical (not OK: psu).", health)
+        self.assertIn("RouterOS updates available: sw1 7.21.4 → 7.21.5.", health)
+        site_map = md.split("```mermaid")[1]                                                      # #93
+        self.assertIn('subgraph default_g0["gateway sw1"]', site_map)
+        self.assertIn("devices: bmc1, sw1, sw2", site_map)
+
+    def test_map_wraps_and_folds_vlans(self):  # GitHub issue #93
+        sys.path.insert(0, str(SCRIPTS))
+        import overview
+        vl = [{"id": i, "name": f"V{i}", "cidr": f"10.9.{i}.0/24"} for i in range(1, 9)]
+        st = {"name": "", "default": True}
+        guests = {"pve1": [{"_tag": i} for i in range(1, 8)]}
+        out = "\n".join(overview.site_map(st, {"nodes": [{"node": "pve1"}]}, vl, guests, {}, [], {}))
+        self.assertIn("default_v1 ~~~ default_v6", out)                    # MAP_COLUMNS (5) per column
+        self.assertIn('default_idle(["1 VLANs without guests or addresses: 8"])', out)
+        self.assertNotIn("default_v8(", out)
+        self.assertEqual(overview.os_top("x"), "x")
+        self.assertEqual(overview.job_name({"id": "backup-2f7154fd-a3d8", "comment": ""}, 1), "backup-2f7154fd-a3d8")
 
     def test_mermaid_label_and_redaction(self):
         sys.path.insert(0, str(SCRIPTS))

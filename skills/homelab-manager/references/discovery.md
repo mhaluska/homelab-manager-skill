@@ -173,12 +173,19 @@ hand-written guest map: regenerate this one and commit it with the other discove
 
 `overview.py` writes `OVERVIEW.md` in the repository root, the page a person opens (on GitHub, on a phone) to see
 the homelab. It reads only what is in the repo: `homelab.yaml`, `discovery/*.json`, the managed inventory, and links
-`drift.md`, `guest-map.md` and the newest security audit. Per site: a Mermaid map (routers, VLANs, Proxmox nodes
-with guest counts per VLAN, UniFi devices), the VLAN table with addresses used, nodes, storage (⚠ from 80 % full),
-guests (VLAN, IP, autostart, HA, tags; VLAN/IP need `--details`), backup jobs and guests in none, network devices and
-other scanned addresses. Then containers, Ansible groups, clusters and critical hosts, health (pending updates,
-reboots, RouterOS findings, capacity and backup warnings) and when each source was collected; with several sites,
-a sites diagram first.
+`drift.md`, `guest-map.md` and the newest security audit. Per site: a Mermaid map (VLANs grouped under their
+`network.vlans[].gw`, Proxmox nodes with guest counts per VLAN, devices joined to their VLAN by address, unused VLANs
+folded into one node), the VLAN table with addresses used, nodes (PVE version, kernel, addresses), storage (⚠ from
+80 % full), guests (VLAN and IP of the same NIC, preferring the inventory `ansible_host`; autostart, HA, tags; VLAN/IP
+need `--details`), backup jobs and guests in none, network devices and other scanned addresses. Network devices start
+from the inventory groups `routeros`, `unifi`, `bmc`, `qnap` and `appliances` (a device without audit data says so),
+enriched from routeros.json, unifi.json, bmc.json and updates.json. "Other scanned addresses" lists only addresses
+nothing in the repo names: inventory hosts (and their `hm_extra_ips`), Proxmox node and guest addresses, cluster VIPs,
+RouterOS interface addresses, NAS containers, and scanned hosts whose hostname is a known host's. Then containers
+(including QNAP's), Ansible groups, clusters and critical hosts, and health: updates of every Proxmox node and
+critical host plus any host with something pending (stale data marked), inventory hosts without update data, BMC
+health, RouterOS findings and updates, capacity and backup warnings, a one-line drift summary; and when each source
+was collected. With several sites, a sites diagram first.
 - Regenerate it after every verified change (operating loop step 9) and commit it with that change. The output is
   deterministic (no "generated at" time), so the diff shows what changed. `--check` exits 1 when it is stale.
 - Refresh the sources first when they are old (Sources table); the page states nothing live.
