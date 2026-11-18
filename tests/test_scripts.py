@@ -1681,6 +1681,24 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         md = run("overview.py", "--no-ansible", "--out", "-", cwd=self.d).stdout
         self.assertIn("1 site, 1 Proxmox node, 2 guests.", md)
 
+    def test_lists_never_cut(self):  # GitHub issue #115
+        sys.path.insert(0, str(SCRIPTS))
+        import hmlib
+        import overview
+        self.assertEqual(overview.cell(["b|1", None, "", "a_2"]), "b\\|1, a\\_2")
+        self.assertEqual(overview.cell([]), "–")
+        self.assertTrue(overview.cell(["x" * 300]).endswith("…"))           # one item still has its own limit
+        hosts = [f"host-{i:02d}.lab" for i in range(74)]
+        managed = {h: {"ansible_host": f"10.9.20.{100 + i}", "_groups_all": ["linux"]} for i, h in enumerate(hosts)}
+        ports = [f"{31900 + i}->{31900 + i}/tcp" for i in range(20)]
+        Path(self.d, "discovery/containers.json").write_text(json.dumps({"hosts": {"docker1": {"containers": [
+            {"name": "app", "image": "nginx", "ports": ports}]}}}))
+        md = overview.render(hmlib.load_config(self.d), managed, "test")
+        row = next(line for line in md.splitlines() if line.startswith("| linux | 74 |"))
+        self.assertTrue(row.endswith(", ".join(h for h in hosts) + " |"))
+        self.assertNotIn("…", row)
+        self.assertIn(", ".join(p.replace(">", "&gt;") for p in ports) + " |", md)
+
     def test_mermaid_label_and_redaction(self):
         sys.path.insert(0, str(SCRIPTS))
         import overview

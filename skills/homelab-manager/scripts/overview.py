@@ -51,7 +51,11 @@ CHECK_UPDATES_GROUPS = ("linux", "windows", "qnap", "proxmox_nodes")
 # --------------------------------------------------------------------------- escaping
 
 def cell(value) -> str:
-    """A Markdown table cell from untrusted text: one line, no HTML, no table or link syntax."""
+    """A Markdown table cell from untrusted text: one line, no HTML, no table or link syntax. A list is every item,
+    each escaped and length-limited on its own, joined uncut (GitHub issue #115: never a name cut in half)."""
+    if isinstance(value, (list, tuple, set)):
+        items = [cell(v) for v in value if v not in (None, "")]
+        return ", ".join(i for i in items if i != "–") or "–"
     s = hmlib.clean("" if value is None else value, 120) or ""
     s = re.sub(r"\s+", " ", s).strip()
     for a, b in (("\\", "\\\\"), ("|", "\\|"), ("<", "&lt;"), (">", "&gt;"), ("[", "\\["), ("]", "\\]"),
@@ -538,7 +542,7 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known) -
             addrs = [x.get("cidr") for x in (px.get("networks") or {}).get(n.get("node"), []) if x.get("cidr")]
             rows.append([n.get("node"), n.get("status"), short_version(n.get("pveversion")), n.get("kernel"), n.get("cpus"),
                          f"{n.get('mem_used_gib')}/{n.get('mem_gib')} GiB" + (f" ({p}%)" if p is not None else ""),
-                         f"{sum(1 for g in gs if g.get('status') == 'running')}/{len(gs)}", ", ".join(sorted(addrs))])
+                         f"{sum(1 for g in gs if g.get('status') == 'running')}/{len(gs)}", sorted(addrs)])
         head = ["Node", "Status", "PVE", "Kernel", "CPUs", "Memory", "Guests running", "Addresses"]
         if not any(n.get("pveversion") or n.get("kernel") for n in px.get("nodes") or []):   # snapshot before 0.34.0
             head, rows = head[:2] + head[4:], [r[:2] + r[4:] for r in rows]
@@ -605,7 +609,7 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known) -
                    "or are in `discovery.ignore_unmanaged`)" if named else "")
                 + ". A known host's address on another network goes into its `hm_extra_ips` host variable.", ""]
         out += table(["Address", "Name", "Looks like", "OS", "Open ports", "Last seen"],
-                     [[ip, (h.get("ssh_probe") or {}).get("hostname") or ", ".join(h.get("hostnames") or []),
+                     [[ip, (h.get("ssh_probe") or {}).get("hostname") or list(h.get("hostnames") or []),
                        h.get("device_type_guess"), os_top(h.get("os")), len(h.get("ports") or []), stamp(h.get("last_seen"))]
                       for ip, h in other]) + [""]
     if named:   # which known host each of them was attributed to (GitHub issue #109)
@@ -627,7 +631,7 @@ def containers(cfg: dict, docs: dict, managed: dict) -> list[str]:
         for c in sorted(d.get("containers") or [], key=lambda c: str(c.get("name"))):
             ports = c.get("ports")
             rows.append([host, d.get("site"), c.get("name"), c.get("image"),
-                         ", ".join(map(str, ports)) if isinstance(ports, list) else ports, compose(c)])
+                         ports, compose(c)])
         for k in d.get("kubernetes") or []:
             rows.append([host, d.get("site"), "Kubernetes", k if isinstance(k, str) else json.dumps(k, sort_keys=True), "", ""])
     for nas, d in sorted((docs["qnap-containers.json"] or {}).items()):   # GitHub issue #97
@@ -637,7 +641,7 @@ def containers(cfg: dict, docs: dict, managed: dict) -> list[str]:
         for c in sorted(d.get("docker") or [], key=lambda c: str(c.get("name"))):
             nets = c.get("networks")
             rows.append([nas, site, c.get("name"), c.get("image"),
-                         ", ".join(map(str, nets)) if isinstance(nets, list) else nets, compose(c)])
+                         nets, compose(c)])
         for c in sorted(d.get("lxd") or [], key=lambda c: str(c.get("name"))):
             rows.append([nas, site, c.get("name"), f"LXD ({c.get('state') or '?'})", c.get("ipv4"), ""])
     if not rows:
@@ -654,7 +658,7 @@ def management(cfg: dict, managed: dict, note: str) -> list[str]:
                 if g not in ("all", "ungrouped"):
                     groups.setdefault(g, set()).add(h)
         out += ["Ansible groups (managed inventory):", ""]
-        out += table(["Group", "Hosts", "Members"], [[g, len(hs), ", ".join(sorted(hs)[:12]) + (" …" if len(hs) > 12 else "")]
+        out += table(["Group", "Hosts", "Members"], [[g, len(hs), sorted(hs)]   # every member (GitHub issue #115)
                                                     for g, hs in sorted(groups.items())]) + [""]
         approval = sorted(h for h, v in managed.items() if v.get("patch_requires_approval"))
         if approval:
