@@ -17,6 +17,10 @@ Default stance: **inventory and read-only checks**.
 - Discovery finds them (`device_type_guess`: nas, firewall, network, bmc, printer, iot).
   Add the ones the user cares about to `appliances` in `hosts.yml` with `appliance_type`,
   `vendor`, and how to reach them (`ansible_network_os` / API URL).
+- OVERVIEW.md's Model column: the host var `hm_model` (e.g. `hm_model: JetKVM`), else the audit, controller,
+  BMC or QNAP data, else what `ssh_probe.py <ip> --include-managed` read (product or OS, else hostname, kernel,
+  arch), else the Proxmox guest it runs as (a RouterOS CHR: `CHR (VM <vmid> on <node>)`). An nmap OS guess is never
+  a model: it is shown in State as "nmap guess". Set `hm_model` when nothing else names the device.
 - Read-only checks that are fine: reachability, firmware version via API/SNMP/SSH `show`
   commands, certificate expiry, open ports.
 - Configuration changes only with a vendor collection the user has agreed on

@@ -135,13 +135,73 @@ def is_ip(s) -> bool:
         return False
 
 
-def os_top(os) -> str:
-    """The best nmap OS match, "name (accuracy%)"; network.json stores a list of {name, accuracy}."""
-    if isinstance(os, list):
-        best = sorted((m for m in os if isinstance(m, dict) and m.get("name")),
-                      key=lambda m: -int(m.get("accuracy") or 0))
-        return f"{best[0]['name']} ({best[0].get('accuracy')}%)" if best else ""
-    return str(os or "")
+GENERIC_OS = re.compile(r"(Linux|FreeBSD|OpenBSD|NetBSD|Microsoft Windows)( [\d.x]+( - [\d.x]+)?)?", re.I)
+
+
+def os_guess(os) -> str:
+    """The best nmap OS match, "name (accuracy%)"; network.json stores a list of {name, accuracy}. Matches tied at
+    the top accuracy are common (GitHub issue #105): a vendor/product match ("MikroTik RouterOS 7.2 - 7.5") wins
+    over a generic one ("Linux 5.0 - 5.14"); tied product matches are all shown, tied generic ones as "or similar"."""
+    if not isinstance(os, list):
+        return str(os or "")
+    ms = [m for m in os if isinstance(m, dict) and m.get("name")]
+    if not ms:
+        return ""
+    top = max(int(m.get("accuracy") or 0) for m in ms)
+    tied = [str(m["name"]) for m in ms if int(m.get("accuracy") or 0) == top]
+    specific = [n for n in tied if not GENERIC_OS.fullmatch(n)]
+    text = " / ".join(specific) if specific else tied[0] + (" or similar" if len(tied) > 1 else "")
+    return f"{text} ({top}%)"
+
+
+def ssh_model(sp: dict) -> str:
+    """What ssh_probe.py read about a device (GitHub issue #104): its product (OPNsense, TrueNAS, PVE) or OS name,
+    else hostname, kernel and architecture (a JetKVM: "jetkvm-x · Linux 5.10.160 armv7l")."""
+    sp = sp if isinstance(sp, dict) else {}
+    arch = str(sp.get("arch") or "")
+    name = sp.get("product") or sp.get("os_name") or (f"FreeBSD {sp['os_freebsd']}" if sp.get("os_freebsd") else "")
+    if name:
+        return str(name) + (f" {arch}" if arch and arch not in str(name) else "")
+    kern = " ".join(x for x in (str(sp.get("kernel") or ""), arch) if x)
+    return " · ".join(x for x in (str(sp.get("hostname") or ""), kern) if x)
+
+
+class Guests:
+    """Proxmox guests of every site, found by name, address or MAC (GitHub issue #104: a CHR or an appliance VM)."""
+
+    def __init__(self, snaps: list[dict]):
+        self.all = [g for px in snaps for g in px.get("guests") or []
+                    if not g.get("template") and isinstance(g.get("vmid"), int)]
+
+    def find(self, names=(), addrs=(), macs=()) -> dict | None:
+        names = {str(n).split(".")[0].lower() for n in names if n}
+        addrs, macs = {str(a) for a in addrs if a}, {str(m).lower() for m in macs if m}
+        for g in sorted(self.all, key=lambda g: g["vmid"]):
+            nics = hmlib.guest_nics(g)
+            if str(g.get("name") or "").lower() in names or addrs & {i for n in nics for i in n["ips"]} \
+                    or macs & {n["mac"] for n in nics if n["mac"]}:
+                return g
+        return None
+
+
+def guest_text(g: dict | None) -> str:
+    return f"{'LXC' if g.get('type') == 'lxc' else 'VM'} {g['vmid']} on {g.get('node')}" if g else ""
+
+
+def ros_model(d: dict, guest: dict | None) -> str:
+    """A RouterOS model: the RouterBOARD model or board name; a CHR (board name "CHR <SMBIOS string>") as "CHR",
+    with the Proxmox guest it runs as (GitHub issue #104)."""
+    res, rb = d.get("resource") or {}, d.get("routerboard") or {}
+    board = str(res.get("board-name") or "")
+    if board == "CHR" or board.startswith("CHR "):
+        return "CHR" + (f" ({guest_text(guest)})" if guest else "")
+    return rb.get("model") or board
+
+
+def ros_guest(guests: "Guests", d: dict, *names) -> dict | None:
+    macs = [i.get("mac-address") for i in d.get("interfaces") or [] if isinstance(i, dict)]
+    addrs = [str(a.get("address") or "").split("/")[0] for a in d.get("addresses") or [] if isinstance(a, dict)]
+    return guests.find(names=[*names, (d.get("identity") or {}).get("name")], addrs=addrs, macs=macs)
 
 
 def bmc_health(d: dict, host_vars: dict) -> dict:
@@ -325,10 +385,12 @@ def hmlib_parts(doc: dict) -> list[dict]:
     return [p for p in sites.values() if isinstance(p, dict)] if isinstance(sites, dict) else [doc]
 
 
-def device_rows(cfg: dict, st: dict, docs: dict, managed: dict, net: dict, unifi: dict) -> list[dict]:
+def device_rows(cfg: dict, st: dict, docs: dict, managed: dict, net: dict, unifi: dict, guests: Guests) -> list[dict]:
     """Network devices of a site (GitHub issue #94): inventory hosts in the device groups first, enriched from
     routeros.json, unifi.json, bmc.json, updates.json (QNAP) and nmap; then discovered devices not in the
-    inventory."""
+    inventory. Model (GitHub issue #104): the host var hm_model, else the audit/controller/BMC/QNAP data, else what
+    ssh_probe.py read, else the Proxmox guest it runs as; an nmap OS guess is never a model, only a labelled guess
+    in State."""
     ros = docs["routeros.json"].get("devices") or {}
     ros_by_name = {(d.get("identity") or {}).get("name"): (h, d) for h, d in ros.items()}
     udevs = list(unifi.get("devices") or [])
@@ -351,9 +413,9 @@ def device_rows(cfg: dict, st: dict, docs: dict, managed: dict, net: dict, unifi
             key, d = (addr, ros[addr]) if addr in ros else ros_by_name.get(h, (None, None))
             if d:
                 used_ros.add(key)
-                res, rb = d.get("resource") or {}, d.get("routerboard") or {}
+                res = d.get("resource") or {}
                 ident = (d.get("identity") or {}).get("name")
-                r.update(model=rb.get("model") or res.get("board-name") or "", firmware=res.get("version") or "",
+                r.update(model=ros_model(d, ros_guest(guests, d, h)), firmware=res.get("version") or "",
                          state=(f"{len(d['findings'])} audit findings" if d.get("findings") else "audited, no findings")
                          + f" ({stamp(d.get('collected_at'))})"
                          + (f", identity {ident}" if ident and ident != h else ""))
@@ -381,7 +443,15 @@ def device_rows(cfg: dict, st: dict, docs: dict, managed: dict, net: dict, unifi
                      state=(f"{d.get('pending')} app updates" if d.get("pending") else "up to date")
                      + f" ({stamp(d.get('collected_at'))})" if d else "no data (check-updates.yml)")
         else:
-            r["model"] = os_top((scanned.get(addr) or {}).get("os"))
+            sh = scanned.get(addr) or {}
+            facts, g = ssh_model(sh.get("ssh_probe")), guests.find(names=[h], addrs=[addr])
+            r["model"] = str(v.get("hm_model") or "") or (f"{facts} ({guest_text(g)})" if facts and g
+                                                          else facts or guest_text(g))
+            guess = os_guess(sh.get("os"))
+            if not (r["model"] and (facts or v.get("hm_model"))):
+                r["state"] = f"nmap guess: {guess}" if guess else "no data: set hm_model or run ssh_probe.py --include-managed"
+        if v.get("hm_model"):
+            r["model"] = str(v["hm_model"])
         rows.append(r)
     for d in sorted(udevs, key=lambda d: (str(d.get("name")), str(d.get("ipAddress")))):
         if id(d) not in used_unifi:
@@ -395,7 +465,7 @@ def device_rows(cfg: dict, st: dict, docs: dict, managed: dict, net: dict, unifi
             continue
         res = d.get("resource") or {}
         rows.append({"kind": "RouterOS", "name": (d.get("identity") or {}).get("name") or host,
-                     "model": (d.get("routerboard") or {}).get("model") or res.get("board-name") or "",
+                     "model": ros_model(d, ros_guest(guests, d)),
                      "address": host, "firmware": res.get("version") or "",
                      "state": f"{len(d.get('findings') or [])} audit findings, not in inventory",
                      "seen": stamp((scanned.get(host) or {}).get("last_seen"))})
@@ -502,7 +572,7 @@ def sites_map(rows: list[tuple[dict, int, int, int]]) -> list[str]:
     return lines + ["```"]
 
 
-def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known) -> tuple[list[str], dict]:
+def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, all_guests: Guests) -> tuple[list[str], dict]:
     root = Path(cfg["_root"])
     title = hmlib.site_title(st) or "default"
     px = hmlib.site_part(hmlib.proxmox_snapshot_file(root), st) or {}
@@ -517,7 +587,7 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known) -
         g["_ip"], g["_tag"], g["_vlan"] = guest_net(g, cfg, st["name"], prefer if is_ip(prefer) else None, vl)
         g["_links"] = guest_links(g)
         guests_by.setdefault(g.get("node"), []).append(g)
-    devices = device_rows(cfg, st, docs, managed, net, unifi)
+    devices = device_rows(cfg, st, docs, managed, net, unifi, all_guests)
     stats = {"nodes": len(px.get("nodes") or []), "guests": len(guests), "vlans": len(vl), "warnings": []}
 
     out = [f"## Site: {cell(title)}", ""]
@@ -636,9 +706,12 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known) -
                 + (f" ({len(named)} more belong to known hosts: Proxmox nodes, inventory hosts, guests, VIPs, "
                    "or are in `discovery.ignore_unmanaged`)" if named else "")
                 + ". A known host's address on another network goes into its `hm_extra_ips` host variable.", ""]
-        out += table(["Address", "Name", "Looks like", "OS", "Open ports", "Last seen"],
+        out += table(["Address", "Name", "Looks like", "OS guess (nmap, match %)", "Open ports", "Last seen"],
                      [[ip, (h.get("ssh_probe") or {}).get("hostname") or list(h.get("hostnames") or []),
-                       h.get("device_type_guess"), os_top(h.get("os")), len(h.get("ports") or []), stamp(h.get("last_seen"))]
+                       " ".join(x for x in (str(h.get("device_type_guess") or ""),   # MAC vendor (GitHub issue #105)
+                                            f"({h['vendor']})" if h.get("vendor") else "") if x),
+                       os_guess(h.get("os")), len(h.get("ports") or []),
+                       stamp(h.get("last_seen"))]
                       for ip, h in other]) + [""]
     if named:   # which known host each of them was attributed to (GitHub issue #109)
         out += [f"<details><summary>{plural(len(named), 'scanned address')} of known hosts or ignored</summary>", ""]
@@ -820,10 +893,11 @@ def render(cfg: dict, managed: dict, note: str) -> str:
     st_list = hmlib.sites(cfg)
     snaps = [hmlib.site_part(hmlib.proxmox_snapshot_file(root), st) or {} for st in st_list]
     known = build_known(cfg, docs, managed, snaps)
+    all_guests = Guests(snaps)
     body, rows, warnings = [], [], []
     totals = {"nodes": 0, "guests": 0}
     for st in st_list:
-        sec, stats = site_section(cfg, st, docs, managed, known)
+        sec, stats = site_section(cfg, st, docs, managed, known, all_guests)
         body += sec
         rows.append((st, stats["nodes"], stats["guests"], stats["vlans"]))
         warnings += stats["warnings"]

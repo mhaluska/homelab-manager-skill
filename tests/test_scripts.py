@@ -1642,7 +1642,7 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertIn("default_v1 ~~~ default_v6", out)                    # MAP_COLUMNS (5) per column
         self.assertIn('default_idle(["1 VLANs without guests or addresses: 8"])', out)
         self.assertNotIn("default_v8(", out)
-        self.assertEqual(overview.os_top("x"), "x")
+        self.assertEqual(overview.os_guess("x"), "x")
 
     def test_every_nic_counts(self):  # GitHub issue #107: a router VM is on every VLAN it has a NIC in
         d = Path(self.d)
@@ -1680,6 +1680,49 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertNotIn("---", out)
         md = run("overview.py", "--no-ansible", "--out", "-", cwd=self.d).stdout
         self.assertIn("1 site, 1 Proxmox node, 2 guests.", md)
+
+    def test_device_identification(self):  # GitHub issues #104, #105
+        sys.path.insert(0, str(SCRIPTS))
+        import hmlib
+        import overview
+        tie = [{"name": "Linux 5.0 - 5.14", "accuracy": 98}, {"name": "MikroTik RouterOS 7.2 - 7.5 (Linux 5.6.3)",
+                                                               "accuracy": 98}, {"name": "Linux 4.15", "accuracy": 99 - 4}]
+        self.assertEqual(overview.os_guess(tie), "MikroTik RouterOS 7.2 - 7.5 (Linux 5.6.3) (98%)")
+        self.assertEqual(overview.os_guess([{"name": "Linux 2.6.32 - 3.13", "accuracy": 94},
+                                            {"name": "Linux 5.0 - 5.14", "accuracy": 94}]), "Linux 2.6.32 - 3.13 or similar (94%)")
+        self.assertEqual(overview.os_guess([{"name": "Linux 5.0 - 5.14", "accuracy": 90}]), "Linux 5.0 - 5.14 (90%)")
+        self.assertEqual(overview.ssh_model({"hostname": "jetkvm-1", "kernel": "Linux 5.10.160", "arch": "armv7l"}),
+                         "jetkvm-1 · Linux 5.10.160 armv7l")
+        self.assertEqual(overview.ssh_model({"product": "OPNsense 26.7 (amd64)", "arch": "amd64"}), "OPNsense 26.7 (amd64)")
+        d = Path(self.d)
+        snap = json.loads((d / "discovery/proxmox.json").read_text())
+        snap["guests"] += [{"vmid": 120, "name": "chr-a", "type": "vm", "node": "pve1", "template": False,
+                            "config": {"net0": "virtio=BC:24:11:00:00:20,bridge=vmbr0,tag=20"}},
+                           {"vmid": 121, "name": "opn1", "type": "vm", "node": "pve1", "template": False,
+                            "config": {"net0": "virtio=BC:24:11:00:00:21,bridge=vmbr0,tag=20"}}]
+        (d / "discovery/proxmox.json").write_text(json.dumps(snap))
+        (d / "discovery/routeros.json").write_text(json.dumps({"devices": {"10.9.20.30": {
+            "identity": {"name": "rtr-x"}, "resource": {"board-name": "CHR QEMU Standard PC (i440FX + PIIX, 1996)"},
+            "interfaces": [{"name": "ether1", "mac-address": "BC:24:11:00:00:20"}]}}}))
+        (d / "discovery/network.json").write_text(json.dumps({"hosts": {
+            "10.9.20.31": {"os": tie, "ssh_probe": {"ok": True, "hostname": "jetkvm-1", "kernel": "Linux 5.10.160",
+                                                     "arch": "armv7l"}},
+            "10.9.20.32": {"os": tie},
+            "10.9.20.40": {"os": tie, "device_type_guess": "linux", "vendor": "Raspberry Pi Trading"}}}))
+        managed = {"rtr-x": {"ansible_host": "10.9.20.30", "_groups_all": ["appliances", "routeros"]},
+                   "kvm1": {"ansible_host": "10.9.20.31", "_groups_all": ["appliances"]},
+                   "kvm2": {"ansible_host": "10.9.20.32", "_groups_all": ["appliances"]},
+                   "kvm3": {"ansible_host": "10.9.20.33", "_groups_all": ["appliances"], "hm_model": "JetKVM"},
+                   "opn1": {"ansible_host": "10.9.20.34", "_groups_all": ["appliances"]}}
+        md = overview.render(hmlib.load_config(self.d), managed, "test")
+        self.assertIn("| RouterOS | rtr-x | CHR (VM 120 on pve1) | 10.9.20.30 |", md)
+        self.assertIn("| Appliance | kvm1 | jetkvm-1 · Linux 5.10.160 armv7l | 10.9.20.31 | – | – |", md)
+        self.assertIn("| Appliance | kvm2 | – | 10.9.20.32 | – | nmap guess: MikroTik RouterOS 7.2 - 7.5 (Linux 5.6.3) (98%) |", md)
+        self.assertIn("| Appliance | kvm3 | JetKVM | 10.9.20.33 | – | – |", md)                      # hm_model wins
+        self.assertIn("| Appliance | opn1 | VM 121 on pve1 | 10.9.20.34 | – | no data: set hm\\_model or run "
+                      "ssh\\_probe.py --include-managed |", md)
+        self.assertIn("| Address | Name | Looks like | OS guess (nmap, match %) |", md)
+        self.assertIn("| 10.9.20.40 | – | linux (Raspberry Pi Trading) | MikroTik RouterOS 7.2 - 7.5 (Linux 5.6.3) (98%) |", md)
 
     def test_bmc_accepted_health(self):  # GitHub issue #103
         sys.path.insert(0, str(SCRIPTS))
