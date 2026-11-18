@@ -14,8 +14,9 @@
 - --sync-managed also applies one-time upgrades for repos set up by older plugin versions (see upgrades());
   the SessionStart hook (hooks/update_check.py) tells Claude when one is pending. It also lists the opt-in
   changes newer releases suggest (upgrade_notes.py — never applied by it, they need the user's yes) and the
-  user's reported skill issues the installed release fixed; a real run records the installed version in
-  upgrades.reviewed so the same suggestions aren't offered again.
+  user's reported skill issues the installed release fixed. Suggestions are offered until each is applied or
+  declined (upgrade_notes.py --decline); a real run with none left records the installed version in
+  upgrades.reviewed.
 - Records the choice under `components:` in homelab.yaml — the skill ignores disabled parts.
 - `git init -b main` if needed; core.hooksPath → scripts/git-hooks (blocks committing secrets).
 - Registers this plugin's marketplace in .claude/settings.json when its Git remote is known.
@@ -256,9 +257,22 @@ def record_reviewed(target: Path):
                                                     "upgrade notes reviewed up to this plugin version (init_repo.py --sync-managed)")])
 
 
+def _reviewed_lags(target: Path) -> bool:
+    cfg = target / "homelab.yaml"
+    if not cfg.exists():
+        return False
+    import hmlib  # noqa: E402
+    have = upgrade_notes.reviewed_version(hmlib.load_config(target))
+    return upgrade_notes.vtuple(have) < upgrade_notes.vtuple(upgrade_notes.installed_version())
+
+
 def sync_managed(target: Path, dry_run: bool) -> int:
     steps = upgrades(target)
     notes, fixed = suggestions(target)
+    lags = _reviewed_lags(target)
+    if not (steps or notes or fixed or lags):
+        print("Up to date with the plugin — nothing to change.")
+        return 0
     if steps:
         print("One-time updates" + (" (applied by this command):" if dry_run else ":"))
     for desc, apply in steps:
@@ -268,22 +282,29 @@ def sync_managed(target: Path, dry_run: bool) -> int:
     if notes:
         print("Suggested by newer releases (opt-in — not applied; ask the user for each):")
         print("\n".join("  " + upgrade_notes.describe(n) for n in notes))
+        print("    → settle each one: apply it (a note whose change is in the repo drops out by itself), or record the "
+              "user's no with `upgrade_notes.py --decline ID` (a manual step done: `--done ID`). They are offered again "
+              "until then.")
     if fixed:
         print("Reported skill issues fixed by the installed release (tell the user):")
         for i, v in fixed:
             print(f"  {i['id']} (#{i['github_number']}) fixed in {v}: {i['title']}")
         print("    → mark them resolved with their yes: `issues.py fixed --apply`")
-    if not (steps or notes or fixed):
-        print("Up to date with the plugin — nothing to change.")
+    have = upgrade_notes.installed_version()
+    if dry_run:
+        if steps:
+            print("A run without --dry-run applies the one-time updates.")
+        if lags and not notes:
+            print(f"A run without --dry-run records upgrades.reviewed = {have}.")
         return 0
-    if not dry_run:
-        if notes:
-            record_reviewed(target)
-            print(f"Recorded upgrades.reviewed = {upgrade_notes.installed_version()} (these suggestions won't be "
-                  "offered again).")
-        print("Review with `git diff` / `git status`, then commit.")
+    if lags and not notes:
+        upgrade_notes.mark_reviewed(target)
+        print(f"Recorded upgrades.reviewed = {have} (no suggestions left to settle).")
     elif notes:
-        print("A run without --dry-run applies the one-time updates and records that the suggestions were reviewed.")
+        print(f"upgrades.reviewed stays at the old version until every suggestion is settled; run --sync-managed "
+              "again afterwards.")
+    if steps or lags:
+        print("Review with `git diff` / `git status`, then commit.")
     return 0
 
 

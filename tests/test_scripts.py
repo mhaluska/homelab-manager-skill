@@ -1152,23 +1152,50 @@ class UpgradeNotesTests(unittest.TestCase):
         self.assertRegex(yq(".upgrades.reviewed", self.cfg), r'^"\d+\.\d+\.\d+"$')
         self.assertIn("Up to date", self.sync("--dry-run").stdout)
 
-    def test_old_repo_gets_suggestions_once_and_nothing_is_applied(self):
+    def test_old_repo_suggestions_stay_until_settled_and_nothing_is_applied(self):  # GitHub issue #67
         doc = self.make_old()
         before = {f: f.read_text() for f in (doc, self.cfg, self.d / "discovery/proxmox.json")}
         out = self.sync("--dry-run").stdout
         self.assertNotIn("Up to date", out)
         self.assertIn("Suggested by newer releases (opt-in", out)
-        self.assertIn("[0.10.0 · manual step]", out)                              # check_env TLS
+        self.assertIn("[0.10.0 · manual step · proxmox-tls-check]", out)          # check_env TLS
         self.assertIn("vmid_scheme={vlan}{octet:03d}", out)                         # inferred from the snapshot
-        self.assertNotIn("[0.11.0 · template section]", out)  # agent IPs not known to be unread (#14)
+        self.assertNotIn("[0.11.0 · template section", out)   # agent IPs not known to be unread (#14)
         self.assertIn("proxmox_inventory.py --details", out)
         self.assertIn("drift_report.py", out)
         self.assertEqual({f: f.read_text() for f in before}, before)               # dry run writes nothing
         out = self.sync().stdout
-        self.assertIn("Recorded upgrades.reviewed", out)
+        self.assertNotIn("Recorded upgrades.reviewed", out)
+        self.assertIn("stays at the old version", out)
         self.assertEqual(doc.read_text(), before[doc])                              # suggestions never applied
         self.assertEqual(yq(".vmid_scheme", self.cfg), "null")
-        self.assertIn("Up to date", self.sync("--dry-run").stdout)                 # not offered again
+        self.assertEqual(yq(".upgrades.reviewed", self.cfg), "null")
+        ids = lambda: [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", cwd=self.d).stdout)]
+        pending = ids()
+        self.assertIn("proxmox-tls-check", pending)                                # offered again
+        self.assertIn("proxmox-tls-check", self.sync("--dry-run").stdout)
+        r = run("upgrade_notes.py", "--done", "proxmox-tls-check", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = run("upgrade_notes.py", "--decline", *[i for i in pending if i != "proxmox-tls-check"], cwd=self.d)
+        self.assertIn("No suggestions left", r.stdout)
+        self.assertEqual(json.loads(yq(".upgrades.done", self.cfg)), ["proxmox-tls-check"])
+        self.assertEqual(ids(), [])
+        out = self.sync().stdout
+        self.assertIn("Recorded upgrades.reviewed", out)
+        self.assertRegex(yq(".upgrades.reviewed", self.cfg), r'^"\d+\.\d+\.\d+"$')
+        self.assertEqual(yq(".upgrades.declined", self.cfg), "null")              # covered by reviewed now
+        self.assertEqual(yq(".upgrades.done", self.cfg), "null")
+        self.assertIn("Up to date", self.sync("--dry-run").stdout)
+
+    def test_applied_suggestion_drops_out_and_unknown_id_is_refused(self):
+        self.make_old()
+        ids = lambda: [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", cwd=self.d).stdout)]
+        self.assertIn("drift-guests-network", ids())
+        (self.d / "discovery/drift.md").write_text("# Drift\n\n## Proxmox guests ↔ network\n")
+        self.assertNotIn("drift-guests-network", ids())
+        r = run("upgrade_notes.py", "--decline", "no-such-note", cwd=self.d)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("unknown note id", r.stderr)
 
     def test_reviewed_version_and_repo_state_filter_notes(self):
         self.make_old()
@@ -1200,7 +1227,7 @@ class UpgradeNotesTests(unittest.TestCase):
         doc.write_text(doc.read_text() + "\npveum acl modify /vms --users homelab@pve --roles HomelabAgentAudit\n"
                        "pveum acl modify /vms --tokens 'homelab@pve!ro' --roles HomelabAgentAudit\n")
         out = run("upgrade_notes.py", cwd=self.d).stdout
-        self.assertIn("[0.12.2 · manual step]", out)
+        self.assertIn("[0.12.2 · manual step · tokens-guest-agent-acl-on-root]", out)
         self.assertIn("pveum acl delete /vms --tokens 'homelab@pve!ro' --roles HomelabAgentAudit", out)
 
     def test_notes_file_is_well_formed(self):

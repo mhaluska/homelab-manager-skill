@@ -10,8 +10,8 @@ entry in ~/.claude/plugins/known_marketplaces.json, or this checkout's `origin`.
 The result is cached in ~/.cache/homelab-manager/update-check.json; a failed check is retried after 6 h.
 Also (local, no network, every session): when the working directory is a homelab repo set up by an
 older plugin version, tells Claude which one-time upgrades `init_repo.py --sync-managed` would apply,
-which opt-in changes newer releases suggest (assets/upgrade-notes.json, until upgrades.reviewed is
-recorded), which of the user's reported skill issues the installed release fixed, and the repo's language
+which opt-in changes newer releases suggest (assets/upgrade-notes.json, until each is applied or
+declined), which of the user's reported skill issues the installed release fixed, and the repo's language
 (site.language) so replies use it from the first message.
 Never fails the session: any error → silent.
 """
@@ -158,9 +158,10 @@ def upgrade_text(steps: list[str], notes: list[str], fixed: list[str]) -> str:
         parts.append("The installed release fixed skill issues the user reported: " + ", ".join(fixed) + ".")
     return " ".join(parts) + (f" Tell the user, run `python3 {SCRIPTS}/init_repo.py --sync-managed --dry-run` and "
                               "present its list, separating what it applies automatically from the suggestions "
-                              "(each needs the user's yes). After their yes run it without --dry-run (it records that the "
-                              "suggestions were reviewed), apply the accepted suggestions, resolve fixed issues with "
-                              "`issues.py fixed --apply`, and commit (`Update repo for homelab-manager`).")
+                              "(each needs the user's yes). After their yes run it without --dry-run, apply the accepted "
+                              "suggestions, record each declined one with `upgrade_notes.py --decline ID`, run "
+                              "--sync-managed once more (it records upgrades.reviewed only when none is left), resolve "
+                              "fixed issues with `issues.py fixed --apply`, and commit (`Update repo for homelab-manager`).")
 
 
 def main() -> int:

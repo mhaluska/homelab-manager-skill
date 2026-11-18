@@ -35,7 +35,8 @@ are Python 3 standard library only; run them as `python3 $HM/scripts/<name>.py`.
    `init_repo.py --sync-managed --dry-run` lists one-time updates it applies, opt-in **suggestions** of newer
    releases (config keys, template sections, snapshots to regenerate, Proxmox steps) and reported skill issues
    the release fixed. Show them apart; on the user's yes run it for real, apply each accepted suggestion,
-   `issues.py fixed --apply`, commit (`Update repo for homelab-manager`).
+   `upgrade_notes.py --decline ID` for each refused one (`--done ID` for a manual step), run it again to record
+   the review, `issues.py fixed --apply`, commit (`Update repo for homelab-manager`).
 
 ## 2. Interactive setup of a new repository
 
@@ -229,7 +230,7 @@ Scripts (all in `$HM/scripts/`):
 | `guest_map.py [--site N]` | per-NIC guest map: VLAN, IPs, subnet/ansible_host/VMID checks | `discovery/guest-map.md` |
 | `ssh_probe.py [targets] [--user U] [--draft]` | read-only SSH probe of discovered hosts: hostname, OS, usable Python, OS group | `discovery/network.json` |
 | `routeros_audit.py <hosts> [--group G] [--user U]` | read-only MikroTik RouterOS inspection + audit findings (Markdown report) | `discovery/routeros.json` |
-| `upgrade_notes.py [--all] [--json]` | opt-in changes newer releases suggest for this repo (shown by `--sync-managed`) | — |
+| `upgrade_notes.py [--all] [--json]` / `--decline ID…` / `--done ID…` | opt-in changes newer releases suggest for this repo (shown by `--sync-managed`); record the user's no / a manual step done | — |
 | `config_set.py 'path=value' 'list+=item' [--delete path] [--dry-run]` | edit homelab.yaml keeping comments and layout | `homelab.yaml` |
 | `issues.py add\|list\|show\|report\|resolve\|fixed` | note problems with / ideas for this skill; report them (sanitised) to the plugin repo | `skill_issues.md` |
 | `tofu_init.py [--site N] [--print]` | `tofu init` with the state backend from homelab.yaml (local or S3) | `.terraform/` |
