@@ -1627,7 +1627,7 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertIn("Not checked yet (`check-updates.yml`): db, rtr1.", health)
         self.assertIn("Not covered by `check-updates.yml` (see Network devices): bmc1, sw1, sw2.", health)
         self.assertIn("BMC health: bmc1 Critical (not OK: psu; bmc-info.yml records the cause).", health)
-        self.assertIn("Warnings (details under Health): BMC: 1 Critical · 1 guest in no enabled backup job · "   # #108
+        self.assertIn("Warnings (details under [Health](#health)): BMC: 1 Critical · 1 guest in no enabled backup job · "   # #108
                       "1 storage 80 % full or more · 1 node at 85 % memory or more.", md)
         self.assertIn("RouterOS updates available: sw1 7.21.4 → 7.21.5.", health)
         site_map = md.split("```mermaid")[1]                                                      # #93
@@ -1774,6 +1774,37 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertTrue(row.endswith(", ".join(h for h in hosts) + " |"))
         self.assertNotIn("…", row)
         self.assertIn(", ".join(p.replace(">", "&gt;") for p in ports) + " |", md)
+
+    def test_contents_and_folding(self):  # GitHub issue #113
+        sys.path.insert(0, str(SCRIPTS))
+        import overview
+        seen = {}
+        self.assertEqual([overview.slug(t, seen) for t in ("Guests", "Guests", "Site: home (Home)", "a\\_b &lt;x&gt;",
+                                                           "Guests")],
+                         ["guests", "guests-1", "site-home-home", "a_b-x", "guests-2"])
+        md = run("overview.py", "--no-ansible", "--out", "-", cwd=self.d).stdout
+        self.assertIn("## Contents\n\n- [Site: default](#site-default) — [Map](#map) · [Network](#network) · ", md)
+        self.assertIn("- [Health](#health)\n- [Sources](#sources)\n", md)
+        self.assertIn("[↑ Contents](#contents)", md)
+        self.assertLess(md.index("## At a glance"), md.index("## Contents"))
+        r = run("config_set.py", "sites+={name: home}", "sites+={name: lab2, label: Lab 2, ranges: [10.8.0.0/16]}",
+                cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        snap = json.loads(Path(self.d, "discovery/proxmox.json").read_text())
+        snap["guests"] += [{"vmid": 200 + i, "name": f"g{i}", "type": "lxc", "node": "pve1", "template": False}
+                           for i in range(overview.FOLD_ROWS)]
+        Path(self.d, "discovery/proxmox.json").write_text(json.dumps(snap))
+        md = run("overview.py", "--no-ansible", "--out", "-", cwd=self.d).stdout
+        self.assertIn("### Guests (home)\n\n<details><summary>17 guests</summary>\n\n| VMID |", md)
+        self.assertIn("- [Site: home](#site-home) — [Map](#map-home) · [Network](#network-home) · ", md)
+        self.assertIn("- [Site: lab2 (Lab 2)](#site-lab2-lab-2) — [Map](#map-lab2)", md)
+        for anchor in re.findall(r"\]\(#([^)]+)\)", md):                                     # every link resolves
+            seen, slugs = {}, set()
+            for line in md.splitlines():
+                m = re.match(r"#{1,3} (.+)$", line)
+                if m:
+                    slugs.add(overview.slug(m.group(1), seen))
+            self.assertIn(anchor, slugs)
 
     def test_mermaid_label_and_redaction(self):
         sys.path.insert(0, str(SCRIPTS))

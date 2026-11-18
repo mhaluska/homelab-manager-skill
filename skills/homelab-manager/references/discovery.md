@@ -203,6 +203,9 @@ nmap's best guess with its match %; on a tie a vendor/product match beats a gene
 critical host plus any host with something pending (stale data marked), inventory hosts without update data, BMC
 health with its cause (accepted per host: `bmc_health_accept`), RouterOS findings and updates, capacity and
 backup warnings, a one-line drift summary; and when each source was collected. With several sites, a sites diagram first.
+A Contents list after At a glance links every section and each site's sub-sections (named "Guests (home)" with
+several sites, so anchors are unique on GitHub and GitLab); each site ends with "↑ Contents"; Guests, Containers
+and Other scanned addresses tables longer than 15 rows are collapsed with their row count.
 At a glance names every warning category Health shows, most severe first: BMCs not OK (an accepted cause doesn't
 count), RouterOS findings of medium severity and above, failed update checks, hosts with security updates, guests in
 no backup job, full storage, node memory.

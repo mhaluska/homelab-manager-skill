@@ -21,6 +21,7 @@ the Proxmox endpoint hosts.
 from __future__ import annotations
 
 import argparse
+import html
 import ipaddress
 import json
 import re
@@ -35,6 +36,7 @@ STORAGE_WARN_PCT = 80
 MEM_WARN_PCT = 85
 MAP_COLUMNS = 5     # VLANs per column in a site map
 STALE_DAYS = 7      # update data this much older than the newest check is marked stale
+FOLD_ROWS = 15      # a longer Guests, Containers or Other scanned addresses table is collapsed (GitHub issue #113)
 SOURCES = [  # (discovery file, what writes it)
     ("proxmox.json", "proxmox_inventory.py --details"), ("network.json", "nmap_scan.py"),
     ("unifi.json", "unifi-info.yml"), ("routeros.json", "routeros_audit.py"), ("bmc.json", "bmc-info.yml"),
@@ -74,6 +76,55 @@ def table(head: list[str], rows: list[list]) -> list[str]:
     out = ["| " + " | ".join(head) + " |", "|" + "|".join("---" for _ in head) + "|"]
     out += ["| " + " | ".join(cell(c) for c in r) + " |" for r in rows]
     return out
+
+
+def fold(lines: list[str], rows: int, what: str) -> list[str]:
+    """A long table collapsed in <details> with its row count (GitHub issue #113); a short one as it is."""
+    if rows <= FOLD_ROWS:
+        return lines
+    return [f"<details><summary>{plural(rows, what)}</summary>", ""] + lines + ["", "</details>"]
+
+
+def slug(text: str, seen: dict) -> str:
+    """The anchor GitHub (and GitLab) gives a heading: lower case, punctuation dropped, each space a hyphen; a
+    repeated one gets -1, -2. Headings here have single spaces between words, so both hosts agree."""
+    t = html.unescape(re.sub(r"\\(.)", r"\1", text)).strip().lower()
+    t = re.sub(r"[^\w\- ]", "", t).replace(" ", "-")
+    base, n = t, seen.get(t, 0)
+    while t in seen:
+        n += 1
+        t = f"{base}-{n}"
+    seen[base] = n
+    seen[t] = 0
+    return t
+
+
+def contents(text: str) -> str:
+    """Replace the TOC marker with a table of contents built from the page's own headings (GitHub issue #113): one
+    line per section, a site's sub-sections inline. The sub-sections of a site carry the site in parentheses
+    (several sites), dropped from the link text."""
+    seen: dict = {}
+    toc: list[list] = []
+    fence = False
+    for line in text.splitlines():
+        if line.startswith("```"):
+            fence = not fence
+        m = None if fence else re.match(r"(#{1,3}) (.+)$", line)
+        if not m:
+            continue
+        level, title = len(m.group(1)), m.group(2)
+        anchor = slug(title, seen)
+        if level == 2 and title not in ("At a glance", "Contents"):
+            toc.append([title, anchor, []])
+        elif level == 3 and toc:
+            toc[-1][2].append((re.sub(r" \([^()]*\)$", "", title), anchor))
+    lines = ["## Contents", ""]
+    for title, anchor, subs in toc:
+        lines.append(f"- [{title}](#{anchor})" + (" — " + " · ".join(f"[{t}](#{a})" for t, a in subs) if subs else ""))
+    return text.replace(TOC_MARK, "\n".join(lines), 1)
+
+
+TOC_MARK = "<!-- contents -->"
 
 
 def pct(used, size) -> float | None:
@@ -433,7 +484,7 @@ def device_rows(cfg: dict, st: dict, docs: dict, managed: dict, net: dict, unifi
             if d:
                 r.update(model=d.get("model") or "", firmware=d.get("bmc_firmware") or "",
                          state=f"health {bmc_text(bmc_health(d, v))}, power {d.get('power_state') or '?'}"
-                         + f" ({stamp(d.get('collected_at'))})")
+                         + (f" ({stamp(d.get('collected_at'))})" if d.get("collected_at") else ""))
             else:
                 r["state"] = "no data (bmc-info.yml)"
         elif kind == "QNAP NAS":
@@ -572,7 +623,8 @@ def sites_map(rows: list[tuple[dict, int, int, int]]) -> list[str]:
     return lines + ["```"]
 
 
-def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, all_guests: Guests) -> tuple[list[str], dict]:
+def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, all_guests: Guests,
+                 multi: bool = False) -> tuple[list[str], dict]:
     root = Path(cfg["_root"])
     title = hmlib.site_title(st) or "default"
     px = hmlib.site_part(hmlib.proxmox_snapshot_file(root), st) or {}
@@ -592,6 +644,9 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
              "memory": 0, "storage": 0, "backup": 0}
 
     out = [f"## Site: {cell(title)}", ""]
+
+    def sub(name: str) -> list[str]:   # unique headings per site: the same anchor on GitHub and GitLab (#113)
+        return [f"### {name}" + (f" ({cell(st['name'] or 'default')})" if multi else ""), ""]
     facts = []
     if st["default"]:
         for k, name in (("site.domain", "domain"), ("network.gateway", "gateway"), ("network.dns_servers", "DNS")):
@@ -626,9 +681,9 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
                      f"{len(addrs)}/{size}" if size else len(addrs)])
     gateways = {v["id"]: (known.addr.get(v["gw"], ("", ""))[0] if known.addr.get(v["gw"], ("", ""))[1] != "gateway"
                           else "") or v["gw"] if is_ip(v.get("gw")) else v.get("gw") for v in vl if v.get("gw")}
-    out += ["### Map", ""] + site_map(st, px, vl, guests_by, gateways, devices, used) + [""]
+    out += sub("Map") + site_map(st, px, vl, guests_by, gateways, devices, used) + [""]
     if vl:
-        out += ["### Network", ""] + table(["VLAN", "Name", "CIDR", "Gateway", "Guests", "Addresses used"], rows) + [""]
+        out += sub("Network") + table(["VLAN", "Name", "CIDR", "Gateway", "Guests", "Addresses used"], rows) + [""]
 
     # Proxmox
     if px:
@@ -646,7 +701,7 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
         head = ["Node", "Status", "PVE", "Kernel", "CPUs", "Memory", "Guests running", "Addresses"]
         if not any(n.get("pveversion") or n.get("kernel") for n in px.get("nodes") or []):   # snapshot before 0.34.0
             head, rows = head[:2] + head[4:], [r[:2] + r[4:] for r in rows]
-        out += ["### Proxmox nodes", ""] + table(head, rows) + [""]
+        out += sub("Proxmox nodes") + table(head, rows) + [""]
         rows, seen = [], set()
         for s in sorted(px.get("storage") or [], key=lambda s: (s.get("storage") or "", s.get("node") or "")):
             key = s.get("storage") if s.get("shared") else (s.get("storage"), s.get("node"))
@@ -661,13 +716,14 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
             rows.append([s.get("storage"), "shared" if s.get("shared") else s.get("node"), s.get("type"),
                          f"{s.get('used_gib')}/{s.get('size_gib')} GiB", "–" if p is None else
                          f"{p}%" + (" ⚠" if p >= STORAGE_WARN_PCT else ""), s.get("content")])
-        out += ["### Storage", ""] + table(["Storage", "Node", "Type", "Used", "Full", "Content"], rows) + [""]
+        out += sub("Storage") + table(["Storage", "Node", "Type", "Used", "Full", "Content"], rows) + [""]
 
         rows = [[g["vmid"], g.get("name"), g.get("type"), g.get("node"), g.get("status"), g.get("cpus"),
                  g.get("mem_gib"), g.get("disk_gib"), g["_vlan"], g["_ip"], onboot(g), "yes" if g.get("hastate") else "",
                  g.get("tags")] for g in sorted(guests, key=lambda g: g["vmid"])]
-        out += ["### Guests", ""] + (table(["VMID", "Name", "Type", "Node", "Status", "vCPU", "RAM GiB", "Disk GiB", "VLAN",
-                                            "IP", "Autostart", "HA", "Tags"], rows) if rows else ["No guests."])
+        out += sub("Guests") + (fold(table(["VMID", "Name", "Type", "Node", "Status", "vCPU", "RAM GiB", "Disk GiB", "VLAN",
+                                            "IP", "Autostart", "HA", "Tags"], rows), len(rows), "guest")
+                                if rows else ["No guests."])
         if templates:
             out += ["", f"Templates: {len(templates)} (" + ", ".join(cell(t.get("name")) for t in
                                                                     sorted(templates, key=lambda t: t["vmid"])) + ")."]
@@ -676,7 +732,7 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
         out.append("")
 
         jobs = px.get("backup_jobs")
-        out += ["### Backups", ""]
+        out += sub("Backups")
         if jobs is None:
             out += ["The backup jobs could not be read (the read-only token needs Sys.Audit on /).", ""]
         else:
@@ -696,7 +752,7 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
 
     # devices
     if devices:
-        out += ["### Network devices", ""] + table(
+        out += sub("Network devices") + table(
             ["Kind", "Name", "Model", "Address", "Firmware", "State", "Last seen"],
             [[d["kind"], d["name"], d["model"], d["address"], d["firmware"], d["state"], d["seen"]] for d in devices]) + [""]
     ignored = {ip for ip, _ in scanned if ip not in guest_ips and not known.name(ip)
@@ -704,24 +760,25 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
     other = [(ip, h) for ip, h in scanned if ip not in guest_ips and not known.name(ip) and ip not in ignored]
     named = [ip for ip, _ in scanned if ip not in guest_ips and (known.name(ip) or ip in ignored)]
     if not other and named:
-        out += ["### Other scanned addresses", "", "Every address nmap found belongs to a known host.", ""]
+        out += sub("Other scanned addresses") + ["Every address nmap found belongs to a known host.", ""]
     if other:
-        out += ["### Other scanned addresses", "", "Addresses nmap found that nothing in this repository names"
+        out += sub("Other scanned addresses") + ["Addresses nmap found that nothing in this repository names"
                 + (f" ({len(named)} more belong to known hosts: Proxmox nodes, inventory hosts, guests, VIPs, "
                    "or are in `discovery.ignore_unmanaged`)" if named else "")
                 + ". A known host's address on another network goes into its `hm_extra_ips` host variable.", ""]
-        out += table(["Address", "Name", "Looks like", "OS guess (nmap, match %)", "Open ports", "Last seen"],
+        out += fold(table(["Address", "Name", "Looks like", "OS guess (nmap, match %)", "Open ports", "Last seen"],
                      [[ip, (h.get("ssh_probe") or {}).get("hostname") or list(h.get("hostnames") or []),
                        " ".join(x for x in (str(h.get("device_type_guess") or ""),   # MAC vendor (GitHub issue #105)
                                             f"({h['vendor']})" if h.get("vendor") else "") if x),
                        os_guess(h.get("os")), len(h.get("ports") or []),
                        stamp(h.get("last_seen"))]
-                      for ip, h in other]) + [""]
+                      for ip, h in other]), len(other), "address") + [""]
     if named:   # which known host each of them was attributed to (GitHub issue #109)
         out += [f"<details><summary>{plural(len(named), 'scanned address')} of known hosts or ignored</summary>", ""]
         out += table(["Address", "Known as", "Source"],
                      [[ip, *(known.addr.get(ip) or ("–", "discovery.ignore_unmanaged"))] for ip in named])
         out += ["", "</details>", ""]
+    out += ["[↑ Contents](#contents)", ""]
     return out, stats
 
 
@@ -751,7 +808,8 @@ def containers(cfg: dict, docs: dict, managed: dict) -> list[str]:
             rows.append([nas, site, c.get("name"), f"LXD ({c.get('state') or '?'})", c.get("ipv4"), ""])
     if not rows:
         return []
-    return ["## Containers", ""] + table(["Host", "Site", "Container", "Image", "Ports / network", "Compose"], rows) + [""]
+    return ["## Containers", ""] + fold(table(["Host", "Site", "Container", "Image", "Ports / network", "Compose"], rows),
+                                        len(rows), "container") + [""]
 
 
 def management(cfg: dict, managed: dict, note: str) -> list[str]:
@@ -943,7 +1001,7 @@ def render(cfg: dict, managed: dict, note: str) -> str:
     body, rows, warnings = [], [], []
     totals = {"nodes": 0, "guests": 0, "memory": 0, "storage": 0, "backup": 0}
     for st in st_list:
-        sec, stats = site_section(cfg, st, docs, managed, known, all_guests)
+        sec, stats = site_section(cfg, st, docs, managed, known, all_guests, len(st_list) > 1)
         body += sec
         rows.append((st, stats["nodes"], stats["guests"], stats["vlans"]))
         warnings += stats["warnings"]
@@ -955,15 +1013,15 @@ def render(cfg: dict, managed: dict, note: str) -> str:
     out += ["## At a glance", "", ", ".join(glance) + "."]
     found = glance_warnings(docs, managed, totals)
     if found:
-        out.append("Warnings (details under Health): " + " · ".join(found) + ".")
-    out.append("")
+        out.append("Warnings (details under [Health](#health)): " + " · ".join(found) + ".")
+    out += ["", TOC_MARK, ""]
     if len(st_list) > 1:
         out += ["## Sites", ""] + sites_map(rows) + [""]
     out += body + containers(cfg, docs, managed) + management(cfg, managed, note) + health(cfg, root, docs, managed, warnings)
     out += sources(root, docs) + [""]
     text = "\n".join(out)
     text = re.sub(r"\n{3,}", "\n\n", text)
-    return redact(text, cfg) if hmlib.get(cfg, "overview.redact", False) is True else text
+    return contents(redact(text, cfg) if hmlib.get(cfg, "overview.redact", False) is True else text)
 
 
 def main():
