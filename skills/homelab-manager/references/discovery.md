@@ -8,6 +8,11 @@ Discovery is read-only. Three pictures of the homelab are kept apart on purpose:
 | What OpenTofu manages | OpenTofu state (local file or S3) | `tofu apply` |
 | What Git declares | `tofu/**/homelab.auto.tfvars`, `ansible/inventory/managed/` | you + the user |
 
+File names in `discovery/` (full list: its README.md): a file whose source is one site (`proxmox`, `network`,
+`pve-patch`) has no site in its name for the default site and the site's name for the others
+(`network-<site>.json`, `pve-patch-<site>-<node>.json`); a file keyed by inventory host
+(`updates`, `containers`, `bmc`, `unifi`, `routeros`) holds every site in one file. Don't invent other names.
+
 `discovery/` is never used as Ansible inventory: a device showing up on the network
 doesn't make it managed. Promoting a device to managed is a deliberate edit of
 `ansible/inventory/managed/hosts.yml` (or a `tofu import` for Proxmox guests).
