@@ -2363,12 +2363,14 @@ class PveNodePlanTests(unittest.TestCase):  # issue 23
 
     def test_plain_inventory_keeps_details_of_previous_snapshot(self):  # GitHub issue #85
         import proxmox_inventory as pinv
-        old = {"collected_at": "t1", "guests": [{"vmid": 101, "type": "vm", "config": {"scsi0": "local-zfs:x"}},
+        old = {"collected_at": "t1", "guests": [{"vmid": 101, "type": "vm", "config": {"scsi0": "local-zfs:x"},
+                                                 "ips": [{"ip": "10.9.0.5", "source": "agent"}]},
                                                 {"vmid": 102, "type": "lxc", "config": {"rootfs": "ceph:y"}}]}
         new = {"collected_at": "t2", "guests": [{"vmid": 101, "type": "vm"}, {"vmid": 102, "type": "vm"},
                                                 {"vmid": 103, "type": "vm"}]}
         out = pinv.keep_details(old, new)
         self.assertEqual(out["guests"][0]["config"], {"scsi0": "local-zfs:x"})
+        self.assertEqual(out["guests"][0]["ips"], [{"ip": "10.9.0.5", "source": "agent"}])   # issue #97
         self.assertNotIn("config", out["guests"][1])            # VMID reused by another guest type
         self.assertNotIn("config", out["guests"][2])
         self.assertEqual(out["details_at"], "t1")

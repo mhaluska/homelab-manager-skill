@@ -295,18 +295,21 @@ def collect(pve: PVE, details: bool) -> dict:
 
 
 def keep_details(old: dict | None, new: dict) -> dict:
-    """A run without --details keeps each guest's config from the previous snapshot (same VMID and type) and
-    stamps when it was read (details_at), so a plain refresh doesn't strip what pve_node_plan.py needs."""
+    """A run without --details keeps each guest's config and reported addresses (ips) from the previous snapshot
+    (same VMID and type) and stamps when they were read (details_at), so a plain refresh doesn't strip what
+    pve_node_plan.py, drift_report.py and overview.py need (addresses: GitHub issue #97)."""
     if not old or any("config" in g for g in new.get("guests") or []):
         return new
-    configs = {(g.get("vmid"), g.get("type")): g["config"] for g in old.get("guests") or [] if "config" in g}
-    if not configs:
+    prev = {(g.get("vmid"), g.get("type")): g for g in old.get("guests") or [] if "config" in g}
+    if not prev:
         return new
     kept = 0
     for g in new.get("guests") or []:
-        conf = configs.get((g.get("vmid"), g.get("type")))
-        if conf is not None:
-            g["config"] = conf
+        o = prev.get((g.get("vmid"), g.get("type")))
+        if o is not None:
+            g["config"] = o["config"]
+            if "ips" in o:
+                g["ips"] = o["ips"]
             kept += 1
     if kept:
         new["details_at"] = old.get("details_at") or old.get("collected_at")
