@@ -15,6 +15,8 @@ Profiles:
   ping      host discovery only (-sn) — fast, quiet; default
   services  TCP connect scan of top ports + light version detection, no root needed
   os        services + OS detection; needs `sudo nmap` and therefore user approval
+Both deeper profiles run nmap's ssl-cert script (category safe: it only reads the certificate in the TLS
+handshake) and keep each TLS port's certificate subject, issuer and expiry (`tls`; OVERVIEW.md Expirations).
 
 Root nmap discovers hosts with ARP and may pick a local VM bridge (bridgeNNN) instead of
 the interface the routing table uses. So the os profile sends probes out the interface
@@ -46,10 +48,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hmlib  # noqa: E402
 from hmlib import clean  # noqa: E402
 
+TLS_SCRIPT = ["--script", "ssl-cert", "--script-timeout", "20s"]   # NSE "safe": reads the certificate a TLS port offers (GitHub issue #89)
 PROFILES = {
     "ping": ["-sn", "-T3"],
-    "services": ["-sT", "-sV", "--version-light", "-T3", "--open"],
-    "os": ["-sS", "-sV", "--version-light", "-O", "--osscan-limit", "-T3", "--open"],
+    "services": ["-sT", "-sV", "--version-light", "-T3", "--open", *TLS_SCRIPT],
+    "os": ["-sS", "-sV", "--version-light", "-O", "--osscan-limit", "-T3", "--open", *TLS_SCRIPT],
 }
 
 DEVICE_HINTS = [  # (word/phrase in vendor/OS/service/product, device type) — heuristic only
@@ -219,6 +222,27 @@ def run_nmap(cmd: list[str]) -> tuple[int, str]:
         return code, errf.read()
 
 
+def tls_cert(port) -> dict | None:
+    """The certificate nmap's ssl-cert script read on a port: subject and issuer (common name, else organization),
+    names (subjectAltName DNS entries) and validity, as text from the host (untrusted)."""
+    sc = port.find("script[@id='ssl-cert']")
+    if sc is None:
+        return None
+
+    def name(key):
+        t = {e.get("key"): e.text for e in sc.findall(f"table[@key='{key}']/elem")}
+        return clean(t.get("commonName") or t.get("organizationName"), 120)
+    validity = {e.get("key"): e.text for e in sc.findall("table[@key='validity']/elem")}
+    sans = []
+    for ext in sc.findall("table[@key='extensions']/table"):
+        if (ext.findtext("elem[@key='name']") or "") == "X509v3 Subject Alternative Name":
+            sans = [clean(x.strip()[4:], 120) for x in (ext.findtext("elem[@key='value']") or "").split(",")
+                    if x.strip().startswith("DNS:")][:10]
+    out = {"subject": name("subject"), "issuer": name("issuer"), "names": sans,
+           "not_after": clean(validity.get("notAfter"), 40)}
+    return {k: v for k, v in out.items() if v} or None
+
+
 def parse_xml(path: Path) -> list[dict]:
     hosts = []
     root = ET.parse(path).getroot()
@@ -243,7 +267,9 @@ def parse_xml(path: Path) -> list[dict]:
                                  "service": clean(s.get("name")) if s is not None else None,
                                  "product": clean(s.get("product")) if s is not None else None,
                                  "version": clean(s.get("version")) if s is not None else None,
-                                 "ostype": clean(s.get("ostype")) if s is not None else None})
+                                 "ostype": clean(s.get("ostype")) if s is not None else None,
+                                 **({"tunnel": "ssl"} if s is not None and s.get("tunnel") == "ssl" else {}),
+                                 **({"tls": cert} if (cert := tls_cert(p)) else {})})
         rec["device_type_guess"] = guess_type(rec)
         hosts.append(rec)
     return hosts
