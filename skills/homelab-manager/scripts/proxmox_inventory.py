@@ -16,6 +16,11 @@ The snapshot goes into discovery/proxmox.json under its site (GitHub issue #75),
 (--out FILE: the snapshot alone, to that file). Several sites (sites: in homelab.yaml): --site NAME reads that
 site's Proxmox with its own token; --all-sites reads each in turn and carries on past one that can't be reached
 (exit 1 then).
+Each node's subscription (status, level, next due date), web UI certificate and each network storage's server
+are read too.
+--details also reads every guest's config and addresses, and its newest successful backup and a newer failure
+from the nodes' vzdump task logs (last_backup, backup_error: GitHub issue #89; the read-only token can't list
+backup volumes, which need VM.Backup, but reads task logs with Sys.Audit).
 """
 from __future__ import annotations
 
@@ -216,6 +221,106 @@ def gib(b):
     return round((b or 0) / 1024**3, 1)
 
 
+BACKUP_TASKS = 10   # vzdump tasks read per node, newest first, while a guest there has no successful backup yet
+_ARCHIVE_TIME = re.compile(r"creating .*archive '(?:vm|ct)/\d+/(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)'")
+
+
+def parse_backup_log(lines: list[str], started: int | None) -> dict[int, dict]:
+    """{vmid: {ok, at, storage[, error]}} from one vzdump task log (GitHub issue #89). A PBS archive name holds the
+    backup time (UTC); other targets get the task's start time. "ERROR: Backup of VM N failed - why" is a
+    failure; other ERROR lines inside a guest's backup (a guest-agent freeze) are not."""
+    storage, vmid, out = "", None, {}
+    at0 = dt.datetime.fromtimestamp(started, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if started else ""
+    for line in lines:
+        m = re.search(r"starting new backup job: vzdump .*--storage (\S+)", line)
+        if m:
+            storage = clean(m.group(1))
+        m = re.search(r"Starting Backup of VM (\d+)", line)
+        if m:
+            vmid = int(m.group(1))
+            out[vmid] = {"ok": False, "at": at0, "storage": storage}
+            continue
+        m = _ARCHIVE_TIME.search(line)
+        if m and vmid in out:
+            out[vmid]["at"] = m.group(1)
+        m = re.search(r"Finished Backup of VM (\d+)", line)
+        if m and int(m.group(1)) in out:
+            out[int(m.group(1))]["ok"] = True
+        m = re.search(r"ERROR: Backup of VM (\d+) failed - (.*)", line)
+        if m:
+            out.setdefault(int(m.group(1)), {"at": at0, "storage": storage}).update(ok=False, error=clean(m.group(2), 200))
+    return out
+
+
+def last_backups(pve: PVE, nodes: list[dict], guests: list[dict]) -> tuple[dict[int, dict], str]:
+    """Newest successful backup and a newer failure per guest from the nodes' vzdump task logs (GitHub issue #89).
+    Backup volumes themselves are listed only to VM.Backup + Datastore.AllocateSpace, which a read-only token
+    lacks; the task list and logs need Sys.Audit (PVEAuditor). Returns ({vmid: {last_backup, backup_error}}, how)."""
+    found: dict[int, dict] = {}
+    on_node: dict = {}
+    for g in guests:
+        if not g.get("template") and isinstance(g.get("vmid"), int):
+            on_node.setdefault(g.get("node"), set()).add(g["vmid"])
+    read = 0
+    for n in nodes:
+        if n["status"] != "online":
+            continue
+        try:
+            tasks = pve._get(f"/nodes/{n['node']}/tasks", typefilter="vzdump", limit=50) or []
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            return found, f"not read: {getattr(e, 'code', '') or e}"
+        for t in tasks[:BACKUP_TASKS]:
+            if on_node.get(n["node"], set()) <= {v for v, r in found.items() if "last_backup" in r}:
+                break
+            if t.get("status") is None:   # still running
+                continue
+            try:
+                log = pve._get(f"/nodes/{n['node']}/tasks/{urllib.parse.quote(str(t.get('upid')), safe='')}/log",
+                               limit=20000) or []
+            except (urllib.error.URLError, OSError, ValueError):
+                continue
+            read += 1
+            for vmid, r in parse_backup_log([str(x.get("t") or "") for x in log], t.get("starttime")).items():
+                rec = found.setdefault(vmid, {})
+                if "last_backup" in rec:
+                    continue
+                if r.get("ok"):
+                    rec["last_backup"] = {"at": r["at"], "storage": r["storage"]}
+                elif "backup_error" not in rec:
+                    rec["backup_error"] = {"at": r["at"], "storage": r["storage"], "error": r.get("error") or "unfinished"}
+    return found, f"ok ({read} vzdump task logs)"
+
+
+def dn_name(dn) -> str:
+    """CN (else O) of an OpenSSL one-line DN, /C=CZ/O=Home/CN=Proxmox VE → Proxmox VE."""
+    parts = dict(p.split("=", 1) for p in str(dn or "").split("/") if "=" in p)
+    return clean(parts.get("CN") or parts.get("O"), 120) or ""
+
+
+def web_certificate(pve: PVE, node: str) -> dict | None:
+    """The certificate a node's web UI (port 8006) serves: pveproxy-ssl.pem when one is installed, else pve-ssl.pem
+    (GitHub issue #89: expirations; Sys.Audit)."""
+    try:
+        certs = {c.get("filename"): c for c in pve._get(f"/nodes/{node}/certificates/info") or []}
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    c = certs.get("pveproxy-ssl.pem") or certs.get("pve-ssl.pem")
+    if not c or not isinstance(c.get("notafter"), int):
+        return None
+    return {"file": c.get("filename"), "subject": dn_name(c.get("subject")), "issuer": dn_name(c.get("issuer")),
+            "not_after": dt.datetime.fromtimestamp(c["notafter"], dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
+def subscription(pve: PVE, node: str) -> dict | None:
+    """A node's subscription status, level and next due date (GitHub issue #89); never the key or server ID."""
+    try:
+        sub = pve._get(f"/nodes/{node}/subscription") or {}
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    return {k: clean(sub.get(src)) for k, src in (("status", "status"), ("level", "level"), ("next_due", "nextduedate"))
+            if sub.get(src)}
+
+
 def collect(pve: PVE, details: bool) -> dict:
     version = pve.get("/version") or {}
     status = pve.get("/cluster/status") or []
@@ -255,10 +360,26 @@ def collect(pve: PVE, details: bool) -> dict:
             ns = {}
         n["pveversion"] = clean(ns.get("pveversion"))
         n["kernel"] = clean((ns.get("current-kernel") or {}).get("release") or ns.get("kversion"))
+        sub = subscription(pve, n["node"])
+        if sub:
+            n["subscription"] = sub
+        cert = web_certificate(pve, n["node"])
+        if cert:
+            n["certificate"] = cert
         networks[n["node"]] = [{"iface": clean(x.get("iface")), "type": x.get("type"), "cidr": x.get("cidr"),
                                 "gateway": x.get("gateway"), "bridge_ports": clean(x.get("bridge_ports")),
                                 "vlan_aware": bool(x.get("bridge_vlan_aware")), "active": bool(x.get("active"))}
                                for x in nets]
+
+    try:  # where each network storage lives (GitHub issue #89): an NFS/CIFS/PBS server is a dependency
+        servers = {s.get("storage"): s for s in pve.get("/storage") or []}
+    except SystemExit:
+        servers = {}
+    for s in storage:
+        conf = servers.get(s["storage"]) or {}
+        for key in ("server", "export", "datastore", "share"):
+            if conf.get(key):
+                s[key] = clean(conf[key])
 
     try:  # scheduled vzdump jobs (PVEAuditor can read them); None = could not read
         backup_jobs = [{"id": clean(j.get("id")), "enabled": j.get("enabled", 1) not in (0, "0"),
@@ -281,6 +402,10 @@ def collect(pve: PVE, details: bool) -> dict:
             g["config"] = guest_config(conf)
             if g["status"] == "running":
                 g["ips"] = guest_ips(pve, g, kind, conf, ip_sources)
+        backups, how = last_backups(pve, nodes, guests)
+        ip_sources["backups"] = how
+        for g in guests:
+            g.update(backups.get(g["vmid"]) or {})
 
     warnings = [w for w in [None if guests else no_guests_hint(pve)] if w]
     return {"collected_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
@@ -295,7 +420,8 @@ def collect(pve: PVE, details: bool) -> dict:
 
 
 def keep_details(old: dict | None, new: dict) -> dict:
-    """A run without --details keeps each guest's config and reported addresses (ips) from the previous snapshot
+    """A run without --details keeps each guest's config, reported addresses (ips) and backup results from the
+    previous snapshot
     (same VMID and type) and stamps when they were read (details_at), so a plain refresh doesn't strip what
     pve_node_plan.py, drift_report.py and overview.py need (addresses: GitHub issue #97)."""
     if not old or any("config" in g for g in new.get("guests") or []):
@@ -308,8 +434,9 @@ def keep_details(old: dict | None, new: dict) -> dict:
         o = prev.get((g.get("vmid"), g.get("type")))
         if o is not None:
             g["config"] = o["config"]
-            if "ips" in o:
-                g["ips"] = o["ips"]
+            for k in ("ips", "last_backup", "backup_error"):
+                if k in o:
+                    g[k] = o[k]
             kept += 1
     if kept:
         new["details_at"] = old.get("details_at") or old.get("collected_at")
@@ -364,6 +491,9 @@ def summary(inv: dict, cfg: dict | None = None) -> str:
     agent = (inv.get("guest_ip_sources") or {}).get("agent", "")
     if agent.startswith("forbidden"):
         lines.append(f"\nGuest agent IPs not read — {agent}.")
+    backups = (inv.get("guest_ip_sources") or {}).get("backups", "")
+    if backups.startswith("not read"):
+        lines.append(f"\nLast backups {backups} — the read-only token needs Sys.Audit on / (PVEAuditor).")
     if inv.get("details_at"):
         lines.append(f"\nGuest config kept from the --details run of {inv['details_at']} (refresh with --details).")
     for w in inv.get("warnings") or []:
