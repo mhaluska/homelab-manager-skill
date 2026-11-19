@@ -126,7 +126,8 @@ NMAP_VALUE_OPTS = {"-p", "-oX", "-oN", "-oG", "-oA", "-oS", "-oM", "-iL", "--exc
                    "--script-args-file", "--script-help", "--scanflags", "--servicedb", "--versiondb", "--data",
                    "--data-string", "--ip-options"}
 # nmap_scan.py options whose next argument is a value, not a target
-NMAP_SCAN_VALUE_OPTS = {"--profile", "--ports", "--top-ports", "--out", "--interface", "-e", "--site"}
+NMAP_SCAN_VALUE_OPTS = {"--profile", "--ports", "--top-ports", "--out", "--interface", "-e", "--site",
+                        "--forget-missing"}
 # ssh_probe.py options whose next argument is a value, not a target
 SSH_PROBE_VALUE_OPTS = {"--user", "--port", "--timeout", "--jobs", "--site"}
 
@@ -683,7 +684,9 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
             targets = [a for i, a in enumerate(args) if not a.startswith("-")
                        and (i == 0 or args[i - 1] not in value_opts)]
             site = option_value(args, "--site")
-            if not targets and site is not None and script.name == "nmap_scan.py":
+            if not targets and script.name == "nmap_scan.py" and option_value(args, "--forget-missing") is not None:
+                pass   # edits network.json, scans nothing; the script refuses targets with it (GitHub issue #127)
+            elif not targets and site is not None and script.name == "nmap_scan.py":
                 findings += check_site_scan(site, cwd)  # the site's authorized ranges (GitHub issue #118)
             elif targets or script.name == "nmap_scan.py":  # ssh_probe.py without targets: hosts from network.json
                 findings += check_nmap(targets, cwd, label=script.name)
