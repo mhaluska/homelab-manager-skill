@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.40.0 — 2026-11-19
+- `nmap_scan.py --site <name>` without targets ([#118](https://github.com/mhaluska/homelab-manager-skill/issues/118)) scans the site's `ranges` that lie inside
+  `network.authorized_ranges` (a partly authorized range: its authorized parts; neighbouring authorized ranges stay
+  separate targets) and lists the ranges it left out instead of refusing the whole scan. Explicit targets outside
+  the authorized ranges are still refused; the guard hook makes the same computation. The upgrade notes
+  `overview-tls-certificates` and `network-scans-per-site` give this exact per-site command.
+
 ## 0.39.0 — 2026-11-19
 - OVERVIEW.md lists BMCs as **Server hardware** ([#117](https://github.com/mhaluska/homelab-manager-skill/issues/117)), a per-site table right after the Proxmox nodes: server, BMC,
   model, address, firmware, health (with its accepted causes), power, last seen. A BMC belongs to the server named
