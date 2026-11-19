@@ -1148,6 +1148,8 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
     ignored = {ip for ip, _ in scanned if ip not in guest_ips and not known.name(ip)
                and hmlib.ignored_address(cfg, ip, st["name"])}   # discovery.ignore_unmanaged (GitHub issue #106)
     other = [(ip, h) for ip, h in scanned if ip not in guest_ips and not known.name(ip) and ip not in ignored]
+    gone = [(ip, h) for ip, h in other if h.get("missing_since")]   # not answering a ping sweep (GitHub issue #127)
+    other = [(ip, h) for ip, h in other if not h.get("missing_since")]
     named = [ip for ip, _ in scanned if ip not in guest_ips and (known.name(ip) or ip in ignored)]
     if not other and named:
         out += sub("Other scanned addresses") + ["Every address nmap found belongs to a known host.", ""]
@@ -1163,6 +1165,15 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
                        os_guess(h.get("os")), len(h.get("ports") or []),
                        stamp(h.get("last_seen"))]
                       for ip, h in other]), len(other), "address") + [""]
+    if gone:
+        if not (other or named):
+            out += sub("Other scanned addresses")
+        out += [f"<details><summary>{plural(len(gone), 'address')} nothing names, not answering since the last ping "
+                "sweep</summary>", ""]
+        out += table(["Address", "Name", "Looks like", "Missing since", "Last seen"],
+                     [[ip, list(h.get("hostnames") or []), str(h.get("device_type_guess") or ""),
+                       stamp(h.get("missing_since")), stamp(h.get("last_seen"))] for ip, h in gone])
+        out += ["", "</details>", ""]
     if named:   # which known host each of them was attributed to (GitHub issue #109)
         out += [f"<details><summary>{plural(len(named), 'scanned address')} of known hosts or ignored</summary>", ""]
         out += table(["Address", "Known as", "Source"],

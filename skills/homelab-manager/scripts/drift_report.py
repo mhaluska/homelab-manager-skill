@@ -526,6 +526,8 @@ def main():
             mac_of = lambda h: str(h.get("mac") or "").lower()
             unknown = [(ip, h) for ip, h in hosts_here.items()
                        if ip not in known_ips and not ignored(ip) and mac_of(h) not in by_mac]
+            gone = sorted((ip, h) for ip, h in unknown if h.get("missing_since"))   # GitHub issue #127
+            unknown = [(ip, h) for ip, h in unknown if not h.get("missing_since")]
             L += [f"## Network devices not in managed inventory{in_site(st) if per_site else ''}", ""]
             if unknown:
                 L += [f"{len(unknown)} device(s) — add to inventory, or list in `discovery.ignore_unmanaged`"
@@ -540,6 +542,12 @@ def main():
             else:
                 L.append("None.")
             L.append("")
+            if gone:
+                L += [f"Not answering since the last ping sweep ({len(gone)}) — gone, or moved to another address; "
+                      "`nmap_scan.py --forget-missing DAYS` drops them:", ""]
+                L += [f"- {ip} {(h.get('hostnames') or [''])[0]} — missing since {str(h['missing_since'])[:10]}, "
+                      f"last seen {str(h.get('last_seen') or '?')[:10]}".replace("  ", " ") for ip, h in gone]
+                L.append("")
             seen_named = []
             for e in named:
                 at = [ip for ip, h in hosts_here.items() if ip == e["ip"] or (e["mac"] and mac_of(h) == e["mac"])]
