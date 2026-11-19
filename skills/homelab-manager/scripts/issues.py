@@ -835,13 +835,14 @@ def labels_to_use(i, repo, cfg) -> list[str]:
     return [l for l in wanted if l in have]
 
 
-def create_issue(i, repo, cfg) -> str | None:
-    """gh issue create; on success record the URL on the item and return None, else an error."""
+def create_issue(i, repo, cfg, title: str, body: str) -> str | None:
+    """gh issue create with the already sanitised title and body; on success record the URL on the item and
+    return None, else an error."""
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
-        f.write(issue_body(i, cfg))
+        f.write(body)
     labels = labels_to_use(i, repo, cfg)
     try:
-        r = gh(["issue", "create", "--repo", repo, "--title", issue_title(i, cfg), "--body-file", f.name]
+        r = gh(["issue", "create", "--repo", repo, "--title", title, "--body-file", f.name]
                + (["--label", ",".join(labels)] if labels else []), cfg)
     finally:
         Path(f.name).unlink()
@@ -951,19 +952,21 @@ def cmd_report(a, cfg):
     foreign = {k: v for k, v in foreign.items() if v}
     print(f"Target: {repo} (public) — reported through: {marker or 'never'} — "
           f"{len(plan)} issue(s) to report, {len(gl)} GitHub issue(s) checked")
-    for st in plan:
-        i, g = st["item"], st["target"]
+    for st in plan:  # render (and so redact) every text now, in both modes: the summary below counts what is
+        i, g = st["item"], st["target"]  # sent, and the send loop sends exactly this text (GitHub issue #126)
         if st["action"] == "update":
+            st["text"] = update_note(i, cfg)
             print(f"\n{i['id']}  UPDATE #{g['number']} ({g['state']}) \"{g['title']}\"  — {st['why']}"
                   + ("  [closed on GitHub: comment only, not reopened]" if g["state"] == "closed" else ""))
             if a.dry_run:
-                print("  comment:\n" + indent(update_note(i, cfg)))
+                print("  comment:\n" + indent(st["text"]))
         else:
-            print(f"\n{i['id']}  CREATE \"{issue_title(i, cfg)}\"  — {st['why']}")
+            st["title"], st["text"] = issue_title(i, cfg), issue_body(i, cfg)
+            print(f"\n{i['id']}  CREATE \"{st['title']}\"  — {st['why']}")
             for sc, n in st.get("near", []):
                 print(f"    near: #{n['number']} ({sc:.0%}) \"{n['title']}\"")
             if a.dry_run:
-                print("  body:\n" + indent(issue_body(i, cfg)))
+                print("  body:\n" + indent(st["text"]))
     if plan:
         print("\n" + redactor(cfg).summary())
         if a.dry_run and redactor(cfg).details():
@@ -985,7 +988,7 @@ def cmd_report(a, cfg):
     for st in plan:
         i, g = st["item"], st["target"]
         if st["action"] == "update":
-            r = gh(["issue", "comment", str(g["number"]), "--repo", repo, "--body-file", "-"], cfg, input=update_note(i, cfg))
+            r = gh(["issue", "comment", str(g["number"]), "--repo", repo, "--body-file", "-"], cfg, input=st["text"])
             if r.returncode != 0:
                 failed.append(f"{i['id']}: {(r.stderr or r.stdout).strip()[:200]}")
                 continue
@@ -994,7 +997,7 @@ def cmd_report(a, cfg):
             i["reported_at"] = started
             print(f"{i['id']} → commented on #{g['number']} {g['url']}")
         else:
-            err = create_issue(i, repo, cfg)
+            err = create_issue(i, repo, cfg, st["title"], st["text"])
             if err:
                 failed.append(f"{i['id']}: {err[:200]}")
                 continue
