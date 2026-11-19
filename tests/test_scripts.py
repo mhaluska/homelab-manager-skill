@@ -3206,17 +3206,32 @@ class DiscoveryLayoutTests(unittest.TestCase):  # GitHub issue #73
     def test_check_updates_target_scopes_every_play(self):  # GitHub issue #92
         pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/check-updates.yml").read_text()
         hosts = dict(re.findall(r'^- name: (.+)\n  hosts: "(.+)"$', pb, re.M))
-        self.assertEqual(hosts["Pending updates on Linux"], "{{ target | default('linux') }}:!windows:!appliances:!qnap")
+        self.assertEqual(hosts["Pending updates on Linux"],
+                         "{{ (target | replace(',', ':')) if target is defined else 'linux' }}:!windows:!appliances:!qnap")
         self.assertEqual(hosts["Pending updates on Windows (search only, installs nothing)"],
-                         "{{ windows_target | default((target ~ ':&windows') if target is defined else 'windows') }}")
-        self.assertIn("target ~ ':&qnap'", hosts["Firmware and app versions on QNAP NAS (reads files only)"])
-        self.assertTrue(hosts["Write discovery/updates.json"].startswith("{{ target | default('linux:windows:qnap') }}"))
+                         "{{ windows_target | default((target | replace(',', ':') ~ ':&windows') if target is defined "
+                         "else 'windows') }}")
+        self.assertIn("target | replace(',', ':') ~ ':&qnap'", hosts["Firmware and app versions on QNAP NAS (reads files only)"])
+        self.assertTrue(hosts["Write discovery/updates.json"].startswith(
+            "{{ (target | replace(',', ':')) if target is defined else 'linux:windows:qnap' }}"))
+
+    def test_check_updates_comma_target_never_splits_a_pattern(self):  # GitHub issue #129
+        # Ansible splits a pattern on commas first, so `a,b:&windows` intersects only b: wherever a target is
+        # joined to more pattern terms, its commas must have become colons
+        pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/check-updates.yml").read_text()
+        hosts = re.findall(r'^  hosts: "(.+)"$', pb, re.M)
+        self.assertEqual(len(hosts), 4)
+        for h in hosts:
+            for var in re.findall(r"\b(target|windows_target|qnap_target)\b(?! is defined)(?! \| default)", h):
+                self.assertRegex(h, rf"\b{var} \| replace\(',', ':'\)")
+            self.assertNotRegex(h, r"\btarget \| default\(")
 
     def test_check_updates_covers_qnap_read_only(self):  # GitHub issue #81
         pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/check-updates.yml").read_text()
         play = pb.split("- name: Firmware and app versions on QNAP NAS")[1].split("\n- name:")[0]
-        self.assertIn("qnap_target | default((target ~ ':&qnap') if target is defined else 'qnap')", play)
-        self.assertIn("(':' ~ qnap_target) if qnap_target is defined", pb.split("- name: Write discovery/updates.json")[1])
+        self.assertIn("qnap_target | default((target | replace(',', ':') ~ ':&qnap') if target is defined else 'qnap')", play)
+        self.assertIn("(':' ~ qnap_target | replace(',', ':')) if qnap_target is defined",
+                      pb.split("- name: Write discovery/updates.json")[1])
         self.assertNotIn("become", play)                                         # raw only, as the NAS user
         modules = set(re.findall(r"^\s+(ansible\.builtin\.\w+):", play, re.M))
         self.assertEqual(modules, {"ansible.builtin.raw", "ansible.builtin.set_fact"})
