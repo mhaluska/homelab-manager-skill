@@ -481,14 +481,16 @@
 
     - name: Autoremove only when it touches nothing protected
       ansible.builtin.set_fact:
-        hm_autoremove_skip: >-
+        # a block that renders nothing is None, not '' (GitHub issue #136): default('', true) keeps it a string
+        hm_autoremove_skip: "{{ hm_skip_why | default('', true) }}"
+        hm_autoremove_list: "{{ hm_removable }}"
+      vars:
+        hm_skip_why: >-
           {%- if hm_protected | length > 0 -%}
             would remove protected packages {{ hm_protected | join(', ') }}
           {%- elif hm_removable | length > (autoremove_max | default(20) | int) -%}
             would remove {{ hm_removable | length }} packages (autoremove_max {{ autoremove_max | default(20) }})
           {%- endif -%}
-        hm_autoremove_list: "{{ hm_removable }}"
-      vars:
         hm_removable: >-
           {{ ((hm_autoremove_deb.stdout_lines | default([]))
               + (hm_autoremove_rh.stdout_lines | default([]) | map('regex_replace', '^(.+)-(\d+:)?[^-]+-[^-]+$', '\1')))
@@ -667,7 +669,7 @@
               reboot_pending={{ needs_reboot and not (rebooted.rebooted | default(false)) }}
               {{ ('(' ~ reboot_reasons | join('; ') ~ ')') if needs_reboot and not (rebooted.rebooted | default(false)) else '' }},
               restart_pending={{ restart_pending }}{{ (', autoremove skipped: ' ~ hm_autoremove_skip)
-              if hm_autoremove_skip | default('') | length > 0 else '' }}{{ (', no snapshot: ' ~ hm_snapshot_skip)
+              if hm_autoremove_skip | default('', true) | length > 0 else '' }}{{ (', no snapshot: ' ~ hm_snapshot_skip)
               if snapshot | bool and hm_snapshot_skip | default('') | length > 0 else '' }}{{ ', containerd and docker restarted (containers were down)'
               if hm_docker_restarted is changed else '' }}{{ ', was stopped after its reboot and started through the Proxmox API'
               if rebooted.started_by_api | default(false) | bool else '' }}"
