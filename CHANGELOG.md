@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.39.0 — 2026-11-19
+- OVERVIEW.md lists BMCs as **Server hardware** ([#117](https://github.com/mhaluska/homelab-manager-skill/issues/117)), a per-site table right after the Proxmox nodes: server, BMC,
+  model, address, firmware, health (with its accepted causes), power, last seen. A BMC belongs to the server named
+  by its host var `bmc_of`, else by its name (`bmc-<host>`, `<host>-bmc`, `<host>-ipmi`) when that host is in the
+  inventory or a Proxmox node. The rest of the old section is **Network devices and appliances** (RouterOS, UniFi,
+  QNAP NAS, other appliances); the site map still shows every device on its VLAN, and Health's "see …" wording
+  names the new sections.
+- `issues.py compact [--older-than DAYS] [--apply]` ([#116](https://github.com/mhaluska/homelab-manager-skill/issues/116)): resolved entries keep their heading, metadata, status
+  line and resolution note in skill_issues.md; their details move to `docs/skill-issues-archive.md` (appended, never
+  discarded), so IDs are never reused and `reopen`, `add` with a key and `report` keep working. A dry run without
+  `--apply`; by default every resolved entry (`--older-than` limits it to those resolved that long ago). Not
+  automatic: `fixed --apply` says when resolved details exceed 50 KB. Resolved rows of the summary table are
+  collapsed into a `<details>` block.
+- Upgrade note: `overview-server-hardware` (set `bmc_of` for a BMC whose server isn't found by name).
+
 ## 0.38.0 — 2026-11-18
 - OVERVIEW.md covers recovery, dependencies, exposure and expirations ([#89](https://github.com/mhaluska/homelab-manager-skill/issues/89)), only from data the
   repository records, nothing guessed from names:
