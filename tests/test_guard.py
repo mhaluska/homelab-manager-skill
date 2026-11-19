@@ -51,6 +51,14 @@ class ScopeTests(unittest.TestCase):
         for t in ["10.0.0.0/16", "192.168.1.0/24", "10.0.11.1", "10.0.10.250-260", "0.0.0.0/0", "8.8.8.8"]:
             self.assertTrue(hmlib.check_targets([t], self.cfg), t)
 
+    def test_site_scan_ranges(self):  # GitHub #118: neighbouring authorized ranges are not merged into one target
+        cfg = {"network": {"authorized_ranges": ["10.0.10.0/24", "10.0.11.0/24", "10.0.20.0/23", "10.0.20.0/24"]},
+               "sites": [{"name": "home", "ranges": ["10.0.10.0/23", "10.0.20.0/22", "10.0.20.5", "10.9.0.0/24"]}]}
+        targets, skipped = hmlib.site_scan_ranges(cfg, "home")
+        self.assertEqual(targets, ["10.0.10.0/24", "10.0.11.0/24", "10.0.20.0/23"])
+        self.assertEqual(skipped, ["10.0.20.0/22 (scanning only 10.0.20.0/23)", "10.9.0.0/24"])
+        self.assertEqual(hmlib.check_targets(targets, cfg), [])
+
     def test_hostnames_refused(self):
         self.assertTrue(hmlib.check_targets(["scanme.nmap.org"], self.cfg))
         self.assertTrue(hmlib.check_targets(["10.0.10.*"], self.cfg))
@@ -127,6 +135,19 @@ class GuardNmapTests(unittest.TestCase):
             self.assertIsNone(decision(f"python3 {script} 10.0.10.0/24 --site offsite", r))   # GitHub #72: a value
             self.assertIsNone(decision(f"python3 {script} --site offsite 10.0.10.0/24", r))
             self.assertEqual(decision(f"python3 {script} --site offsite 192.168.0.0/24", r), "deny")
+
+    def test_nmap_scan_site_without_targets(self):  # GitHub #118: the site's ranges inside authorized_ranges
+        with Repo() as r:
+            Path(r, "homelab.yaml").write_text(CONFIG + "sites:\n  - {name: home, ranges: [10.0.10.0/24]}\n"
+                                               "  - {name: lab, ranges: [10.0.0.0/16, 10.9.0.0/24]}\n"
+                                               "  - {name: vpn, ranges: [10.9.0.0/24]}\n  - {name: bare}\n")
+            script = ROOT / "skills/homelab-manager/scripts/nmap_scan.py"
+            self.assertIsNone(decision(f"python3 {script} --site home --profile services", r))
+            self.assertIsNone(decision(f"python3 {script} --site=lab --only-live", r))      # partly authorized
+            self.assertEqual(decision(f"python3 {script} --profile os --site lab", r), "ask")
+            for c in ["--site vpn", "--site moon", "--site bare", "--profile services", "--site lab 10.9.0.0/24"]:
+                self.assertEqual(decision(f"python3 {script} {c}", r), "deny", c)
+            self.assertEqual(decision(f"python3 {script} --site \"$SITE\"", r), "deny")   # like a variable target
 
     def test_ssh_probe_targets_are_scope_checked(self):  # issue 25
         with Repo() as r:

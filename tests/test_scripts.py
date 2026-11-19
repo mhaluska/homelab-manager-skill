@@ -3660,6 +3660,39 @@ class PerSiteScanTests(unittest.TestCase):  # GitHub #72, #66: scans know their 
         self.assertEqual(ssh_probe.select(db, [], cfg, set(), False, 22, "home")[0], ["10.0.0.5"])
         self.assertEqual(ssh_probe.select(db, [], cfg, set(), False, 22, "offsite")[0], [])
 
+    def test_site_scan_without_targets(self):  # GitHub #118: the site's ranges, clipped to the authorized ones
+        r = run("config_set.py", "sites+={name: lab, ranges: [10.0.0.0/23, 10.9.0.0/24]}", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        cfg = self.h.load_config(self.d)
+        self.assertEqual(self.h.site_scan_ranges(cfg, "home"), (["10.0.0.0/24"], []))
+        self.assertEqual(self.h.site_scan_ranges(cfg, "lab"),
+                         (["10.0.0.0/24"], ["10.0.0.0/23 (scanning only 10.0.0.0/24)", "10.9.0.0/24"]))
+        with self.assertRaises(self.h.ConfigError):
+            self.h.site_scan_ranges(cfg, "moon")
+        nmap = lambda *a: subprocess.run([sys.executable, str(SCRIPTS / "nmap_scan.py"), *a], cwd=self.d,
+                                         env=self.env, capture_output=True, text=True)
+        r = nmap("--site", "lab", "--profile", "services")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(self.log.read_text().splitlines()[-1])[-1], "10.0.0.0/24")
+        self.assertIn("left out (not in network.authorized_ranges): 10.0.0.0/23 (scanning only 10.0.0.0/24), "
+                      "10.9.0.0/24", r.stderr)
+        self.assertNotIn("is this the right --site", r.stderr)
+        self.assertEqual(sorted(json.loads((self.d / "discovery/network.json").read_text())["sites"]), ["lab"])
+        r = nmap("--site=lab", "--only-live")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(self.log.read_text().splitlines()[-1])[-2:], ["10.0.0.5", "10.0.0.9"])
+        r = nmap("10.9.0.0/24", "--site", "lab")                                   # explicit targets: still refused
+        self.assertEqual(r.returncode, 4)
+        self.assertIn("outside the authorized ranges", r.stderr)
+        r = nmap("--profile", "services")                                           # no targets, no site
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("--site NAME", r.stderr)
+        r = run("config_set.py", "sites+={name: vpn, ranges: [10.9.0.0/24]}", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = nmap("--site", "vpn")
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("nothing to scan", r.stderr)
+
     def test_scan_per_site_and_drift(self):
         excl, _ = self.scan("--site", "offsite")
         self.assertEqual(excl, "10.0.0.1/32,10.0.0.5/32")
