@@ -59,7 +59,8 @@ python3 $HM/scripts/nmap_scan.py --site home --profile services --only-live  # a
   `{ip, site}` exclusions apply with the plain ones; without `--site` every site's exclusions apply.
   `--site <name>` with no targets scans the site's `ranges` that lie inside `authorized_ranges` (an only partly
   authorized range: its authorized part) and lists the ones it left out — use it for "rescan site X" instead of
-  intersecting the two lists by hand. Explicit targets outside `authorized_ranges` are still refused.
+  intersecting the two lists by hand. The only site of a repo needs no `ranges`: it scans every authorized range;
+  next to other sites, a site without `ranges` is refused. Explicit targets outside `authorized_ranges` are still refused.
   The script and the guard hook both enforce this. If the user asks for a range that isn't
   authorized, say so and offer to add it to `homelab.yaml` **if they confirm they own it**.
 - "My management subnet": resolve the name from `homelab.yaml` comments/ranges or ask which

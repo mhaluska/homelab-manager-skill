@@ -400,7 +400,9 @@ def check_nmap(argv: list[str], cwd: str, label: str = "nmap") -> list[tuple[str
         return [(ASK, f"{label} outside a homelab-infrastructure repo: no homelab.yaml, so no authorized ranges to check against.")]
     try:
         cfg = hmlib.load_config(root)
-        problems += hmlib.check_targets(targets, cfg) if targets else ["no scan targets found"]
+        problems += (hmlib.check_targets(targets, cfg) if targets else
+                     ["no scan targets found" + (": give them, or --site NAME to scan that site's authorized ranges"
+                                                 if label == "nmap_scan.py" else "")])
     except hmlib.ConfigError as e:
         problems.append(str(e))
     return [(DENY, f"Scan refused: {p}") for p in problems]
@@ -429,7 +431,8 @@ def check_site_scan(site: str, cwd: str) -> list[tuple[str, str]]:
         targets, _ = hmlib.site_scan_ranges(hmlib.load_config(root), site)
     except hmlib.ConfigError as e:
         return [(DENY, f"Scan refused: {e}")]
-    return [] if targets else [(DENY, f"Scan refused: no range of site {site} is inside network.authorized_ranges.")]
+    return [] if targets else [(DENY, f"Scan refused: no range of site {site} is inside network.authorized_ranges"
+                                      " (or it is empty).")]
 
 
 def check_tofu_apply(tok: list[str], cwd: str) -> list[tuple[str, str]]:

@@ -773,14 +773,18 @@ def outside_site(cfg: dict, st: dict, targets: list[str]) -> list[str]:
 def site_scan_ranges(cfg: dict, name: str) -> tuple[list[str], list[str]]:
     """(targets, skipped) for `nmap_scan.py --site name` without targets (GitHub issue #118): the site's ranges
     clipped to network.authorized_ranges — a range only partly authorized gives its authorized parts — and the
-    site ranges (or parts) left out. Raises ConfigError for an unknown site or one with no ranges."""
+    site ranges (or parts) left out. The only site of a repo may have no ranges: it scans every authorized range
+    (GitHub issue #125). Raises ConfigError for an unknown site, or one with no ranges next to other sites."""
     st = site(cfg, name)
-    if not st["ranges"]:
-        raise ConfigError(f"site {site_title(st)} has no ranges in homelab.yaml: give the scan targets.")
     allowed, _ = scan_scope(cfg)
     outer = lambda nets: [n for n in nets if not any(o != n and o.version == n.version and n.subnet_of(o)
                                                      for o in nets)]
-    keep, skipped = [], []
+    if not st["ranges"]:
+        if len(sites(cfg)) > 1:
+            raise ConfigError(f"site {site_title(st)} has no ranges in homelab.yaml (with several sites, "
+                              "network.authorized_ranges also holds the other sites' networks): give the scan "
+                              "targets, or set the site's ranges.")
+    keep, skipped = ([] if st["ranges"] else list(allowed)), []
     for r in st["ranges"]:
         if any(r.version == a.version and r.subnet_of(a) for a in allowed):
             keep.append(r)

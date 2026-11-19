@@ -7,7 +7,8 @@
 Targets must be IPs, CIDRs or a.b.c.x-y ranges inside network.authorized_ranges in
 homelab.yaml; network.excluded_hosts are always excluded. Hostnames are refused.
 --site NAME without targets scans the site's ranges (sites[].ranges) clipped to network.authorized_ranges and
-lists the ranges it left out (GitHub issue #118); explicit targets outside the authorized ranges are refused.
+lists the ranges it left out (GitHub issue #118); the only site of a repo, without ranges, scans every authorized
+range (#125). Explicit targets outside the authorized ranges are refused.
 
 --site NAME (sites: in homelab.yaml): the scan runs at that site — its {ip, site} exclusions apply with the
 plain ones, and the result goes under that site in discovery/network.json. Without --site the result goes
@@ -325,7 +326,8 @@ def main():
             a.targets, skipped = hmlib.site_scan_ranges(cfg, a.site)
             if not a.targets:
                 raise hmlib.ConfigError(f"none of site {a.site}'s ranges ({', '.join(skipped)}) is inside "
-                                        "network.authorized_ranges: nothing to scan.")
+                                        "network.authorized_ranges: nothing to scan." if skipped else
+                                        "network.authorized_ranges is empty: nothing to scan.")
         problems = hmlib.check_targets(a.targets, cfg)
         st = hmlib.scan_site(cfg, a.site)
         _, excluded = hmlib.scan_scope(cfg, st["name"] if st else None)
