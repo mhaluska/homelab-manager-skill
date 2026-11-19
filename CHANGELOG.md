@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.45.0 — 2026-11-19
+- Smart-home devices are recognised ([#132](https://github.com/mhaluska/homelab-manager-skill/issues/132)). `nmap_scan.py` device guesses gain `iot` from IoT vendors
+  (Netatmo, Yeelink, Xiaomi Electronics, Tuya, Signify/Philips Lighting, …) and from embedded stacks (lwIP,
+  FreeRTOS) serving only web ports, and `media` for Apple devices without a Mac's services (Apple TV, HomePod) and
+  Sonos. A TP-Link MAC with nothing but a web page is `iot/network`, since TP-Link makes both plugs and switches.
+  A VM's virtual NIC vendor (Proxmox, VMware, QEMU, Xen) no longer counts as evidence.
+- `routeros_audit.py --leases` gives scanned hosts without a MAC the one the router's ARP table or a bound DHCP
+  lease has, with its vendor and `mac_source: router`, and guesses their type again ([#132](https://github.com/mhaluska/homelab-manager-skill/issues/132)). nmap sees no
+  MACs on routed ranges, so vendor-based guesses now work there too. The lease proposals show the vendor.
+  `init_repo.py --sync-managed` suggests the refresh.
+- OVERVIEW.md's VLAN table counts every address the repository knows in each CIDR ([#134](https://github.com/mhaluska/homelab-manager-skill/issues/134)), not only scanned
+  ones and each guest's primary IP. That covers every guest NIC, inventory hosts and `hm_extra_ips`, Proxmox nodes,
+  gateways, RouterOS, NAS containers and `discovery.ignore_unmanaged` devices. A new "In use by" column splits the
+  count into guest IPs, infra and other devices, and counts guests on the VLAN whose address is unknown. A VLAN outside
+  `network.authorized_ranges`, or with no scanned host, is marked `(not scanned)`.
+
 ## 0.44.0 — 2026-11-19
 - `routeros_audit.py` reads each device in one SSH session instead of one connection per command
   ([#131](https://github.com/mhaluska/homelab-manager-skill/issues/131)). Routers can refuse logins that come too quickly one after another, and then the later commands
