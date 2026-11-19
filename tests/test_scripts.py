@@ -4012,6 +4012,9 @@ class GitUpstreamTests(unittest.TestCase):  # issue 27
 
 FAKE_SSH = r'''#!/usr/bin/env python3
 import json, os, sys
+if "-G" in sys.argv:   # config lookup (GitHub issue #122): not a connection, not logged
+    sys.stdout.write(os.environ.get("FAKE_SSH_G", "user admin\nidentityfile /nonexistent/id_ed25519\n"))
+    sys.exit(0)
 host = sys.argv[-3]
 with open(os.environ["FAKE_SSH_LOG"], "a") as f:
     f.write(json.dumps(sys.argv[1:]) + "\n")
@@ -4033,6 +4036,15 @@ if host == "10.0.20.15":
     sys.stdout.write("bad command name sh (line 1 column 1)\n")
     sys.exit(1)
 sys.stdout.write(replies[host])
+'''
+
+
+FAKE_SSH_ADD = r'''#!/usr/bin/env python3
+import os, sys
+if os.environ.get("FAKE_AGENT_EMPTY") and os.environ.get("SSH_AUTH_SOCK") != os.environ.get("FAKE_AGENT_FULL_SOCK"):
+    print("The agent has no identities.")
+    sys.exit(1)
+print("256 SHA256:abc admin@mac (ED25519)")
 '''
 
 
@@ -4061,6 +4073,8 @@ class SshProbeTests(unittest.TestCase):  # issue 25
         bin_.mkdir()
         (bin_ / "ssh").write_text(FAKE_SSH)
         (bin_ / "ssh").chmod(0o755)
+        (bin_ / "ssh-add").write_text(FAKE_SSH_ADD)
+        (bin_ / "ssh-add").chmod(0o755)
         self.log = self.d / "ssh.log"
         self.env = {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "FAKE_SSH_LOG": str(self.log)}
 
@@ -4095,6 +4109,23 @@ class SshProbeTests(unittest.TestCase):  # issue 25
         self.assertEqual(net["10.0.20.11"]["ssh_probe"]["os_id"], "rocky")
         self.assertFalse(net["10.0.20.12"]["ssh_probe"]["ok"])
         self.assertNotIn("ssh_probe", net["10.0.20.13"])
+
+    def test_empty_agent_says_no_key_loaded(self):  # GitHub issue #122
+        env = {**self.env, "FAKE_AGENT_EMPTY": "1"}
+        r = subprocess.run([sys.executable, str(SCRIPTS / "ssh_probe.py"), "10.0.20.12", "--no-write"], cwd=self.d,
+                           env=env, capture_output=True, text=True)
+        self.assertIn("warning: no SSH key to offer 1 host(s)", r.stderr)
+        self.assertIn("auth failed (no SSH key loaded — ssh-add", r.stdout)
+        self.assertNotIn("try --user", r.stdout)
+        key = self.d / "id_ed25519"
+        key.write_text("k")
+        for extra in ({"FAKE_SSH_G": f"identityfile {key}\n"},                     # a key file on disk
+                      {"FAKE_SSH_G": "identityagent ~/agent.sock\n",               # the agent ssh config names
+                       "FAKE_AGENT_FULL_SOCK": os.path.expanduser("~/agent.sock")}):
+            r = subprocess.run([sys.executable, str(SCRIPTS / "ssh_probe.py"), "10.0.20.12", "--no-write"],
+                               cwd=self.d, env={**env, **extra}, capture_output=True, text=True)
+            self.assertNotIn("warning: no SSH key", r.stderr, extra)
+            self.assertIn("key not authorized for this user — try --user", r.stdout, extra)
 
     def test_draft_and_no_write(self):
         before = (self.d / "discovery/network.json").read_text()
