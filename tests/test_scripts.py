@@ -1714,7 +1714,14 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertIn("Drift (2026-01-02 03:04): 2 findings — 2 not managed by OpenTofu; 3 network devices", md)
         self.assertIn("| RouterOS | sw1 | CRS317 | 10.9.20.1 | 7.21.4 | 1 audit findings (2026-01-02) |", md)  # #94
         self.assertIn("| RouterOS | sw2 | – | 10.9.20.3 | – | not audited", md)
-        self.assertIn("| BMC | bmc1 | ML350 |", md)
+        self.assertIn("### Server hardware\n\n| Server | BMC | Model | Address | Firmware | Health | Power | Last seen |\n"
+                      "|---|---|---|---|---|---|---|---|\n| – | bmc1 | ML350 | 10.9.20.9 | – | Critical (not OK: psu; "
+                      "bmc-info.yml records the cause) | On | – |", md)                              # #117
+        self.assertLess(md.index("### Proxmox nodes"), md.index("### Server hardware"))
+        self.assertLess(md.index("### Server hardware"), md.index("### Storage"))
+        devices = md.split("### Network devices and appliances")[1].split("###")[0]
+        self.assertNotIn("bmc1", devices)
+        self.assertNotIn("### Network devices\n", md)
         other = md.split("### Other scanned addresses")[1].split("<details>")[0]                   # #96
         self.assertIn("| 10.9.20.66 | – | linux | Linux 5.0 - 5.14 (95%) |", other)
         for ip in ("10.9.20.1 ", "10.9.20.2 ", "10.9.30.2 ", "10.9.20.7 "):
@@ -1724,7 +1731,8 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertIn("| pve1 | Debian 13 | – | 0 | – | – | 2026-01-10 | up to date |", health)
         self.assertIn("| web | Rocky 9 | – | 3 | – | – | 2026-01-01 (stale) | updates pending |", health)
         self.assertIn("Not checked yet (`check-updates.yml`): db, rtr1.", health)
-        self.assertIn("Not covered by `check-updates.yml` (see Network devices): bmc1, sw1, sw2.", health)
+        self.assertIn("Not covered by `check-updates.yml` (see Server hardware and Network devices and appliances): "
+                      "bmc1, sw1, sw2.", health)
         self.assertIn("BMC health: bmc1 Critical (not OK: psu; bmc-info.yml records the cause).", health)
         self.assertIn("Warnings (details under [Health](#health)): BMC: 1 Critical · 1 guest in no enabled backup job · "   # #108
                       "1 storage 80 % full or more · 1 node at 85 % memory or more.", md)
@@ -1844,7 +1852,7 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         managed = {"bmc1": {"ansible_host": "10.9.20.9", "_groups_all": ["appliances", "bmc"],
                             "bmc_health_accept": ["chassis_intrusion"]}}
         md = overview.render(hmlib.load_config(self.d), managed, "test")
-        self.assertIn("| BMC | bmc1 | X10 | 10.9.20.9 | – | health Critical (accepted: chassis\\_intrusion), power On", md)
+        self.assertIn("| – | bmc1 | X10 | 10.9.20.9 | – | Critical (accepted: chassis\\_intrusion) | On |", md)
         self.assertIn("BMC health: bmc1 Critical (accepted: chassis\\_intrusion).", md)
         docs = {"bmc.json": {"hosts": {"bmc1": d, "bmc2": dict(d, health="Warning"), "bmc3": dict(d, health_causes=["psu"])}},
                 "routeros.json": {"devices": {"r1": {"findings": [{"severity": "medium"}, {"severity": "low"},
@@ -1855,6 +1863,32 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertEqual(overview.glance_warnings(docs, managed, {"backup": 18}),                 # GitHub #108
                          ["BMC: 1 Critical, 1 Warning", "RouterOS audit: 1 high, 1 medium", "update check failed on 1 host",
                           "security updates on 2 hosts (1 Proxmox node)", "18 guests in no enabled backup job"])
+
+    def test_bmc_belongs_to_its_server(self):  # GitHub issue #117
+        sys.path.insert(0, str(SCRIPTS))
+        import hmlib
+        import overview
+        hosts = {"pve1", "nas1"}
+        self.assertEqual(overview.bmc_server("bmc-pve1", {}, hosts), "pve1")
+        self.assertEqual(overview.bmc_server("pve1-bmc", {}, hosts), "pve1")
+        self.assertEqual(overview.bmc_server("nas1-ipmi", {}, hosts), "nas1")
+        self.assertEqual(overview.bmc_server("bmc-pve9", {}, hosts), "")             # no such host
+        self.assertEqual(overview.bmc_server("ilo1", {"bmc_of": "srv7"}, hosts), "srv7")
+        Path(self.d, "discovery/bmc.json").write_text(json.dumps({"hosts": {
+            "pve1-ilo": {"model": "DL380", "health": "OK", "power_state": "On", "bmc_firmware": "3.10",
+                         "collected_at": "2026-01-05T00:00:00"},
+            "bmc-pve1": {"model": "X10", "health": "OK", "power_state": "Off"}}}))
+        managed = {"pve1-ilo": {"ansible_host": "10.9.20.11", "_groups_all": ["appliances", "bmc"], "bmc_of": "pve1"},
+                   "bmc-pve1": {"ansible_host": "10.9.20.12", "_groups_all": ["appliances", "bmc"]},
+                   "spare-bmc": {"ansible_host": "10.9.20.13", "_groups_all": ["appliances", "bmc"]}}
+        md = overview.render(hmlib.load_config(self.d), managed, "test")   # pve1 is a Proxmox node, not in the inventory
+        hw = md.split("### Server hardware")[1].split("###")[0]
+        self.assertIn("| pve1 | bmc-pve1 | X10 | 10.9.20.12 | – | OK | Off | – |", hw)
+        self.assertIn("| pve1 | pve1-ilo | DL380 | 10.9.20.11 | 3.10 | OK | On | 2026-01-05 |", hw)
+        self.assertIn("| – | spare-bmc | – | 10.9.20.13 | – | no data (bmc-info.yml) | – | – |", hw)
+        self.assertLess(hw.index("bmc-pve1"), hw.index("spare-bmc"))                 # linked servers first
+        self.assertNotIn("### Network devices", md)                                   # BMCs only: no device table
+        self.assertIn("devices: bmc-pve1, pve1-ilo, spare-bmc", md)                   # still on the site map
 
     def test_lists_never_cut(self):  # GitHub issue #115
         sys.path.insert(0, str(SCRIPTS))
