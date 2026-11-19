@@ -3737,6 +3737,11 @@ class PerSiteScanTests(unittest.TestCase):  # GitHub #72, #66: scans know their 
                          (["10.0.0.0/24"], ["10.0.0.0/23 (scanning only 10.0.0.0/24)", "10.9.0.0/24"]))
         with self.assertRaises(self.h.ConfigError):
             self.h.site_scan_ranges(cfg, "moon")
+        net = {"authorized_ranges": ["10.0.1.0/24", "10.0.0.0/16"]}
+        with self.assertRaisesRegex(self.h.ConfigError, "has no ranges"):   # next to other sites: refused
+            self.h.site_scan_ranges({"network": net, "sites": [{"name": "home"}, {"name": "lab"}]}, "lab")
+        only = {"network": net, "sites": [{"name": "home"}]}
+        self.assertEqual(self.h.site_scan_ranges(only, "home"), (["10.0.0.0/16"], []))   # GitHub #125
         nmap = lambda *a: subprocess.run([sys.executable, str(SCRIPTS / "nmap_scan.py"), *a], cwd=self.d,
                                          env=self.env, capture_output=True, text=True)
         r = nmap("--site", "lab", "--profile", "services")

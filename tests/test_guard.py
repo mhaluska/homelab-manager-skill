@@ -149,6 +149,17 @@ class GuardNmapTests(unittest.TestCase):
                 self.assertEqual(decision(f"python3 {script} {c}", r), "deny", c)
             self.assertEqual(decision(f"python3 {script} --site \"$SITE\"", r), "deny")   # like a variable target
 
+    def test_nmap_scan_only_site_without_ranges(self):  # GitHub #125: the only site scans every authorized range
+        with Repo() as r:
+            Path(r, "homelab.yaml").write_text(CONFIG + "sites:\n  - {name: lab}\n")
+            script = ROOT / "skills/homelab-manager/scripts/nmap_scan.py"
+            self.assertIsNone(decision(f"python3 {script} --site lab --profile services --only-live", r))
+            self.assertEqual(decision(f"python3 {script} --site moon", r), "deny")
+            out = guard.decide(guard.evaluate(f"python3 {script} --profile services --only-live", r))
+            self.assertIn("give them, or --site NAME", out["hookSpecificOutput"]["permissionDecisionReason"])
+            Path(r, "homelab.yaml").write_text("network:\n  authorized_ranges: []\nsites:\n  - {name: lab}\n")
+            self.assertEqual(decision(f"python3 {script} --site lab", r), "deny")
+
     def test_ssh_probe_targets_are_scope_checked(self):  # issue 25
         with Repo() as r:
             script = ROOT / "skills/homelab-manager/scripts/ssh_probe.py"
