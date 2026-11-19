@@ -273,7 +273,8 @@ def icmp_reply_type(data: bytes) -> int | None:
 def icmp_sweep(addrs: list[str], rate: int = 400, rounds: int = 2, wait: float = 1.5) -> set[str] | None:
     """Addresses that answered an ICMP echo request, sent from Python's unprivileged ICMP socket (macOS; Linux
     when net.ipv4.ping_group_range allows it): nmap sends ICMP only as root (GitHub issue #128). Unanswered
-    addresses get a second request. None when the socket cannot be opened."""
+    addresses get a second request. None when the socket cannot be opened, or when nearly every request
+    failed to go out (e.g. macOS Local Network privacy blocking this Python: "No route to host")."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_ICMP)
     except OSError as e:
@@ -299,7 +300,7 @@ def icmp_sweep(addrs: list[str], rate: int = 400, rounds: int = 2, wait: float =
 
     with s:
         for rnd in range(rounds):
-            todo = [a for a in addrs if a not in answered]
+            todo, failed = [a for a in addrs if a not in answered], {}
             for i, a in enumerate(todo):
                 hdr = struct.pack("!BBHHH", 8, 0, 0, ident, rnd * 0x8000 + i % 0x8000) + b"homelab-manager"
                 pkt = hdr[:2] + struct.pack("!H", _icmp_checksum(hdr)) + hdr[4:]
@@ -311,10 +312,18 @@ def icmp_sweep(addrs: list[str], rate: int = 400, rounds: int = 2, wait: float =
                         drain(time.monotonic() + 0.05)
                     except OSError as e:
                         if e.errno != errno.ENOBUFS:
-                            break   # e.g. no route to that address: it cannot answer
+                            failed[e.strerror] = failed.get(e.strerror, 0) + 1   # e.g. no route to that address
+                            break
                         drain(time.monotonic() + 0.05)
                 drain(time.monotonic() + 1 / rate)
             drain(time.monotonic() + wait)
+            if rnd == 0 and todo and sum(failed.values()) >= 0.9 * len(todo):
+                why = ", ".join(f"{err} ({n})" for err, n in failed.items())
+                print(f"nmap_scan: the ICMP sweep could not send to {sum(failed.values())} of {len(todo)} addresses "
+                      f"({why}). On macOS, Local Network privacy may block this Python ({sys.executable}): allow it "
+                      "in System Settings > Privacy & Security > Local Network, or use /usr/bin/python3.",
+                      file=sys.stderr)
+                return None
     return answered
 
 
@@ -752,7 +761,12 @@ def add_local_probes(hosts: list[dict], icmp: set | None, addrs: list[str], rout
         rec(ip)["discovered_by"].append("icmp")
     ifaces = {iface for iface, gw in routes.values() if iface and not gw}
     if ifaces:
-        found, proxy = arp_hosts(arp_table(), ifaces, set(addrs), set())
+        table = arp_table()
+        if not any(iface in ifaces for _, iface in table.values()):
+            print(f"nmap_scan: the ARP table has no entry on {', '.join(sorted(ifaces))}, not even the router's. On "
+                  f"macOS, Local Network privacy may hide it from this Python ({sys.executable}): allow it in System "
+                  "Settings > Privacy & Security > Local Network, or use /usr/bin/python3.", file=sys.stderr)
+        found, proxy = arp_hosts(table, ifaces, set(addrs), set())
         if proxy:
             print(f"nmap_scan: one MAC ({proxy}) is in the ARP table for nearly every address — proxy ARP, not real "
                   f"hosts. ARP entries not used for {where}.", file=sys.stderr)
