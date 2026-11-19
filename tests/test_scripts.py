@@ -190,6 +190,49 @@ class IssuesTests(unittest.TestCase):
         self.assertIn("BBB", self.issues("show", "1").stdout)
         self.assertNotIn("updated", r.stdout.split(";")[1].replace("last seen updated", ""))
 
+    def test_compact_resolved(self):  # GitHub issue #116
+        for t in ("A crashes", "B is slow", "C is missing"):
+            self.issues("add", "--title", t, "--kind", "script", "--body", f"### Summary\nDETAILS-{t[0]} " + "x" * 200)
+        self.issues("resolve", "1", "--note", "fixed in 0.6.1")
+        self.issues("resolve", "2")
+        p = Path(self.d, "skill_issues.md")
+        p.write_text(re.sub(r'"resolved": "[\d-]+"', '"resolved": "2020-01-01"', p.read_text(), count=1))   # SKILL-001
+        r = self.issues("compact")                                         # dry run: every resolved entry
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("SKILL-001", r.stdout)
+        self.assertIn("SKILL-002", r.stdout)
+        self.assertNotIn("SKILL-003", r.stdout)
+        self.assertIn("DETAILS-A", p.read_text())
+        self.assertFalse(Path(self.d, "docs/skill-issues-archive.md").exists())
+        r = self.issues("compact", "--older-than", "30", "--apply")       # only the old one
+        self.assertEqual(r.returncode, 0, r.stderr)
+        text, archive = p.read_text(), Path(self.d, "docs/skill-issues-archive.md").read_text()
+        self.assertNotIn("DETAILS-A", text)
+        self.assertIn("DETAILS-B", text)
+        self.assertIn("DETAILS-A", archive)
+        self.assertIn("## SKILL-001 — A crashes", archive)
+        self.assertIn("**Resolution (", text.split("## SKILL-001")[1].split("<!-- /issue -->")[0])   # kept in the stub
+        self.assertIn("_Details archived in `docs/skill-issues-archive.md`._", text)
+        self.issues("compact", "--apply")
+        text, archive = p.read_text(), Path(self.d, "docs/skill-issues-archive.md").read_text()
+        self.assertNotIn("DETAILS-B", text)
+        self.assertIn("DETAILS-C", text)                                  # open: untouched
+        self.assertEqual(archive.count("## SKILL-001"), 1)                # appended, not rewritten
+        self.assertEqual(archive.count("# Archived details of skill issues"), 1)
+        self.assertIn("Nothing to compact", self.issues("compact", "--apply").stdout)
+        self.assertIn("| SKILL-003 | script | C is missing | open |", text.split("<details>")[0])
+        self.assertIn("<details><summary>2 resolved</summary>", text)
+        self.assertIn("| SKILL-001 | script | A crashes | resolved |", text.split("<details>")[1])
+        self.assertIn("Full details: docs/skill-issues-archive.md (heading SKILL-001)", self.issues("show", "1").stdout)
+        self.assertIn("Added SKILL-004", self.issues("add", "--title", "D", "--kind", "idea").stdout)   # no ID reused
+        self.issues("reopen", "1")
+        self.assertIn("SKILL-001", self.issues("list", "--status", "open").stdout)
+        sys.path.insert(0, str(SCRIPTS))
+        import issues
+        big = [{"status": "resolved", "body": "y" * 60000}, {"status": "open", "body": "z" * 90000}]
+        self.assertIn("59 KB of details", issues.compact_hint(big))
+        self.assertIsNone(issues.compact_hint(big[1:]))
+
     def test_hand_edits_survive(self):
         self.issues("add", "--title", "x", "--kind", "other", "--body", "original")
         p = Path(self.d, "skill_issues.md")
