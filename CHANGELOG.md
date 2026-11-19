@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.44.0 — 2026-11-19
+- `routeros_audit.py` reads each device in one SSH session instead of one connection per command
+  ([#131](https://github.com/mhaluska/homelab-manager-skill/issues/131)). Routers can refuse logins that come too quickly one after another, and then the later commands
+  (NAT rules, neighbour discovery, DHCP leases, ARP) failed as "auth failed". A command the device lacks fails only
+  its own section, and a failed section is retried alone. `--leases` lists the routers whose lease or ARP table
+  could not be read as **Incomplete**, so "no lease names" no longer hides an unread table.
+- `check-updates.yml -e target=hostA,hostB` keeps every play to those hosts ([#129](https://github.com/mhaluska/homelab-manager-skill/issues/129)). With commas, Ansible
+  applied the Windows/QNAP intersection only to the last host, so the first one also ran the Windows play and got
+  a Windows error in `discovery/updates.json`. Commas now become `:`. `init_repo.py --sync-managed` updates
+  unchanged copies.
+- `nmap_scan.py` device guesses: ports 49152 and up are no longer evidence, and the AirPlay pair (rtsp on 5000 and
+  7000) counts as an Apple device, not a camera ([#130](https://github.com/mhaluska/homelab-manager-skill/issues/130)). An AirPlay speaker was guessed `camera/network`
+  because nmap matched its port 49153 to a 4-byte "MikroTik bandwidth-test server" signature.
+- `issues.py report` redacts only valid IPv6 addresses ([#133](https://github.com/mhaluska/homelab-manager-skill/issues/133)). A MAC vendor prefix such as `70:EE:50` or a
+  time is kept. `--keep` now also keeps an address, MAC or e-mail address; secrets are always removed.
+
 ## 0.43.0 — 2026-11-19
 - The ping sweep is now an ICMP echo sweep that `nmap_scan.py` sends itself, without root and without nmap
   ([#128](https://github.com/mhaluska/homelab-manager-skill/issues/128)). nmap sends ICMP only as root, so it used to find hosts only by TCP connects to 80 and 443 and
