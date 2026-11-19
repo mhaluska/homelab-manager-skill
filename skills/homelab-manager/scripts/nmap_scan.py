@@ -56,6 +56,7 @@ import json
 import os
 import re
 import select
+import shlex
 import shutil
 import socket
 import struct
@@ -805,6 +806,26 @@ def main():
     return 0
 
 
+SYSTEM_PYTHON = "/usr/bin/python3"
+
+
+def arp_empty_hint(ifaces: set, icmp_answered: bool) -> str:
+    """Why the ARP table came back empty and what the user can do (GitHub issue #135). macOS hides it from
+    programs a Python without Local Network access starts, and from those Homebrew's Python starts even when
+    that Python is allowed (its own ICMP then works): only the system Python reads it there."""
+    rerun = " ".join(shlex.quote(x) for x in [SYSTEM_PYTHON, *sys.argv])
+    head = f"nmap_scan: the ARP table has no entry on {', '.join(sorted(ifaces))}, not even the router's."
+    if os.path.realpath(sys.executable) == os.path.realpath(SYSTEM_PYTHON):
+        return (head + f" On macOS, allow {SYSTEM_PYTHON} (or the app running it) in System Settings > Privacy & "
+                "Security > Local Network.")
+    if icmp_answered:
+        return (head + f" This Python ({sys.executable}) reached the network (ICMP answered), but macOS still hides the "
+                "ARP table from programs it starts, even with Local Network access allowed. Re-run with the system "
+                f"Python: {rerun}")
+    return (head + f" On macOS, Local Network privacy may hide it from this Python ({sys.executable}): allow it in "
+            f"System Settings > Privacy & Security > Local Network, or re-run with the system Python: {rerun}")
+
+
 def add_local_probes(hosts: list[dict], icmp: set | None, addrs: list[str], routes: dict, nmap: str,
                      where: str) -> list[dict]:
     """A ping sweep's hosts plus those only the ICMP sweep or, for targets on the Mac's own segment (no gateway),
@@ -823,9 +844,7 @@ def add_local_probes(hosts: list[dict], icmp: set | None, addrs: list[str], rout
     if ifaces:
         table = arp_table()
         if not any(iface in ifaces for _, iface in table.values()):
-            print(f"nmap_scan: the ARP table has no entry on {', '.join(sorted(ifaces))}, not even the router's. On "
-                  f"macOS, Local Network privacy may hide it from this Python ({sys.executable}): allow it in System "
-                  "Settings > Privacy & Security > Local Network, or use /usr/bin/python3.", file=sys.stderr)
+            print(arp_empty_hint(ifaces, bool(icmp)), file=sys.stderr)
         found, proxy = arp_hosts(table, ifaces, set(addrs), set())
         if proxy:
             print(f"nmap_scan: one MAC ({proxy}) is in the ARP table for nearly every address — proxy ARP, not real "
