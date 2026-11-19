@@ -47,6 +47,7 @@ import argparse
 import datetime as dt
 import getpass
 import glob
+import ipaddress
 import json
 import os
 import platform
@@ -322,6 +323,20 @@ def looks_secret(v: str) -> bool:
     return (len(v) >= 6 and bool(letters and digits)) or (len(v) >= 16 and not re.fullmatch(r"[A-Za-z.\-]+", v))
 IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")
 IPV6 = re.compile(r"(?i)(?<![\w:])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![\w:])")
+
+
+def is_ipv6(s: str) -> bool:
+    """A real IPv6 address (8 groups, or a `::`) with a hex letter or `::`, not loopback or unspecified. A MAC
+    vendor prefix (`70:ee:50`) or a time (`12:30:45`) is not one (GitHub issue #133)."""
+    if s in ("::", "::1") or not ("::" in s or re.search(r"(?i)[a-f]", s)):
+        return False
+    try:
+        ipaddress.IPv6Address(s)
+    except ValueError:
+        return False
+    return True
+
+
 MAC = re.compile(r"(?i)\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b")
 EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b")
 GENERIC = {"homelab", "localhost", "local", "proxmox", "pve", "main", "default", "all", "ungrouped", "linux",
@@ -489,6 +504,8 @@ class Redactor:
         self.seen: dict[str, set] = {}
 
     def mark(self, kind: str, value: str, numbered: bool = False) -> str:
+        if value.lower() in self.keep:  # --keep: any exact string but a secret (GitHub issue #133)
+            return value
         self.seen.setdefault(kind, set()).add(value.lower())
         if not numbered:
             return f"<{kind}>"
@@ -542,11 +559,10 @@ class Redactor:
         text = self.words(text, self.px["bridge"], "bridge", True)
         if len(self.user) >= 3 and self.user.lower() not in GENERIC:
             text = re.sub(rf"(?<![\w-]){re.escape(self.user)}(?![\w-])", "<user>", text)
-        text = EMAIL.sub("<email>", text)
+        text = EMAIL.sub(lambda m: m.group(0) if m.group(0).lower() in self.keep else "<email>", text)
         text = MAC.sub(lambda m: self.mark("mac", m.group(0)), text)
         text = IPV4.sub(lambda m: m.group(0) if m.group(0) in ("127.0.0.1", "0.0.0.0") else self.mark("ip", m.group(0)), text)
-        text = IPV6.sub(lambda m: self.mark("ip6", m.group(0)) if ("::" in m.group(0) or re.search(r"(?i)[a-f]", m.group(0)))
-                        and m.group(0).count(":") >= 2 else m.group(0), text)
+        text = IPV6.sub(lambda m: self.mark("ip6", m.group(0)) if is_ipv6(m.group(0)) else m.group(0), text)
         # VLAN IDs: any number in a VLAN context, and known tags of 3+ digits anywhere
         text = TRUNKS.sub(lambda m: m.group(1) + re.sub(r"\d+", lambda d: self.mark("vlan", d.group(0), True), m.group(2)), text)
         for rx in VLAN_CTX:
@@ -1216,7 +1232,8 @@ def main():
                    help="comment on this GitHub issue instead of the automatic choice")
     p.add_argument("--new", action="append", default=[], metavar="ID", help="create even if a similar one exists")
     p.add_argument("--keep", action="append", default=[], metavar="WORD",
-                   help="don't redact this word (a plain word the site also uses as a name)")
+                   help="don't redact this word, address or MAC (a plain word the site also uses as a name, a "
+                        "public address); secrets are always removed")
     for name in ("show", "resolve", "reopen"):
         p = sp.add_parser(name)
         p.add_argument("id")
