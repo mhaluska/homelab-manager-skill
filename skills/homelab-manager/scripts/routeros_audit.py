@@ -7,12 +7,16 @@
 Hosts are addresses or names, or every host of an Ansible group in the managed inventory (--group,
 using each host's ansible_host / ansible_user / ansible_port). --user overrides the user for all.
 
-Runs only `print` commands, one `ssh -T` per command (no pty: RouterOS waits forever for a terminal that a
-pty-less tool never answers — why Ansible's `raw` hangs) with BatchMode (agent keys, no password prompt)
+Runs only `print` commands, all of a device's in one `ssh -T` session (GitHub issue #131: a router may refuse
+logins that come too fast after one another, so one connection per command failed the later ones). Each command
+runs as `:do { [:parse "<command>"] } on-error=…` after a `:put` marker, so one the device lacks fails only its own
+section; a failed section is retried alone, and a device whose output has no markers is read one command per
+connection. No pty: RouterOS waits forever for a terminal that a
+pty-less tool never answers — why Ansible's `raw` hangs. BatchMode (agent keys, no password prompt)
 and a hard timeout. Without a pty RouterOS wraps `print` output at a width of 1 character, so the login name
 carries console options (`<user>+ct512w`: no colours, no terminal detection, 512 columns; the user comes from
 `ssh -G` when not given), and the parser still joins wrapped value lines. Host keys are checked against ~/.ssh/known_hosts as usual. `/system routerboard` is
-skipped on CHR, and a command that fails doesn't stop the others.
+ignored on CHR, and a command that fails doesn't stop the others.
 
 Collects identity, resource, routerboard, package update status, licence, interfaces, addresses, bridges
 and VLANs, IP services, users, the MAC server, neighbour discovery and the NAT rules (port forwards, listed in
@@ -221,14 +225,86 @@ def ssh_run(host: str, user: str | None, port: int, timeout: int, command: str) 
             if needle in err:
                 return False, why
         return False, "ssh failed: " + clean(next((l for l in p.stderr.splitlines() if l.strip()), "exit 255"), 120)
-    first = next((l.strip() for l in (p.stdout + "\n" + p.stderr).splitlines() if l.strip()), "")
+    err = ros_error(p.stdout + "\n" + p.stderr)
+    return (False, err) if err else (True, p.stdout)
+
+
+def ros_error(out: str) -> str | None:
+    """"RouterOS: <message>" when the first line of a command's output is a RouterOS error, else None."""
+    first = next((l.strip() for l in out.splitlines() if l.strip()), "")
     data = re.match(r"^(\d+\s|[a-z][\w-]*:\s)", first)  # an item or `key: value`, whatever its comment says
-    if ROS_ERROR.search(first) and not data:
-        return False, "RouterOS: " + clean(first, 120)
-    return True, p.stdout
+    return "RouterOS: " + clean(first, 120) if ROS_ERROR.search(first) and not data else None
+
+
+BATCH_MARK = re.compile(r"^==hm:(\w+)==\s*$")
+BATCH_ERROR = "==hm-error=="
+
+
+def batch_script(sections: dict) -> str:
+    """One RouterOS script that prints every section after a `==hm:<section>==` marker (GitHub issue #131).
+    `:parse` compiles the command at run time, so a command the device lacks is caught by its own on-error."""
+    def quoted(cmd: str) -> str:
+        return cmd.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
+    return "\n".join(f':put "==hm:{name}=="\n:do {{ [:parse "{quoted(cmd)}"] }} on-error={{ :put "{BATCH_ERROR}" }}'
+                     for name, (cmd, _) in sections.items())
+
+
+def split_batch(out: str) -> dict[str, str]:
+    """{section: its output} of a batch_script run; {} when the output has no markers."""
+    parts: dict[str, list[str]] = {}
+    cur = None
+    for line in out.replace("\r\n", "\n").splitlines(keepends=True):
+        m = BATCH_MARK.match(line)
+        if m:
+            cur = m.group(1)
+            parts[cur] = []
+        elif cur is not None:
+            parts[cur].append(line)
+    return {k: "".join(v) for k, v in parts.items()}
 
 
 def collect(host: str, user: str | None, port: int, timeout: int, runner=ssh_run, leases: bool = False) -> dict:
+    """Every section in one SSH session (GitHub issue #131); a section that failed there is retried alone, and a
+    device that didn't run the script (no markers in its output) is read one command per connection."""
+    sections = {**COMMANDS, **(LEASE_COMMANDS if leases else {})}
+    ok, out = runner(host, user, port, timeout, batch_script(sections))
+    if not ok:
+        return {"host": host, "user": user, "errors": {"resource": out}, "reachable": False}
+    parts = split_batch(out)
+    if not parts:
+        return collect_each(host, user, port, timeout, runner, sections)
+    dev: dict = {"host": host, "user": user, "errors": {}}
+    retry = []
+    for section, (command, terse) in sections.items():
+        text = parts.get(section)
+        if text is None or BATCH_ERROR in text or ros_error(text):
+            retry.append(section)
+        else:
+            dev[section] = parse_terse(text) if terse else parse_detail(text)
+    if "resource" in retry:
+        ok, text = runner(host, user, port, timeout, COMMANDS["resource"][0])
+        if not ok:
+            dev["errors"]["resource"] = text
+            dev["reachable"] = False
+            return dev
+        dev["resource"] = parse_detail(text)
+    dev["reachable"] = True
+    if is_chr(dev["resource"]):
+        dev.pop("routerboard", None)   # CHR has no /system routerboard
+    for section in retry:
+        if section == "resource" or (section == "routerboard" and is_chr(dev["resource"])):
+            continue
+        command, terse = sections[section]
+        ok, text = runner(host, user, port, timeout, command)
+        if ok:
+            dev[section] = parse_terse(text) if terse else parse_detail(text)
+        else:
+            dev["errors"][section] = text
+    return {k: dev[k] for k in ("host", "user", "errors", "reachable", *sections) if k in dev}
+
+
+def collect_each(host: str, user: str | None, port: int, timeout: int, runner, sections: dict) -> dict:
+    """One connection per command: for a device that doesn't run the batch script."""
     dev: dict = {"host": host, "user": user, "errors": {}}
     ok, out = runner(host, user, port, timeout, COMMANDS["resource"][0])
     if not ok:
@@ -237,7 +313,7 @@ def collect(host: str, user: str | None, port: int, timeout: int, runner=ssh_run
         return dev
     dev["reachable"] = True
     dev["resource"] = parse_detail(out)
-    for section, (command, terse) in {**COMMANDS, **(LEASE_COMMANDS if leases else {})}.items():
+    for section, (command, terse) in sections.items():
         if section == "resource":
             continue
         if section == "routerboard" and is_chr(dev["resource"]):
@@ -479,14 +555,32 @@ def proposals(devs: list[dict], unknown: list[tuple[str, dict]]) -> list[dict]:
     return out
 
 
-def proposal_report(rows: list[dict], unknown: int, read: bool) -> str:
+def unread_tables(devs: list[dict]) -> list[str]:
+    """"<router>: leases, arp (<reason>)" for each router whose lease or ARP table could not be read (GitHub #131)."""
+    out = []
+    for d in devs:
+        who = (d.get("identity") or {}).get("name") or d["host"]
+        errs = d.get("errors") or {}
+        if not d.get("reachable"):
+            out.append(f"{who}: not reachable ({errs.get('resource') or 'no answer'})")
+            continue
+        failed = [s for s in LEASE_COMMANDS if s in errs]
+        if failed:
+            out.append(f"{who}: {', '.join(failed)} ({errs[failed[0]]})")
+    return out
+
+
+def proposal_report(rows: list[dict], unknown: int, read: bool, unread: list[str] | None = None) -> str:
     lines = ["", "## Names for unknown scanned addresses", ""]
+    gaps = (["**Incomplete:** these tables could not be read, so addresses they would name are missing here:", ""]
+            + [f"- {u}" for u in unread] + [""]) if unread else []
     if not read:
-        return "\n".join(lines + ["No DHCP lease table could be read (the user may lack the read policy, or no "
-                                   "router serves DHCP).", ""])
+        return "\n".join(lines + gaps + ["No DHCP lease table could be read (the user may lack the read policy, or no "
+                                          "router serves DHCP).", ""])
     if not rows:
-        return "\n".join(lines + [f"No lease names any of the {unknown} unknown scanned address(es).", ""])
-    lines += [f"{len(rows)} of {unknown} unknown scanned address(es) have a DHCP lease name. Lease names come from the "
+        return "\n".join(lines + gaps + [f"No lease {'read ' if unread else ''}names any of the {unknown} unknown "
+                                          "scanned address(es).", ""])
+    lines += gaps + [f"{len(rows)} of {unknown} unknown scanned address(es) have a DHCP lease name. Lease names come from the "
               "devices themselves: confirm each with the user before adding it.", "",
               "| Address | Proposed name | MAC | Source | nmap guess |", "|---|---|---|---|---|"]
     lines += ["| " + " | ".join(str(c).replace("|", "\\|") or "–" for c in
@@ -598,7 +692,7 @@ def main():
         from drift_report import load_ansible
         unknown = unknown_addresses(cfg, load_ansible(root)[0])
         sys.stdout.write(proposal_report(proposals(devs, unknown), len(unknown),
-                                         any("leases" in d for d in devs)))
+                                         any("leases" in d for d in devs), unread_tables(devs)))
     return 0 if any(d.get("reachable") for d in devs) else 2
 
 
