@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -3866,8 +3867,12 @@ class PerSiteScanTests(unittest.TestCase):  # GitHub #72, #66: scans know their 
                "? (10.0.0.40) at 0:c:29:a:b:d on en1 ifscope [ethernet]\n"
                "? (10.0.0.1) at 0:c:29:a:b:e on en0 ifscope [ethernet]\n"
                "? (10.0.1.20) at 0:c:29:a:b:f on en0 ifscope [ethernet]\n")
+        r = self.nmap("10.0.0.0/24", "--site", "home", "--arp", FAKE_ROUTE="en0", FAKE_ARP="")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("ARP table has no entry on en0", r.stderr)               # e.g. Local Network privacy
         r = self.nmap("10.0.0.0/24", "--site", "home", "--arp", FAKE_ROUTE="en0", FAKE_ARP=arp, FAKE_ICMP="10.0.0.9")
         self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("ARP table has no entry", r.stderr)
         self.assertIn("(ICMP: 1, ARP: 2)", r.stdout)
         self.assertEqual(hosts()["10.0.0.20"]["discovered_by"], ["arp"])
         self.assertEqual(hosts()["10.0.0.20"]["mac"], "00:0C:29:0A:0B:0C")
@@ -4005,6 +4010,52 @@ class NmapLocalProbeTests(unittest.TestCase):  # GitHub issue #128
         hdr = bytes([8, 0, 0, 0, 0x12, 0x34, 0, 1]) + b"homelab-manager"
         pkt = hdr[:2] + self.n._icmp_checksum(hdr).to_bytes(2, "big") + hdr[4:]
         self.assertEqual(self.n._icmp_checksum(pkt), 0)
+
+    def test_icmp_sweep(self):
+        import errno, types
+        n = self.n
+
+        class Sock:
+            AF_INET = SOCK_DGRAM = IPPROTO_ICMP = 0
+            fail, queue, sent = None, [], []
+
+            def __init__(self, *a):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def setblocking(self, flag):
+                pass
+
+            def sendto(self, pkt, addr):
+                if Sock.fail:
+                    raise OSError(Sock.fail, os.strerror(Sock.fail))
+                Sock.sent.append(addr[0])
+                if addr[0] in ("10.0.0.2", "10.0.0.3"):   # macOS: with the IP header
+                    Sock.queue.append((bytes([0x45]) + bytes(19) + bytes([0]) + pkt[1:], (addr[0], 0)))
+                Sock.queue.append((bytes([3, 1, 0, 0]), ("10.0.0.254", 0)))   # an unreachable from a router
+
+            def recvfrom(self, size):
+                if not Sock.queue:
+                    raise BlockingIOError
+                return Sock.queue.pop(0)
+
+        fake = types.SimpleNamespace(socket=Sock, AF_INET=0, SOCK_DGRAM=0, IPPROTO_ICMP=0)
+        sel = types.SimpleNamespace(select=lambda r, w, x, t: (r if Sock.queue else [], [], []))
+        addrs = [f"10.0.0.{i}" for i in range(1, 6)]
+        with unittest.mock.patch.object(n, "socket", fake), unittest.mock.patch.object(n, "select", sel):
+            self.assertEqual(n.icmp_sweep(addrs, rate=10000, wait=0), {"10.0.0.2", "10.0.0.3"})
+            self.assertEqual(Sock.sent.count("10.0.0.1"), 2)                    # unanswered: asked twice
+            self.assertEqual(Sock.sent.count("10.0.0.2"), 1)
+            Sock.fail = errno.EHOSTUNREACH
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertIsNone(n.icmp_sweep(addrs, rate=10000, wait=0))      # nothing went out
+            self.assertIn("Local Network privacy", err.getvalue())
 
     def test_parse_arp(self):
         out = ("? (192.0.2.5) at 8:55:31:2b:39:83 on en0 ifscope [ethernet]\n"
