@@ -7,7 +7,8 @@ cd ansible && ansible-playbook playbooks/check-updates.yml          # Linux, Win
 ansible-playbook playbooks/check-updates.yml -e target=rocky       # subset (prefer this to -l; both write)
 ```
 `target` scopes every play: Linux checks skip its windows/appliances/qnap hosts, Windows and QNAP checks run only on
-its windows/qnap hosts (`-e windows_target=…` / `-e qnap_target=…` override that). Merges into
+its windows/qnap hosts (`-e windows_target=…` / `-e qnap_target=…` override that). A host list works with
+commas or colons (`-e target=hostA,hostB`). Merges into
 `discovery/updates.json`: a subset run updates only its hosts, the others keep their last result; check each
 host's `collected_at` before calling it current. Report a table: host, OS, security updates, total, reboot
 pending (with `reboot_reasons`), services to restart (`restart_pending`), `low_space`. Sort by security count.
