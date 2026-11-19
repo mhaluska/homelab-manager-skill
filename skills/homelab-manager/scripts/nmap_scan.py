@@ -93,7 +93,13 @@ DEVICE_HINTS = [  # (word/phrase in vendor/OS/service/product, device type) — 
     ("synology", "nas"), ("qnap", "nas"), ("truenas", "nas"),
     ("ipp", "printer"), ("jetdirect", "printer"), ("printer", "printer"), ("brother", "printer"),
     ("hikvision", "camera"), ("rtsp", "camera"), ("airplay", "macos"), ("idrac", "bmc"), ("ilo", "bmc"), ("ipmi", "bmc"),
-    ("lights-out", "bmc"), ("megarac", "bmc"), ("supermicro", "bmc"), ("asmb", "bmc"), ("xclarity", "bmc"), ("home assistant", "iot"), ("espressif", "iot"), ("shelly", "iot"),
+    ("lights-out", "bmc"), ("megarac", "bmc"), ("supermicro", "bmc"), ("asmb", "bmc"), ("xclarity", "bmc"),
+    # smart home (GitHub issue #132): vendors as nmap-mac-prefixes names them, and embedded network stacks
+    ("home assistant", "iot"), ("espressif", "iot"), ("shelly", "iot"), ("netatmo", "iot"), ("yeelink", "iot"),
+    ("tuya", "iot"), ("signify", "iot"), ("philips lighting", "iot"), ("lumi united", "iot"), ("ecobee", "iot"),
+    ("nest labs", "iot"), ("wiz", "iot"), ("xiaomi electronics", "iot"), ("tado", "iot"), ("meross", "iot"), ("broadlink", "iot"),
+    ("lwip", "iot"), ("freertos", "iot"), ("contiki", "iot"),
+    ("sonos", "media"),
     ("raspberry", "sbc"), ("linux", "linux"), ("openssh", "linux"),
 ]
 # a hint may carry a model number (iDRAC9, iLO5): digits after it still match, letters don't
@@ -154,6 +160,15 @@ def evidence_ports(ports: list[dict]) -> list[dict]:
     return kept
 
 
+# the virtual NIC of a VM: its vendor is the hypervisor's maker, which says nothing about the guest (GitHub #132)
+VIRTUAL_NIC = re.compile(r"(?i)proxmox server solutions|vmware|xensource|parallels|qemu|virtualbox|^microsoft$")
+DUAL_VENDOR = re.compile(r"(?i)tp-link")   # makes smart plugs as well as switches and access points
+EMBEDDED_OS = re.compile(r"(?<![a-z0-9])(lwip|freertos|contiki)(?![a-z])")
+WEB_PORTS = {80, 443, 8080, 8443}
+# what a Mac serves and an Apple TV or HomePod doesn't: SSH, Kerberos (Back to My Mac), SMB, AFP, ARD, VNC
+MAC_SERVICES = {22, 88, 445, 548, 3283, 5900}
+
+
 def guess_type(h: dict) -> str:
     """Score evidence: vendor (MAC OUI), OS matches, an OS named in a service banner and what ssh_probe.py read
     on the host weigh 3, a default host name prefix (uap-, ilo-…) 2, each open port's service/product 1.
@@ -169,7 +184,8 @@ def guess_type(h: dict) -> str:
     """
     ports = h.get("ports", [])
     probe = h.get("ssh_probe") or {}  # what the host said about itself over SSH (ssh_probe.py)
-    sources = [((h.get("vendor") or "").lower(), 3)]
+    vendor = h.get("vendor") or ""
+    sources = [("" if VIRTUAL_NIC.search(vendor) else vendor.lower(), 3)]
     texts = [f"{p.get('service') or ''} {p.get('product') or ''}".lower() for p in evidence_ports(ports)]
     # a bare rtsp port is weak camera evidence: it counts once per host (GitHub issue #121); a camera's product
     # name (Hikvision…) still counts on every port
@@ -202,13 +218,37 @@ def guess_type(h: dict) -> str:
             continue  # an appliance fingerprint the host's own banner contradicts (often the gateway's)
         scores[kind] = scores.get(kind, 0) + (1 if suspect else 3)
         strong = strong or (is_strong and not suspect)
+    # an embedded stack (lwIP, FreeRTOS) serving nothing but a web page is a smart-home device, even from a vendor
+    # that also makes network gear: TP-Link's plugs, Xiaomi's lamps (GitHub issue #132)
+    open_ports = {p.get("port") for p in ports}
+    if (any(EMBEDDED_OS.search((o.get("name") or "").lower()) for o in h.get("os", []))
+            and open_ports and open_ports <= WEB_PORTS):
+        scores["iot"] = scores.get("iot", 0) + 1
+    elif DUAL_VENDOR.search(vendor) and open_ports <= WEB_PORTS and not h.get("os") and len(scores) == 1:
+        scores["iot"] = scores.get("iot", 0) + 3   # nothing but a web page: a plug as likely as a switch
     if strong and len(scores) > 1:
         scores.pop("linux", None)
     if not scores:
         return "unknown"
     best = max(scores.values())
     winners = sorted(k for k, v in scores.items() if v == best)
-    return winners[0] if len(winners) == 1 else "/".join(winners)
+    guess = winners[0] if len(winners) == 1 else "/".join(winners)
+    if guess == "macos" and apple_media(h, said):
+        return "media"
+    return guess
+
+
+def apple_media(h: dict, said: str | None) -> bool:
+    """An Apple device that is no Mac (Apple TV, HomePod): none of a Mac's services open, and neither a banner nor
+    the OS fingerprint says macOS (GitHub issue #132). An iPhone (62078, iphone-sync) stays as it was."""
+    ports = {p.get("port") for p in h.get("ports", [])}
+    if said == "macos" or ports & MAC_SERVICES or 62078 in ports:
+        return False
+    oses = " ".join((o.get("name") or "").lower() for o in h.get("os", []))
+    if re.search(r"mac ?os|os x", oses):
+        return False
+    return any(p.get("service") == "airplay" for p in evidence_ports(h.get("ports", []))) or \
+        bool(re.search(r"(?<![a-z])(ios|tvos|audioos)(?![a-z])", oses))
 
 
 def route_get(ip: str) -> tuple[str | None, bool]:
@@ -530,6 +570,8 @@ def flag_shared_os(hosts: list[dict]) -> None:
 
 def merge_host(prev: dict, h: dict, profile: str, now: str) -> dict:
     merged = {**prev, **{k: v for k, v in h.items() if v not in (None, [], "")}}
+    if h.get("mac"):
+        merged.pop("mac_source", None)   # nmap saw the MAC itself, not only a router (GitHub issue #132)
     if profile == "ping":  # don't wipe port/OS data from earlier deeper scans
         merged["ports"], merged["os"] = prev.get("ports", []), prev.get("os", [])
     merged["device_type_guess"] = guess_type(merged)  # from all evidence so far, not just this scan
