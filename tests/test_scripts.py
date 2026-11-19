@@ -4482,3 +4482,30 @@ class MissingYqTests(unittest.TestCase):  # GitHub issue #119: no yq → a clean
         self.assertEqual(rc, 2)
         self.assertIn("config_set: yq is not installed (brew install yq).", err)
         self.assertEqual(cfg.read_text(), "site:\n  domain: a\n")
+
+
+class CheckEnvComponentToolsTests(unittest.TestCase):  # GitHub issue #120
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import check_env
+        self.ce = check_env
+
+    def tools(self, cfg):
+        from unittest import mock
+        with mock.patch.object(self.ce.shutil, "which", return_value=None):
+            return {r["check"]: r for r in self.ce.check_tools(cfg)}
+
+    def test_disabled_components_skip_their_tools(self):
+        cfg = {"components": {"proxmox": False, "templates": False, "ansible": True, "discovery": True}}
+        r = self.tools(cfg)
+        self.assertIsNone(r["tool:tofu"]["ok"])
+        self.assertEqual(r["tool:tofu"]["detail"], "not needed (components.proxmox: false)")
+        self.assertIsNone(r["tool:packer"]["ok"])
+        self.assertIn("components.templates: false", r["tool:packer"]["detail"])
+        for t in ("ansible", "nmap", "yq", "git"):
+            self.assertIs(r[f"tool:{t}"]["ok"], False, t)
+
+    def test_without_config_every_tool_is_checked(self):
+        for cfg in (None, {}):   # before scaffolding; an older repo without components: has them all
+            r = self.tools(cfg)
+            self.assertTrue(all(x["ok"] is False for x in r.values()), r)
