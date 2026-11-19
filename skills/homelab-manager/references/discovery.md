@@ -165,7 +165,7 @@ show the VLAN of each address. Collect the table read-only and propose it for th
    sites the report lists each site's scan apart, and an ignored address can name its site: `{ip, site}`.
    Name what an unknown device is once the user says (or a router lease shows it): `config_set.py
    'discovery.ignore_unmanaged+={ip: 10.0.0.40, name: Living room TV, mac: aa:bb:cc:dd:ee:ff}'` (`site` optional).
-   Named devices are listed as known in drift.md and under Network devices in OVERVIEW.md; with `mac` they are
+   Named devices are listed as known in drift.md and under Network devices and appliances in OVERVIEW.md; with `mac` they are
    still recognised after DHCP gives them a new address. Trust a name over nmap's device guess.
    `routeros_audit.py --group routeros --leases --no-write` reads the routers' DHCP leases and ARP table and
    proposes `{ip, name, mac}` entries for unknown scanned addresses (lease comment, else its host-name): show
@@ -197,10 +197,13 @@ the homelab. It reads only what is in the repo: `homelab.yaml`, `discovery/*.jso
 `network.vlans[].gw`, Proxmox nodes with guest counts per VLAN, devices joined to their VLAN by address, unused VLANs
 folded into one node), the VLAN table with addresses used, nodes (PVE version, kernel, addresses), storage (⚠ from
 80 % full), guests (VLAN and IP of the same NIC, preferring the inventory `ansible_host`; autostart, HA, tags; VLAN/IP
-need `--details`), backup jobs and guests in none, network devices and other scanned addresses. Network devices start
-from the inventory groups `routeros`, `unifi`, `bmc`, `qnap` and `appliances` (a device without audit data says so),
-enriched from routeros.json, unifi.json, bmc.json and updates.json (Model: references/windows-appliances.md;
-an nmap OS guess never is one). "Other scanned addresses" lists only addresses
+need `--details`), backup jobs and guests in none, server hardware, network devices and appliances, and other
+scanned addresses. Server hardware (right after the nodes) lists the `bmc` group with bmc.json's model, firmware,
+health and power, each with the server it belongs to: the host var `bmc_of: <host>`, else the name `bmc-<host>`,
+`<host>-bmc` or `<host>-ipmi` when that host is in the inventory or a Proxmox node, else none. Network devices and
+appliances start from the inventory groups `routeros`, `unifi`, `qnap` and `appliances` (a device without audit
+data says so), enriched from routeros.json, unifi.json and updates.json (Model: references/windows-appliances.md;
+an nmap OS guess never is one); the site map shows BMCs and devices alike on their VLANs. "Other scanned addresses" lists only addresses
 nothing in the repo names: inventory hosts (and their `hm_extra_ips`), Proxmox node and guest addresses, cluster VIPs,
 RouterOS interface addresses, NAS containers, `discovery.ignore_unmanaged` (every form; the drift report uses the
 same rules), and scanned hosts whose hostname is a known host's (listed in a collapsed block). Its OS column is

@@ -60,7 +60,9 @@ Read-only health and firmware from this Mac over HTTPS; no ipmitool, no SSH into
    `config_set.py 'secrets.bmc={service: homelab/bmc, kind: user_password, env: BMC}'`. A BMC with its own
    account gets a secret of its own (`secrets.bmc-ilo`, `env: BMC_ILO`) and `bmc_secret_env: BMC_ILO` in its
    host vars; run with every secret needed (`with_secrets.py bmc bmc-ilo -- …`).
-3. Add the BMCs to the `bmc` group (child of `appliances`) in hosts.yml, `ansible_host` = address.
+3. Add the BMCs to the `bmc` group (child of `appliances`) in hosts.yml, `ansible_host` = address. OVERVIEW.md
+   lists them as server hardware next to their server: name a BMC `bmc-<host>`, `<host>-bmc` or `<host>-ipmi`,
+   or set the host var `bmc_of: <host>` (the Proxmox node or inventory host it manages).
 4. `with_secrets.py bmc -- ansible-playbook playbooks/bmc-info.yml` → `discovery/bmc.json` (model, power
    state, health, BIOS and BMC firmware, CPUs/RAM, power draw, hottest sensor, PSUs, components not OK).
    Self-signed certificates are accepted (`bmc_validate_certs: false` in group_vars/bmc.yml); set true once
