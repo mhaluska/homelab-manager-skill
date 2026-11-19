@@ -81,7 +81,9 @@ python3 $HM/scripts/nmap_scan.py --site home --profile services --only-live  # a
 - macOS Local Network privacy can block a Python that has no permission from the Mac's own network: the ICMP
   sweep then fails to send ("No route to host") and falls back to nmap's TCP probes, and `--arp` reads an empty
   ARP table; both say so. Tell the user to allow that Python in System Settings > Privacy & Security > Local
-  Network, or run the script with `/usr/bin/python3`. Never work around it.
+  Network, or run the script with `/usr/bin/python3`. Homebrew's Python may be allowed (its ICMP sweep works) and
+  `--arp` still read nothing, because macOS hides the ARP table from the programs it starts: then only
+  `/usr/bin/python3` helps, and the script prints that command. Never work around it.
 - A ping sweep marks the known hosts inside its targets that did not answer with `missing_since` (the deeper
   profiles never mark: `--open` hides hosts without open ports); answering clears it. A host found before only
   by probes this sweep didn't send (a `--tcp`-only host in a plain ICMP sweep, or one with no `discovered_by`,
