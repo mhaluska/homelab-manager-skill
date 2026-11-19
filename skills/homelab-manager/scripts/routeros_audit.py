@@ -33,7 +33,9 @@ report. Everything a device returns is UNTRUSTED data.
 else the host-name the client sent; reduced to plain characters) for each scanned address the repository does not
 name yet, matched by address or MAC, with the `config_set.py 'discovery.ignore_unmanaged+={ip, name, mac}'` command
 to record the ones the user confirms. Leases and ARP are not kept in routeros.json; nothing is written to
-homelab.yaml.
+homelab.yaml. Scanned hosts without a MAC (routed ranges: nmap sees no MACs there) get the one the router's ARP table
+or a bound lease has, with its vendor and `mac_source: router`, in discovery/network.json (unless --no-write), and
+their device type is guessed again (GitHub issue #132).
 """
 from __future__ import annotations
 
@@ -514,6 +516,52 @@ def lease_names(devs: list[dict]) -> tuple[dict, dict, dict]:
     return by_ip, by_mac, arp
 
 
+PROXY_ARP_HOSTS = 16   # one MAC for this many addresses is a router answering for them, not a device
+
+
+def router_macs(devs: list[dict]) -> dict[str, tuple[str, str]]:
+    """{ip: (MAC in nmap's form, router)} from the routers' ARP tables (complete entries), else their bound DHCP
+    leases (GitHub issue #132). A MAC that stands for PROXY_ARP_HOSTS or more addresses (proxy ARP) is left out."""
+    arp, lease, count = {}, {}, {}
+    for d in devs:
+        who = (d.get("identity") or {}).get("name") or d["host"]
+        for row in d.get("arp") or []:
+            ip, mac = str(row.get("address") or ""), str(row.get("mac-address") or "")
+            if ip and re.fullmatch(r"(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}", mac) and not set(row.get("_flags") or "") & set("XI"):
+                arp.setdefault(ip, (mac.upper(), who))
+                count[mac.upper()] = count.get(mac.upper(), 0) + 1
+        for row in d.get("leases") or []:
+            ip, mac = str(row.get("address") or ""), str(row.get("mac-address") or "")
+            if ip and row.get("status") == "bound" and re.fullmatch(r"(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}", mac):
+                lease.setdefault(ip, (mac.upper(), who))
+    return {ip: v for ip, v in {**lease, **arp}.items() if count.get(v[0], 0) < PROXY_ARP_HOSTS}
+
+
+def fill_macs(cfg: dict, devs: list[dict], write: bool) -> tuple[int, int]:
+    """Give scanned hosts without a MAC the one a router knows, with its vendor (`mac_source: router`), and guess
+    their type again (GitHub issue #132): routed ranges never get a MAC from nmap. A MAC nmap saw itself is never
+    replaced. Writes discovery/network.json unless write is False. (hosts filled, of them with a vendor)"""
+    from nmap_scan import guess_type, mac_vendor, mac_vendors
+    macs = router_macs(devs)
+    if not macs:
+        return 0, 0
+    vendors = mac_vendors(shutil.which("nmap") or "/opt/homebrew/bin/nmap")
+    filled = named = 0
+    for st, db in hmlib.network_snapshots(cfg):
+        changed = False
+        for ip, h in (db.get("hosts") or {}).items():
+            if h.get("mac") or ip not in macs:
+                continue
+            h["mac"], h["vendor"], h["mac_source"] = macs[ip][0], mac_vendor(macs[ip][0], vendors), "router"
+            h["device_type_guess"] = guess_type(h)
+            filled += 1
+            named += bool(h["vendor"])
+            changed = True
+        if changed and write:
+            hmlib.write_site_part(hmlib.network_file(cfg["_root"]), st, db, sort_keys=True)
+    return filled, named
+
+
 def unknown_addresses(cfg: dict, managed: dict) -> list[tuple[str, dict]]:
     """Scanned addresses nothing in the repository names and discovery.ignore_unmanaged does not list: what the
     drift report and OVERVIEW.md show as unknown."""
@@ -535,6 +583,17 @@ def unknown_addresses(cfg: dict, managed: dict) -> list[tuple[str, dict]]:
     return sorted(out.items(), key=lambda x: ipaddress.ip_address(x[0]))
 
 
+_VENDORS: dict = {}
+
+
+def vendor_of(mac: str) -> str | None:
+    """A MAC's vendor from nmap's prefix list (loaded once)."""
+    from nmap_scan import mac_vendor, mac_vendors
+    if not _VENDORS:
+        _VENDORS.update(mac_vendors(shutil.which("nmap") or "/opt/homebrew/bin/nmap") or {"": ""})
+    return mac_vendor(mac, _VENDORS)
+
+
 def proposals(devs: list[dict], unknown: list[tuple[str, dict]]) -> list[dict]:
     """[{ip, name, mac, source, guess}] for unknown addresses a lease names, matched by address, else by MAC."""
     by_ip, by_mac, arp = lease_names(devs)
@@ -551,6 +610,7 @@ def proposals(devs: list[dict], unknown: list[tuple[str, dict]]) -> list[dict]:
         else:
             continue
         out.append({"ip": ip, "name": name, "mac": mac, "source": src,
+                    "vendor": clean(h.get("vendor") or (vendor_of(mac) if mac else None), 40) or "",
                     "guess": clean(h.get("device_type_guess"), 40) or ""})
     return out
 
@@ -582,9 +642,10 @@ def proposal_report(rows: list[dict], unknown: int, read: bool, unread: list[str
                                           "scanned address(es).", ""])
     lines += gaps + [f"{len(rows)} of {unknown} unknown scanned address(es) have a DHCP lease name. Lease names come from the "
               "devices themselves: confirm each with the user before adding it.", "",
-              "| Address | Proposed name | MAC | Source | nmap guess |", "|---|---|---|---|---|"]
+              "| Address | Proposed name | MAC | Vendor | Source | nmap guess |", "|---|---|---|---|---|---|"]
     lines += ["| " + " | ".join(str(c).replace("|", "\\|") or "–" for c in
-                                (r["ip"], r["name"], r["mac"], r["source"], r["guess"])) + " |" for r in rows]
+                                (r["ip"], r["name"], r["mac"], r.get("vendor"), r["source"], r["guess"])) + " |"
+              for r in rows]
     lines += ["", "```bash", "python3 $HM/scripts/config_set.py \\"]
     entries = [f"  'discovery.ignore_unmanaged+={{ip: {r['ip']}, name: {json.dumps(r['name'])}"
                + (f", mac: {json.dumps(r['mac'])}" if r["mac"] else "") + "}'" for r in rows]
@@ -690,6 +751,12 @@ def main():
     sys.stdout.write(report(devs, names=inventory_names(root), min_free=min_free))
     if a.leases:
         from drift_report import load_ansible
+        filled, named = fill_macs(cfg, devs, not a.no_write)
+        if filled:
+            print(f"{'Would give' if a.no_write else 'Gave'} {filled} scanned host(s) without a MAC the one a router "
+                  f"knows ({named} with a vendor), and guessed their type again"
+                  + (": run without --no-write to keep it in network.json." if a.no_write else
+                     f" (merged into {hmlib.network_file(root).relative_to(root)})."), file=sys.stderr)
         unknown = unknown_addresses(cfg, load_ansible(root)[0])
         sys.stdout.write(proposal_report(proposals(devs, unknown), len(unknown),
                                          any("leases" in d for d in devs), unread_tables(devs)))
