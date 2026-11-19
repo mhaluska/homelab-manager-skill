@@ -390,8 +390,12 @@ def site_terms(cfg) -> tuple[list[str], list[str]]:
         except (OSError, ValueError):
             pass
     inv = sorted(glob.glob(str(root / "ansible" / "inventory" / "**" / "*.y*ml"), recursive=True))
-    if inv and shutil.which("yq"):
-        r = subprocess.run(["yq", "-o=json", "eval-all",
+    try:
+        yq = hmlib.yq_bin() if inv else None
+    except hmlib.ConfigError:
+        yq = None
+    if yq:
+        r = subprocess.run([yq, "-o=json", "eval-all",
                             '[.. | select(tag == "!!map" and has("hosts")) | .hosts | select(tag == "!!map") | keys] | flatten',
                             *inv], capture_output=True, text=True, timeout=20)
         try:

@@ -81,7 +81,7 @@ def parse_value(text: str):
     except ValueError:
         pass
     if text.strip()[:1] in ("{", "["):  # YAML flow syntax: {id: 20, name: DMZ}; else a string ({vlan}{octet:03d})
-        r = subprocess.run(["yq", "-o=json", "-p=yaml", "."], input=text, capture_output=True, text=True, timeout=20)
+        r = subprocess.run([hmlib.yq_bin(), "-o=json", "-p=yaml", "."], input=text, capture_output=True, text=True, timeout=20)
         if r.returncode == 0:
             v = json.loads(r.stdout or "null")
             if isinstance(v, (dict, list)):
@@ -374,7 +374,7 @@ def yq_json(text: str) -> dict:
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
         f.write(text)
     try:
-        r = subprocess.run(["yq", "-o=json", ".", f.name], capture_output=True, text=True, timeout=20)
+        r = subprocess.run([hmlib.yq_bin(), "-o=json", ".", f.name], capture_output=True, text=True, timeout=20)
     finally:
         Path(f.name).unlink()
     if r.returncode != 0:
@@ -457,6 +457,11 @@ def main() -> int:
             print(f"No {hmlib.CONFIG_NAME} found in this directory or its parents.", file=sys.stderr)
             return 2
         target = root / hmlib.CONFIG_NAME
+    try:
+        hmlib.yq_bin()   # a clean error, not a traceback, when yq is missing (GitHub issue #119)
+    except hmlib.ConfigError as e:
+        print(f"config_set: {e}", file=sys.stderr)
+        return 2
     try:
         ops = [parse_op(x) for x in a.ops] + [("delete", p) for p in a.delete]
         if not ops:

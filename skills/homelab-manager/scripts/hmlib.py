@@ -35,15 +35,20 @@ def find_repo_root(start: str | os.PathLike | None = None) -> Path | None:
     return None
 
 
+def yq_bin() -> str:
+    """Path of yq: PATH first, then Homebrew's (a shell without /opt/homebrew/bin on PATH) (GitHub issue #119)."""
+    yq = shutil.which("yq") or "/opt/homebrew/bin/yq"
+    if not Path(yq).exists():
+        raise ConfigError("yq is not installed (brew install yq).")
+    return yq
+
+
 def load_config(root: str | os.PathLike | None = None) -> dict:
     root = Path(root) if root else find_repo_root()
     if not root:
         raise ConfigError(f"No {CONFIG_NAME} found in this directory or its parents. "
                           "Initialise the repository first (init_repo.py).")
-    yq = shutil.which("yq") or "/opt/homebrew/bin/yq"
-    if not Path(yq).exists():
-        raise ConfigError("yq is not installed (brew install yq).")
-    res = subprocess.run([yq, "-o=json", ".", str(root / CONFIG_NAME)],
+    res = subprocess.run([yq_bin(), "-o=json", ".", str(root / CONFIG_NAME)],
                          capture_output=True, text=True, timeout=20)
     if res.returncode != 0:
         raise ConfigError(f"{CONFIG_NAME} is not valid YAML: {res.stderr.strip()}")
