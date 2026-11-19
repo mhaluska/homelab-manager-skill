@@ -3691,6 +3691,31 @@ class PerSiteScanTests(unittest.TestCase):  # GitHub #72, #66: scans know their 
         self.assertEqual(ssh_probe.select(db, [], cfg, set(), False, 22, "home")[0], ["10.0.0.5"])
         self.assertEqual(ssh_probe.select(db, [], cfg, set(), False, 22, "offsite")[0], [])
 
+    def test_address_ranges_in_exclusions(self):  # GitHub issue #124
+        r = run("config_set.py", "network.excluded_hosts+=10.0.0.101-254",
+                "network.excluded_hosts+={ip: 10.0.0.20-23, site: offsite}",
+                "discovery.ignore_unmanaged+=10.0.0.30-31", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(" 10.0.0.101-254,", (self.d / "homelab.yaml").read_text())     # kept as written
+        cfg = self.h.load_config(self.d)
+        ex = [n for n in self.h.scan_scope(cfg, "home")[1]]
+        import ipaddress
+        covered = {str(a) for n in ex for a in n}
+        self.assertEqual(covered, {"10.0.0.1"} | {f"10.0.0.{i}" for i in range(101, 255)})
+        self.assertNotIn("10.0.0.20", {str(a) for n in self.h.scan_scope(cfg, "home")[1] for a in n})
+        self.assertIn("10.0.0.21", {str(a) for n in self.h.scan_scope(cfg, "offsite")[1] for a in n})
+        self.assertTrue(self.h.ignored_address(cfg, "10.0.0.31", "home"))
+        self.assertFalse(self.h.ignored_address(cfg, "10.0.0.32", "home"))
+        excl, _ = self.scan("--site", "home")
+        self.assertIn("10.0.0.128/26", excl.split(","))
+        self.assertTrue(all(ipaddress.ip_network(x) for x in excl.split(",")))      # nmap gets CIDR blocks
+        with self.assertRaisesRegex(self.h.ConfigError, "a range a.b.c.x-y"):        # backwards range
+            self.h.scan_scope({**cfg, "network": {**cfg["network"], "excluded_hosts": ["10.0.0.200-100"]}}, "home")
+        with self.assertRaisesRegex(self.h.ConfigError, "'TVs' is one device"):      # a named device: one address
+            self.h.sites({**cfg, "discovery": {"ignore_unmanaged": [{"ip": "10.0.0.40-41", "name": "TVs"}]}})
+        with self.assertRaises(self.h.ConfigError):   # scan scope stays IPs and CIDRs
+            self.h.scan_scope({**cfg, "network": {**cfg["network"], "authorized_ranges": ["10.0.0.1-50"]}})
+
     def test_site_scan_without_targets(self):  # GitHub #118: the site's ranges, clipped to the authorized ones
         r = run("config_set.py", "sites+={name: lab, ranges: [10.0.0.0/23, 10.9.0.0/24]}", cwd=self.d)
         self.assertEqual(r.returncode, 0, r.stderr)
