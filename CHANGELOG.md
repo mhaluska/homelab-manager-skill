@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.41.0 — 2026-11-19
+- `network.excluded_hosts` and `discovery.ignore_unmanaged` accept last-octet ranges such as `10.0.20.101-254`
+  ([#124](https://github.com/mhaluska/homelab-manager-skill/issues/124)), plain or as `{ip, site}`; they are kept as written and become the exact CIDR blocks when a scan
+  runs. A named `ignore_unmanaged` device stays one address, and `authorized_ranges` stays IPs and CIDRs.
+- `init_repo.py` and `config_set.py` stop with "yq is not installed (brew install yq)" before writing anything
+  ([#119](https://github.com/mhaluska/homelab-manager-skill/issues/119)), `--dry-run` included, instead of crashing halfway through a scaffold. Every script finds `yq` the
+  same way (PATH, then Homebrew's).
+- Repos without Proxmox: `check_env.py` reports the tools of disabled components as not needed instead of missing
+  ([#120](https://github.com/mhaluska/homelab-manager-skill/issues/120)); `drift_report.py` leaves out the Proxmox snapshot and OpenTofu rows and loads no state, so
+  `--no-tofu` isn't needed, and checks inventory hosts against the network scan alone; OVERVIEW.md's Sources and
+  At a glance don't ask for a Proxmox snapshot ([#123](https://github.com/mhaluska/homelab-manager-skill/issues/123)).
+- `nmap_scan.py` recognises macOS from nmap's `ostype` (`Mac OS X`) and counts bare `rtsp` ports once per host,
+  so a Mac with AirPlay Receiver (rtsp on 5000 and 7000) is no longer guessed as a camera ([#121](https://github.com/mhaluska/homelab-manager-skill/issues/121)).
+- `ssh_probe.py` warns when there is no SSH key to offer (empty ssh-agent, no key file, honouring `IdentityAgent`)
+  and reports `auth failed (no SSH key loaded — ssh-add …)` instead of suggesting `--user` ([#122](https://github.com/mhaluska/homelab-manager-skill/issues/122)).
+
 ## 0.40.0 — 2026-11-19
 - `nmap_scan.py --site <name>` without targets ([#118](https://github.com/mhaluska/homelab-manager-skill/issues/118)) scans the site's `ranges` that lie inside
   `network.authorized_ranges` (a partly authorized range: its authorized parts; neighbouring authorized ranges stay
