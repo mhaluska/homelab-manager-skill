@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.42.0 — 2026-11-19
+- A ping sweep marks the known hosts inside its targets that did not answer with `missing_since` ([#127](https://github.com/mhaluska/homelab-manager-skill/issues/127)),
+  and any scan they answer clears it. `drift.md` and OVERVIEW.md list these hosts apart from current devices, with
+  the date they went missing and when they were last seen, so an old DHCP address no longer looks like a live
+  unmanaged device. The `services` and `os` profiles never set the mark: with `--open`, nmap leaves out hosts that
+  are up but have no open ports. `nmap_scan.py --forget-missing DAYS [--dry-run] [--site N]` scans nothing: it
+  drops the hosts missing for more than DAYS days.
+- `nmap_scan.py --site <name>` without targets: a repo's only site, when it has no `ranges`, scans every range in
+  `network.authorized_ranges` ([#125](https://github.com/mhaluska/homelab-manager-skill/issues/125)). Next to other sites, a site without `ranges` is still refused. With neither
+  targets nor `--site`, the guard now says how to fix the command.
+- `issues.py report` sanitises every title, body and comment before printing the `Redacted:` summary, and sends
+  that exact text. A real send now reports the same redactions as `--dry-run` instead of "no site identifiers
+  found" ([#126](https://github.com/mhaluska/homelab-manager-skill/issues/126)).
+
 ## 0.41.0 — 2026-11-19
 - `network.excluded_hosts` and `discovery.ignore_unmanaged` accept last-octet ranges such as `10.0.20.101-254`
   ([#124](https://github.com/mhaluska/homelab-manager-skill/issues/124)), plain or as `{ip, site}`; they are kept as written and become the exact CIDR blocks when a scan
