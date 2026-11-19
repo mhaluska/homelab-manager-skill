@@ -83,15 +83,16 @@ BANNER_OS = [(re.compile(r"(?<![a-z0-9])(" + n + r")(?![a-z])"), kind) for n, ki
     (r"debian|ubuntu|raspbian|rocky|almalinux|centos|fedora|rhel|red hat enterprise|el[789]|alpine|opensuse",
      "linux"),
     (r"windows", "windows"),
+    (r"mac ?os(?: x)?|os x", "macos"),   # nmap's ostype "Mac OS X" (Screen Sharing, AFP…) (GitHub issue #121)
 )]
 
 
 def banner_os(p: dict) -> str | None:
-    """linux/windows when a port's banner (product, version) or nmap's ostype names the OS."""
+    """linux/windows/macos when a port's banner (product, version) or nmap's ostype names the OS."""
     ostype = (p.get("ostype") or "").lower()
     if ostype in ("linux", "windows"):
         return ostype
-    text = f"{p.get('product') or ''} {p.get('version') or ''}".lower()
+    text = f"{p.get('product') or ''} {p.get('version') or ''} {ostype}".lower()
     return next((kind for rx, kind in BANNER_OS if rx.search(text)), None)
 
 
@@ -125,7 +126,10 @@ def guess_type(h: dict) -> str:
     ports = h.get("ports", [])
     probe = h.get("ssh_probe") or {}  # what the host said about itself over SSH (ssh_probe.py)
     sources = [((h.get("vendor") or "").lower(), 3)]
-    sources += [(f"{p.get('service') or ''} {p.get('product') or ''}".lower(), 1) for p in ports]
+    texts = [f"{p.get('service') or ''} {p.get('product') or ''}".lower() for p in ports]
+    # a bare rtsp port is weak camera evidence: AirPlay receivers (Macs, Apple TVs) open two (5000, 7000), so it
+    # counts once per host (GitHub issue #121); a camera's product name (Hikvision…) still counts on every port
+    sources += [(t, 1) for i, t in enumerate(texts) if t.strip() != "rtsp" or t not in texts[:i]]
     sources += [(str(probe.get(k) or "").lower(), 3) for k in ("product", "os_name") if probe.get(k)]
     scores: dict[str, int] = {}
     strong = False
