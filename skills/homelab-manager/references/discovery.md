@@ -230,7 +230,9 @@ hand-written guest map: regenerate this one and commit it with the other discove
 the homelab. It reads only what is in the repo: `homelab.yaml`, `discovery/*.json`, the managed inventory, and links
 `drift.md`, `guest-map.md` and the newest security audit. Per site: a Mermaid map (VLANs grouped under their
 `network.vlans[].gw`, Proxmox nodes with guest counts per VLAN, devices joined to their VLAN by address, unused VLANs
-folded into one node), the VLAN table with addresses used, nodes (PVE version, kernel, addresses), storage (⚠ from
+folded into one node), the VLAN table with addresses used (every address the repo knows in the CIDR, scanned or
+not, split into guest IPs, infra and other devices; guests on the VLAN with no known address; `(not scanned)` when the
+CIDR is outside `network.authorized_ranges` or the scan has no host there), nodes (PVE version, kernel, addresses), storage (⚠ from
 80 % full), guests (VLAN and IP of the same NIC, preferring the inventory `ansible_host`; autostart, HA, tags; VLAN/IP
 need `--details`), backup jobs and guests in none, server hardware, network devices and appliances, and other
 scanned addresses. Server hardware (right after the nodes) lists the `bmc` group with bmc.json's model, firmware,
