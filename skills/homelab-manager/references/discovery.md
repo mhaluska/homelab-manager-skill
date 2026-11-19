@@ -78,6 +78,10 @@ python3 $HM/scripts/nmap_scan.py --site home --profile services --only-live  # a
   Each host records the probes that answered it in `discovered_by` (`icmp`, `tcp`, `arp`). Then scan a host found
   this way with `--profile services --no-ping` (nmap `-Pn`, at most 16 addresses): nmap's own ping misses it too.
   `--only-live` skips nmap's ping the same way for the known hosts of a range (not those marked missing).
+- macOS Local Network privacy can block a Python that has no permission from the Mac's own network: the ICMP
+  sweep then fails to send ("No route to host") and falls back to nmap's TCP probes, and `--arp` reads an empty
+  ARP table; both say so. Tell the user to allow that Python in System Settings > Privacy & Security > Local
+  Network, or run the script with `/usr/bin/python3`. Never work around it.
 - A ping sweep marks the known hosts inside its targets that did not answer with `missing_since` (the deeper
   profiles never mark: `--open` hides hosts without open ports); answering clears it. A host found before only
   by probes this sweep didn't send (a `--tcp`-only host in a plain ICMP sweep, or one with no `discovered_by`,
