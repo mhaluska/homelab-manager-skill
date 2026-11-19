@@ -1012,6 +1012,12 @@ def collapse(nets: list) -> list:
     return list(ipaddress.collapse_addresses(nets)) if nets else []
 
 
+def looks_like(h: dict) -> str:
+    """nmap's device guess and the MAC vendor (GitHub issues #105, #132: routed hosts get it from the router)."""
+    return " ".join(x for x in (str(h.get("device_type_guess") or ""), f"({h['vendor']})" if h.get("vendor") else "")
+                    if x)
+
+
 def guest_addresses(g: dict) -> set[str]:
     """Every address of a guest: its NICs' (config, agent, LXC) and the one it is reached at (inventory)."""
     return {a["ip"] for a in hmlib.guest_nic_addresses(g) if is_ip(a["ip"])} | ({g["_ip"]} if is_ip(g.get("_ip")) else set())
@@ -1230,8 +1236,7 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
                 + ". A known host's address on another network goes into its `hm_extra_ips` host variable.", ""]
         out += fold(table(["Address", "Name", "Looks like", "OS guess (nmap, match %)", "Open ports", "Last seen"],
                      [[ip, (h.get("ssh_probe") or {}).get("hostname") or list(h.get("hostnames") or []),
-                       " ".join(x for x in (str(h.get("device_type_guess") or ""),   # MAC vendor (GitHub issue #105)
-                                            f"({h['vendor']})" if h.get("vendor") else "") if x),
+                       looks_like(h),
                        os_guess(h.get("os")), len(h.get("ports") or []),
                        stamp(h.get("last_seen"))]
                       for ip, h in other]), len(other), "address") + [""]
@@ -1241,7 +1246,7 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
         out += [f"<details><summary>{plural(len(gone), 'address')} nothing names, not answering since the last ping "
                 "sweep</summary>", ""]
         out += table(["Address", "Name", "Looks like", "Missing since", "Last seen"],
-                     [[ip, list(h.get("hostnames") or []), str(h.get("device_type_guess") or ""),
+                     [[ip, list(h.get("hostnames") or []), looks_like(h),
                        stamp(h.get("missing_since")), stamp(h.get("last_seen"))] for ip, h in gone])
         out += ["", "</details>", ""]
     if named:   # which known host each of them was attributed to (GitHub issue #109)
