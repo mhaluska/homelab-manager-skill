@@ -51,7 +51,9 @@ python3 $HM/scripts/nmap_scan.py 10.0.10.5 --profile os           # + OS detecti
 python3 $HM/scripts/nmap_scan.py 10.0.10.0/24 --profile os --only-live  # OS-scan only hosts already seen up
 python3 $HM/scripts/nmap_scan.py --site home --profile services --only-live  # a site's authorized ranges
 ```
-- Targets must be inside `network.authorized_ranges`; `excluded_hosts` are always skipped.
+- Targets must be inside `network.authorized_ranges`; `excluded_hosts` are always skipped. `excluded_hosts` and
+  `discovery.ignore_unmanaged` take IPs, CIDRs and last-octet ranges (`10.0.20.101-254`, e.g. a DHCP pool): keep
+  a range as written, don't split it into CIDR blocks. A named `ignore_unmanaged` device is one address.
 - Several sites (proxmox.md "Several sites"): pass `--site <name>` for the site the Mac is at (ssh_probe.py too):
   the scan goes under that site in `discovery/network.json` (no `--site`: the default site) and that site's
   `{ip, site}` exclusions apply with the plain ones; without `--site` every site's exclusions apply.

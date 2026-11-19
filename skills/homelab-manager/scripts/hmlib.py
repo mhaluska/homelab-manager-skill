@@ -218,6 +218,9 @@ def _check_vlan_sites(cfg: dict, names: list[str]):
             if not item.get("ip") or (site_needed and not st) or (st and st not in names):
                 raise ConfigError(f"{key}: {item!r} needs ip and {'a' if site_needed else 'an optional'} site from "
                                   f"sites: ({', '.join(names) or 'none'}).")
+            if item.get("name") and _RANGE_RE.match(str(item["ip"]).strip()):   # GitHub issue #124
+                raise ConfigError(f"{key}: {item['name']!r} is one device: give it one address, not the range "
+                                  f"{item['ip']} (list a range as a plain entry or {{ip, site}}).")
     for v in get(cfg, "network.vlans", []) or []:
         st = v.get("site") if isinstance(v, dict) else None
         if st not in (None, "", EVERY_SITE) and st not in names:
@@ -530,7 +533,7 @@ def site_ambiguities(cfg: dict, host_groups: dict | None = None) -> list[str]:
                 if item.get("site") or not item.get("ip"):
                     continue
                 item = item["ip"]
-            for n in _networks([item]):
+            for n in _networks([item], ranges=True):
                 hit = next((x for x in shared if any(n.version == r.version and n.overlaps(r) for r in x[2:])), None)
                 if hit:
                     out.append(f"{key}: {item} is in ranges sites {hit[0]} and {hit[1]} share, so it applies at both — "
@@ -634,13 +637,20 @@ def target_site(cfg: dict, managed: dict, key: str) -> dict | None:
 
 # --------------------------------------------------------------------------- scan scope
 
-def _networks(items) -> list:
+def _networks(items, ranges: bool = False) -> list:
+    """Networks of address entries: an IP or a CIDR; with ranges (excluded_hosts, ignore_unmanaged: GitHub issue
+    #124) also a last-octet range a.b.c.x-y, as the CIDR blocks that cover exactly that range. Scan scope
+    (authorized_ranges, site ranges) stays IPs and CIDRs."""
     nets = []
     for item in items or []:
-        try:
-            nets.append(ipaddress.ip_network(str(item).strip(), strict=False))
-        except ValueError:
-            raise ConfigError(f"Invalid network in homelab.yaml: {item!r}")
+        got = target_to_network(str(item)) if ranges else None
+        if got is None:
+            try:
+                got = [ipaddress.ip_network(str(item).strip(), strict=False)]
+            except ValueError:
+                raise ConfigError(f"Invalid network in homelab.yaml: {item!r}"
+                                  + (" (an IP, a CIDR or a range a.b.c.x-y)" if ranges else ""))
+        nets += got
     return nets
 
 
@@ -657,7 +667,7 @@ def site_entries(cfg: dict, key: str, site_name: str | None = None) -> list:
         if isinstance(item, dict) and key == IGNORE_KEY and not item.get("site"):   # {ip, name, mac}: every site
             if not item.get("ip"):
                 raise ConfigError(f"{key}: {item!r} needs ip ({{ip: 10.0.0.5, name: TV}}).")
-            out += _networks([item["ip"]])
+            out += _networks([item["ip"]], ranges=True)
         elif isinstance(item, dict):
             st = str(item.get("site") or "")
             if not item.get("ip") or not st:
@@ -667,9 +677,9 @@ def site_entries(cfg: dict, key: str, site_name: str | None = None) -> list:
                                   f"({', '.join(sorted(known)) or 'none'}).")
             if site_name is not None and st != site_name:
                 continue
-            out += _networks([item["ip"]])
+            out += _networks([item["ip"]], ranges=True)
         else:
-            out += _networks([item])
+            out += _networks([item], ranges=True)
     return out
 
 
