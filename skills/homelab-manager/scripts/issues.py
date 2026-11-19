@@ -19,6 +19,10 @@ reported to the plugin's GitHub repository.
                                               # and ones closed as not planned / duplicate (with the follow-up
                                               # issues a maintainer named) for the user to resolve or keep
     issues.py reopen SKILL-002
+    issues.py compact [--older-than DAYS] [--apply]
+                                              # resolved entries (--older-than: resolved that long ago) keep their heading,
+                                              # metadata and status line; their details move to
+                                              # docs/skill-issues-archive.md (appended, never discarded)
     issues.py template [--kind K]             # the sections an entry's body follows (problem or idea)
     issues.py migrate [--dry-run]             # older repos: move pre-0.6.0 homelab entries to
                                               # docs/issues-archive.md, refresh the file's header
@@ -77,6 +81,11 @@ TRIAGE = {"ADMIN", "MAINTAIN", "WRITE", "TRIAGE"}
 GH = os.environ.get("HM_GH", "gh")  # overridable for tests
 MATCH_THRESHOLD = 0.5
 ARCHIVE = "docs/issues-archive.md"
+SKILL_ARCHIVE = "docs/skill-issues-archive.md"   # details of compacted resolved entries (GitHub issue #116)
+COMPACT_DAYS = 0    # default --older-than: every resolved entry (its text is on GitHub and in git history)
+COMPACT_HINT_BYTES = 50 * 1024
+STUB_RE = re.compile(r"^_Details archived in ")
+RESOLUTION_RE = re.compile(r"^\*\*Resolution \(")
 OLD_HEADER_MARK = "Problems found while managing this homelab"
 HEADER = """# Issues with the homelab-manager skill
 
@@ -183,12 +192,16 @@ def render(items: list[dict], marker: str | None = None) -> str:
                 "after this are sent next time._", ""]
     order = {"open": 0, "reported": 1, "resolved": 2}
     rows = sorted(items, key=lambda i: (order.get(i["status"], 9), i["id"]))
-    out += ["| ID | Kind | Title | Status | GitHub |", "|---|---|---|---|---|"]
-    for i in rows:
+    head = ["| ID | Kind | Title | Status | GitHub |", "|---|---|---|---|---|"]
+
+    def row(i):
         gh = f"[#{i['github_number']}]({i['github_url']})" if i.get("github_url") else "—"
-        out.append(f"| {i['id']} | {i['kind']} | {i['title'].replace('|', '/')} | {i['status']} | {gh} |")
-    if not items:
-        out.append("| — | | No issues recorded yet. | | |")
+        return f"| {i['id']} | {i['kind']} | {i['title'].replace('|', '/')} | {i['status']} | {gh} |"
+    active = [row(i) for i in rows if i["status"] != "resolved"]
+    resolved = [row(i) for i in rows if i["status"] == "resolved"]
+    out += head + (active or ["| — | | No issues recorded yet. | | |" if not items else "| — | | Nothing open. | | |"])
+    if resolved:   # collapsed: they are most of the file in a repo used for a while (GitHub issue #116)
+        out += ["", f"<details><summary>{len(resolved)} resolved</summary>", ""] + head + resolved + ["", "</details>"]
     out.append("")
     for i in sorted(items, key=lambda i: i["id"]):
         meta = {k: v for k, v in i.items() if k != "body"}
@@ -768,6 +781,9 @@ def cmd_fixed(a, cfg):
         print(f"Resolved {len(fixed)} entr{'y' if len(fixed) == 1 else 'ies'}.")
     elif fixed:
         print("Run with --apply to mark them resolved.")
+    hint = compact_hint(items) if a.apply else None   # GitHub issue #116: the step after an update runs fixed --apply
+    if hint:
+        print(hint)
     return 0
 
 
@@ -775,6 +791,9 @@ def cmd_show(a, cfg):
     i = find(load(issues_path(cfg)), a.id)
     print(json.dumps({k: v for k, v in i.items() if k != "body"}, indent=2))
     print("\n" + (i["body"] or "(no details)"))
+    if any(STUB_RE.match(p) for p in paragraphs(i["body"])):
+        print(f"\nFull details: {SKILL_ARCHIVE} (heading {i['id']})"
+              + (f", GitHub {i['github_url']}" if i.get("github_url") else ""))
     return 0
 
 
@@ -1006,6 +1025,90 @@ def cmd_status(a, cfg, status):
     return 0
 
 
+# ---- compacting resolved entries (GitHub issue #116) ----
+
+def paragraphs(body: str) -> list[str]:
+    return [p.strip() for p in re.split(r"\n\s*\n", body or "") if p.strip()]
+
+
+def details(i: dict) -> str:
+    """The body without what a stub keeps: resolution notes and the archive pointer."""
+    return "\n\n".join(p for p in paragraphs(i["body"]) if not RESOLUTION_RE.match(p) and not STUB_RE.match(p))
+
+
+def kib(n: int) -> str:
+    return f"{n / 1024:.0f} KB" if n >= 1024 else f"{n} bytes"
+
+
+def compactable(items, days: int) -> list[dict]:
+    """Resolved entries whose details are still in the file, resolved at least `days` days ago."""
+    limit = dt.date.today() - dt.timedelta(days=days)
+    out = []
+    for i in items:
+        if i["status"] != "resolved" or not details(i):
+            continue
+        try:
+            when = dt.date.fromisoformat(str(i.get("resolved") or i.get("found") or "")[:10])
+        except ValueError:
+            when = dt.date.min
+        if when <= limit:
+            out.append(i)
+    return out
+
+
+def compact_hint(items) -> str | None:
+    size = sum(len(details(i).encode()) for i in items if i["status"] == "resolved")
+    if size < COMPACT_HINT_BYTES:
+        return None
+    return (f"Resolved entries hold {kib(size)} of details: `issues.py compact` lists them (--older-than DAYS: "
+            f"only those resolved that long ago), --apply moves their details to {SKILL_ARCHIVE}.")
+
+
+def stub(i: dict) -> str:
+    """Resolution notes and a pointer; the status line above it keeps the GitHub link."""
+    keep = [p for p in paragraphs(i["body"]) if RESOLUTION_RE.match(p)]
+    return "\n\n".join(keep + [f"_Details archived in `{SKILL_ARCHIVE}`._"])
+
+
+def render_compacted(i: dict) -> str:
+    gh_link = f" · [GitHub #{i['github_number']}]({i['github_url']})" if i.get("github_url") else ""
+    return (f"## {i['id']} — {i['title']}\n"
+            f"- Kind: {i.get('kind', '?')} · Found: {i.get('found', '?')} · Resolved: {i.get('resolved', '?')}"
+            f"{gh_link}\n\n{details(i)}\n")
+
+
+def cmd_compact(a, cfg):
+    path = issues_path(cfg)
+    items = load(path)
+    sel = compactable(items, a.older_than)
+    if not sel:
+        print("Nothing to compact: no resolved entry" + (f" from {a.older_than}+ days ago" if a.older_than else "")
+              + f" still has its details in {path.name}.")
+        return 0
+    size = sum(len(details(i).encode()) for i in sel)
+    for i in sel:
+        print(f"{i['id']}  resolved {i.get('resolved') or '?'}  {kib(len(details(i).encode())):>10}  {i['title']}")
+    if not a.apply:
+        print(f"\nRun with --apply to move {kib(size)} of details of {len(sel)} entr{'y' if len(sel) == 1 else 'ies'} "
+              f"to {SKILL_ARCHIVE}; each keeps its heading, metadata and status line (IDs are never reused).")
+        return 0
+    before = path.stat().st_size
+    archive = Path(cfg["_root"]) / SKILL_ARCHIVE
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    head = "" if archive.exists() else (
+        f"# Archived details of skill issues\n\nThe full text of resolved entries of {path.name}, moved here by "
+        f"`issues.py compact`; each entry stays there as a stub with its ID, status and GitHub link. Kept for "
+        "reference only.\n\n")
+    with archive.open("a") as f:   # written before the stubs, so nothing is lost if this fails
+        f.write(head + f"_Archived {today()}._\n\n" + "\n".join(render_compacted(i) for i in sel) + "\n")
+    for i in sel:
+        i["body"] = stub(i)
+    save(path, items)
+    print(f"Moved the details of {len(sel)} entr{'y' if len(sel) == 1 else 'ies'} to {SKILL_ARCHIVE}; "
+          f"{path.name}: {kib(before)} → {kib(path.stat().st_size)}. Commit both files.")
+    return 0
+
+
 # ---- migration from the homelab-issue tracker (before 0.6.0) ----
 
 def render_archived(i: dict) -> str:
@@ -1091,6 +1194,10 @@ def main():
     p = sp.add_parser("fixed")
     p.add_argument("--apply", action="store_true", help="mark them resolved")
     p.add_argument("--github", action="store_true", help="also check which are closed as completed on GitHub")
+    p = sp.add_parser("compact", help="move the details of resolved entries to " + SKILL_ARCHIVE)
+    p.add_argument("--older-than", type=int, default=COMPACT_DAYS, metavar="DAYS",
+                   help=f"only entries resolved at least this many days ago (default {COMPACT_DAYS}; 0 = all)")
+    p.add_argument("--apply", action="store_true", help="move them (without it: only list them)")
     p = sp.add_parser("template")
     p.add_argument("--kind", choices=KINDS)
     p = sp.add_parser("migrate")
@@ -1117,6 +1224,7 @@ def main():
         print(f"issues: {e}", file=sys.stderr)
         return 3
     return {"add": cmd_add, "list": cmd_list, "fixed": cmd_fixed, "show": cmd_show, "report": cmd_report, "migrate": cmd_migrate,
+            "compact": cmd_compact,
             "resolve": lambda a, c: cmd_status(a, c, "resolved"),
             "reopen": lambda a, c: cmd_status(a, c, "open")}[a.cmd](a, cfg)
 
