@@ -2163,6 +2163,40 @@ class CommonWordRedactionTests(unittest.TestCase):  # issue 47: plain words used
         self.assertIn("Kitchen-IoT", self.issues.sanitize("The VM in Kitchen-IoT got no IP.", cfg))
 
 
+class AddressRedactionTests(unittest.TestCase):  # GitHub issue #133
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import issues
+        self.issues = issues
+        self.d = tempfile.mkdtemp()
+        self.cfg = {"_root": self.d}
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def test_vendor_prefix_and_times_are_not_ipv6(self):
+        for text in ("MAC prefix `70:EE:50` (Netatmo)", "partial 70:ee:50:12:34", "dead:beef:cafe",
+                     "at 12:30:45 UTC", "loopback ::1", "std::vector"):
+            self.assertEqual(self.issues.sanitize(text, self.cfg), text)
+
+    def test_real_ipv6_redacted(self):
+        for addr in ("fe80::1", "2001:db8::42", "2001:db8:0:0:0:0:0:1", "fd00:aaaa:bbbb:cccc:1:2:3:4"):
+            out = self.issues.sanitize(f"address {addr}%en0 is up", self.cfg)
+            self.assertNotIn(addr, out)
+            self.assertIn("<ip6>", out)
+        self.assertEqual(self.issues.sanitize("MAC 70:ee:50:12:34:56", self.cfg), "MAC <mac>")
+
+    def test_keep_applies_to_addresses_not_secrets(self):
+        cfg = {**self.cfg, "_keep": ["203.0.113.7", "2001:db8::42", "70:ee:50:12:34:56", "ops@example.org",
+                                     "hunter2pass"]}
+        text = "dns 203.0.113.7, 2001:db8::42, MAC 70:EE:50:12:34:56, ops@example.org, password=hunter2pass"
+        out = self.issues.sanitize(text, cfg)
+        for kept in ("203.0.113.7", "2001:db8::42", "70:EE:50:12:34:56", "ops@example.org"):
+            self.assertIn(kept, out)
+        self.assertIn("password=<redacted>", out)
+        self.assertEqual(self.issues.sanitize("10.0.0.9 is gone", cfg), "<ip> is gone")
+
+
 class PveSnapshotTests(unittest.TestCase):  # issue 37
     def setUp(self):
         sys.path.insert(0, str(SCRIPTS))
