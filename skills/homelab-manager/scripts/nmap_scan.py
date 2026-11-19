@@ -333,7 +333,8 @@ def icmp_sweep(addrs: list[str], rate: int = 400, rounds: int = 2, wait: float =
     """Addresses that answered an ICMP echo request, sent from Python's unprivileged ICMP socket (macOS; Linux
     when net.ipv4.ping_group_range allows it): nmap sends ICMP only as root (GitHub issue #128). Unanswered
     addresses get a second request. None when the socket cannot be opened, or when nearly every request
-    failed to go out (e.g. macOS Local Network privacy blocking this Python: "No route to host")."""
+    failed to go out (e.g. macOS Local Network privacy blocking this Python: "No route to host"). "Host is down"
+    is no failure: on the Mac's own segment it means ARP found no host at that address."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_ICMP)
     except OSError as e:
@@ -370,6 +371,8 @@ def icmp_sweep(addrs: list[str], rate: int = 400, rounds: int = 2, wait: float =
                     except (BlockingIOError, InterruptedError):   # send buffer full: let it drain
                         drain(time.monotonic() + 0.05)
                     except OSError as e:
+                        if e.errno == errno.EHOSTDOWN:   # on the Mac's own segment: ARP got no answer, no host there
+                            break
                         if e.errno != errno.ENOBUFS:
                             failed[e.strerror] = failed.get(e.strerror, 0) + 1   # e.g. no route to that address
                             break
