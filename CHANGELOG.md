@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.46.0 — 2026-11-19
+- `patch-linux.yml` no longer fails a host that has nothing to autoremove ([#136](https://github.com/mhaluska/homelab-manager-skill/issues/136)). An empty skip reason
+  became `None` instead of `''`, the `when` failed, and with `max_fail_percentage: 0` the batch stopped after the
+  packages were updated but before the health checks. `init_repo.py --sync-managed` updates unchanged copies.
+- `nmap_scan.py --arp`: when the ICMP sweep got answers but the ARP table came back empty, the hint now says what
+  is happening ([#135](https://github.com/mhaluska/homelab-manager-skill/issues/135)). macOS hides the ARP table from programs Homebrew's Python starts, even with Local
+  Network access allowed, so the hint prints the command to re-run with `/usr/bin/python3`. It no longer asks to
+  allow access that is already allowed.
+- The ICMP sweep no longer counts "Host is down" (no ARP answer on the Mac's own segment) as a blocked send. Before,
+  that printed a false Local Network warning and fell back to TCP probes.
+
 ## 0.45.0 — 2026-11-19
 - Smart-home devices are recognised ([#132](https://github.com/mhaluska/homelab-manager-skill/issues/132)). `nmap_scan.py` device guesses gain `iot` from IoT vendors
   (Netatmo, Yeelink, Xiaomi Electronics, Tuya, Signify/Philips Lighting, …) and from embedded stacks (lwIP,
