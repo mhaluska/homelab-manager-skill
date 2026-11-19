@@ -4270,13 +4270,40 @@ class NmapInterfaceTests(unittest.TestCase):  # issue 18
                              {"port": 5000, "service": "rtsp"}, {"port": 7000, "service": "rtsp"},
                              {"port": 49152, "service": "tcpwrapped"},
                              {"port": 49153, "service": "bandwidth-test", "product": "MikroTik bandwidth-test server"}]}
-        self.assertEqual(self.n.guess_type(speaker), "macos")                    # Apple, not camera/network
+        self.assertEqual(self.n.guess_type(speaker), "media")                    # Apple, no Mac (#132)
         ports = [p["port"] for p in self.n.evidence_ports(speaker["ports"])]
         self.assertEqual(sorted(ports), [53, 7000])                              # the dynamic range doesn't count
         self.assertEqual(self.n.evidence_ports([{"port": 5000, "service": "rtsp"}]),
                          [{"port": 5000, "service": "rtsp"}])                    # one rtsp port alone stays rtsp
         btest = {"ports": [{"port": 2000, "service": "bandwidth-test", "product": "MikroTik bandwidth-test server"}]}
         self.assertEqual(self.n.guess_type(btest), "network")                   # on its own port it still counts
+
+    def test_smart_home_devices(self):  # GitHub issue #132
+        g = self.n.guess_type
+        web = [{"port": 80, "service": "http"}]
+        lwip = [{"name": "lwIP 1.4.1 - 2.0.3", "accuracy": 95}]
+        self.assertEqual(g({"ports": web, "os": lwip}), "iot")                          # a plug, no MAC (routed)
+        self.assertEqual(g({"vendor": "TP-Link Systems", "ports": web, "os": lwip}), "iot")  # beats the vendor
+        self.assertEqual(g({"vendor": "TP-Link Systems", "ports": web}), "iot/network")   # can't tell
+        self.assertEqual(g({"vendor": "TP-Link Technologies", "ports": web + [{"port": 22, "service": "ssh"}]}),
+                         "network")
+        self.assertEqual(g({"vendor": "Netatmo", "ports": [{"port": 5001, "service": "commplex-link"}]}), "iot")
+        self.assertEqual(g({"vendor": "Xiaomi Electronics,CO.", "ports": []}), "iot")
+        self.assertEqual(g({"vendor": "Sonos", "ports": [{"port": 1400, "service": "http", "product": "Sonos upnpd"}]}),
+                         "media")
+        airplay = [{"port": 5000, "service": "rtsp"}, {"port": 7000, "service": "rtsp"}]
+        ios = [{"name": "Apple iOS 16.0", "accuracy": 96}]
+        self.assertEqual(g({"vendor": "Apple", "ports": airplay, "os": ios}), "media")   # HomePod, Apple TV
+        self.assertEqual(g({"vendor": "Apple", "ports": [{"port": 62078, "service": "iphone-sync"}], "os": ios}),
+                         "macos")                                                         # an iPhone stays
+        self.assertEqual(g({"ports": airplay + [{"port": 445, "service": "microsoft-ds"}],
+                            "os": [{"name": "Apple macOS 13", "accuracy": 95}]}), "macos")  # a Mac
+        ssh = [{"port": 22, "service": "ssh", "product": "OpenSSH", "version": "9.2p1 Debian 2"}]
+        for nic in ("Proxmox Server Solutions GmbH", "VMware", "QEMU virtual NIC"):     # a VM's NIC says nothing
+            self.assertEqual(g({"vendor": nic, "ports": ssh}), "linux")
+        merged = self.n.merge_host({"ip": "10.0.0.5", "mac": "BC:24:11:00:00:01", "mac_source": "router"},
+                                   {"ip": "10.0.0.5", "mac": "BC:24:11:00:00:01"}, "ping", "2026-11-19T00:00:00+00:00")
+        self.assertNotIn("mac_source", merged)                                            # nmap saw it itself
 
     def test_real_router_keeps_network(self):
         gw = {"os": [dict(o) for o in self.GW_OS], "os_suspect": ["10.0.20.11"],
@@ -4815,8 +4842,8 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         self.assertEqual(r.returncode, 0, r.stderr)
         out = r.stdout[r.stdout.index("## Names for unknown scanned addresses"):]
         self.assertIn("2 of 3 unknown scanned address(es) have a DHCP lease name", out)
-        self.assertIn("| 10.0.0.40 | Living room TV | aa:bb:cc:00:00:01 | sw-rack lease comment | camera |", out)
-        self.assertIn("| 10.0.0.42 | evrm -rf charger | aa:bb:cc:00:00:02 | sw-rack lease host-name (leased 10.0.0.41) |",
+        self.assertIn("| 10.0.0.40 | Living room TV | aa:bb:cc:00:00:01 | – | sw-rack lease comment | camera |", out)
+        self.assertIn("| 10.0.0.42 | evrm -rf charger | aa:bb:cc:00:00:02 | – | sw-rack lease host-name (leased 10.0.0.41) |",
                       out)                                                     # by ARP MAC; quotes and ; dropped
         self.assertNotIn("10.0.0.77 |", out)
         self.assertNotIn("10.0.0.5 |", out)                                    # an inventory host
@@ -4848,6 +4875,33 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         self.assertIn("**Incomplete:**", out)
         self.assertIn("- 10.0.0.9: not reachable (auth failed", out)
         self.assertIn("1 of 2 unknown scanned address(es) have a DHCP lease name", out)
+
+    def test_leases_give_routed_hosts_a_mac(self):  # GitHub issue #132
+        (self.d / "discovery").mkdir(exist_ok=True)
+        hosts = {"10.0.0.42": {"ip": "10.0.0.42", "mac": None, "vendor": None, "ports": [], "os": [],
+                               "device_type_guess": "unknown"},
+                 "10.0.0.40": {"ip": "10.0.0.40", "mac": None, "vendor": None, "ports": [], "os": []},
+                 "10.0.0.41": {"ip": "10.0.0.41", "mac": "02:00:00:00:00:09", "vendor": None, "ports": [], "os": []}}
+        f = self.d / "discovery/network.json"
+        f.write_text(json.dumps({"hosts": hosts}))
+        r = self.audit("--group", "routeros", "--leases", "--no-write")
+        self.assertIn("Would give 2 scanned host(s) without a MAC", r.stderr)
+        self.assertEqual(json.loads(f.read_text()), {"hosts": hosts})                   # --no-write: unchanged
+        r = self.audit("--group", "routeros", "--leases")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        got = json.loads(f.read_text())["sites"]["default"]["hosts"]
+        self.assertEqual((got["10.0.0.42"]["mac"], got["10.0.0.42"]["mac_source"]), ("AA:BB:CC:00:00:02", "router"))
+        self.assertEqual(got["10.0.0.40"]["mac"], "AA:BB:CC:00:00:01")                 # a bound lease
+        self.assertEqual(got["10.0.0.41"]["mac"], "02:00:00:00:00:09")                 # nmap's own is kept
+        self.assertNotIn("mac_source", got["10.0.0.41"])
+        self.assertIn("device_type_guess", got["10.0.0.40"])
+        proxy = [{"address": f"10.0.1.{i}", "mac-address": "00:0C:42:00:00:01", "_flags": "DC"} for i in range(20)]
+        devs = [{"host": "r1", "arp": proxy + [{"address": "10.0.0.7", "mac-address": "70:ee:50:12:34:56"},
+                                               {"address": "10.0.0.8", "_flags": "D"},
+                                               {"address": "10.0.0.9", "mac-address": "70:ee:50:12:34:57", "_flags": "I"}],
+                 "leases": [{"address": "10.0.0.7", "mac-address": "70:EE:50:00:00:99", "status": "bound"},
+                            {"address": "10.0.0.10", "mac-address": "70:EE:50:00:00:10", "status": "waiting"}]}]
+        self.assertEqual(self.ra.router_macs(devs), {"10.0.0.7": ("70:EE:50:12:34:56", "r1")})  # ARP wins; no proxy ARP
 
     def test_batch_fallbacks(self):  # GitHub issue #131
         ra = self.ra
