@@ -63,6 +63,10 @@ python3 $HM/scripts/nmap_scan.py --site home --profile services --only-live  # a
   next to other sites, a site without `ranges` is refused. Explicit targets outside `authorized_ranges` are still refused.
   The script and the guard hook both enforce this. If the user asks for a range that isn't
   authorized, say so and offer to add it to `homelab.yaml` **if they confirm they own it**.
+- A ping sweep marks the known hosts inside its targets that did not answer with `missing_since` (the deeper
+  profiles never mark: `--open` hides hosts without open ports); answering clears it. drift.md and OVERVIEW.md list
+  them apart from current devices — usually an old DHCP lease. `nmap_scan.py --forget-missing DAYS --dry-run
+  [--site N]` lists hosts missing longer than that; without `--dry-run` it drops them (with the user's yes).
 - "My management subnet": resolve the name from `homelab.yaml` comments/ranges or ask which
   CIDR; never infer it from the Mac's own IP and scan.
 - Start with `ping`, then `services` on the live hosts. `-T3`, and no NSE scripts except `ssl-cert` (`services`
