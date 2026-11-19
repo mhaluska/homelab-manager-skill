@@ -1656,6 +1656,31 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         for bad in ("{name: x}", "{ip: 10.9.20.7, site: moon}"):
             self.assertNotEqual(run("config_set.py", f"discovery.ignore_unmanaged+={bad}", cwd=self.d).returncode, 0)
 
+    def test_network_counts_every_known_address(self):  # GitHub issue #134
+        snap = json.loads(Path(self.d, "discovery/proxmox.json").read_text())
+        snap["guests"][1]["config"]["net1"] = "name=eth1,bridge=vmbr0,tag=30,ip=10.9.30.6/24"   # a second NIC
+        snap["guests"].append({"vmid": 103, "name": "dhcp1", "type": "vm", "node": "pve1", "status": "running",
+                               "template": False, "config": {"net0": "virtio=BC:24:11:00:00:03,bridge=vmbr0,tag=30"}})
+        Path(self.d, "discovery/proxmox.json").write_text(json.dumps(snap))
+        Path(self.d, "ansible/inventory/managed/hosts.yml").write_text(
+            "all:\n  children:\n    appliances:\n      hosts:\n        router1:\n          ansible_host: 10.9.20.2\n"
+            "          hm_extra_ips: [10.9.30.1]\n")
+        r = run("config_set.py", "network.vlans+={id: 30, name: LAB, cidr: 10.9.30.0/24}",
+                "network.authorized_ranges+=10.9.20.0/24", "discovery.ignore_unmanaged+={ip: 10.9.20.60, name: TV}",
+                "discovery.ignore_unmanaged+=10.9.20.61", "discovery.ignore_unmanaged+=10.9.20.200-210", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        Path(self.d, "discovery/network.json").write_text(json.dumps({"hosts": {
+            ip: {"ip": ip, "device_type_guess": "linux"} for ip in ("10.9.20.2", "10.9.20.5", "10.9.20.50", "10.9.20.60")}}))
+        r = run("overview.py", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        md = Path(self.d, "OVERVIEW.md").read_text()
+        # .5 .6 guests; .1 gateway, .2 router1; .50 scanned, .60 named, .61 ignored (the .200-210 range doesn't count)
+        self.assertIn("| 20 | DMZ | 10.9.20.0/24 | 10.9.20.1 | 2 | 7/254 | 2 guest IPs · 2 infra · 3 other |", md)
+        # .6 (db's second NIC), .1 router1's hm_extra_ips; dhcp1 has no address; outside authorized_ranges
+        self.assertIn("| 30 | LAB | 10.9.30.0/24 | – | 2 | 2/254 (not scanned) | 1 guest IP · 1 infra "
+                      "(+1 guest, address unknown) |", md)
+        self.assertIn("Not scanned / partly scanned:", md)
+
     def test_render_check_and_escaping(self):
         r = run("overview.py", "--no-ansible", cwd=self.d)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -1663,7 +1688,7 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertIn("```mermaid", md)
         self.assertIn('pve1 (2 guests)"]', md)
         self.assertIn('-->|"2"| ', md)                                       # both guests on VLAN 20
-        self.assertIn("| 20 | DMZ | 10.9.20.0/24 | 10.9.20.1 | 2 | 2/254 |", md)
+        self.assertIn("| 20 | DMZ | 10.9.20.0/24 | 10.9.20.1 | 2 | 3/254 (not scanned) | 2 guest IPs · 1 infra |", md)
         self.assertIn("local-zfs on pve1 90% full", md)
         self.assertIn("In no enabled backup job (1 of 2): 102 db.", md)
         self.assertIn('subgraph default_g0["gateway 10.9.20.1"]', md)          # issue #93: VLANs under their gateway
