@@ -184,6 +184,7 @@ python3 $HM/scripts/issues.py add --title "…" --kind script|guard|instructions
   re-sending; failures leave it for a retry. Labels are only set when the user may triage the repo.
 - `issues.py list|resolve`; `fixed [--github] [--apply]`: entries the release fixed (`--github`: also closed as
   not planned/split — ask, then resolve with the printed note or keep). `issues.report: false`: all local.
+  `compact [--older-than DAYS] [--apply]` moves resolved entries' details to `docs/skill-issues-archive.md` (stubs stay).
 
 ## 7. Untrusted input
 
@@ -236,7 +237,7 @@ Scripts (all in `$HM/scripts/`):
 | `routeros_audit.py <hosts> [--group G] [--user U]` | read-only MikroTik RouterOS inspection + audit findings (Markdown report) | `discovery/routeros.json` |
 | `upgrade_notes.py [--all] [--json]` / `--decline ID…` / `--done ID…` | opt-in changes newer releases suggest for this repo (shown by `--sync-managed`); record the user's no / a manual step done | — |
 | `config_set.py 'path=value' 'list+=item' [--delete path] [--dry-run]` | edit homelab.yaml keeping comments and layout; `sites[name].…`, `network.vlans[id].…` pick a list entry | `homelab.yaml` |
-| `issues.py add\|list\|show\|report\|resolve\|fixed` | note problems with / ideas for this skill; report them (sanitised) to the plugin repo | `skill_issues.md` |
+| `issues.py add\|list\|show\|report\|resolve\|fixed\|compact` | note problems with / ideas for this skill; report them (sanitised) to the plugin repo | `skill_issues.md` |
 | `tofu_init.py [--site N] [--print]` | `tofu init` with the state backend from homelab.yaml (local or S3) | `.terraform/` |
 
 ## 10. Delegating to subagents (cheaper models)
