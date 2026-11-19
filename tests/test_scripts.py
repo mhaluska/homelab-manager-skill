@@ -4433,3 +4433,52 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         r = self.audit("10.0.0.9", "--no-write")
         self.assertEqual(r.returncode, 2)
         self.assertFalse((self.d / "discovery/routeros.json").exists())
+
+
+class MissingYqTests(unittest.TestCase):  # GitHub issue #119: no yq → a clean error before anything is written
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import config_set
+        import hmlib
+        import init_repo
+        self.hmlib, self.init_repo, self.config_set = hmlib, init_repo, config_set
+        self.d = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def test_yq_bin_falls_back_to_homebrew_then_errors(self):
+        from unittest import mock
+        with mock.patch.object(self.hmlib.shutil, "which", return_value=None), \
+                mock.patch.object(self.hmlib.Path, "exists", lambda p: str(p) == "/opt/homebrew/bin/yq"):
+            self.assertEqual(self.hmlib.yq_bin(), "/opt/homebrew/bin/yq")
+        with mock.patch.object(self.hmlib.shutil, "which", return_value=None), \
+                mock.patch.object(self.hmlib.Path, "exists", return_value=False):
+            with self.assertRaisesRegex(self.hmlib.ConfigError, "brew install yq"):
+                self.hmlib.yq_bin()
+
+    def main(self, module, *argv):
+        from unittest import mock
+        err = io.StringIO()
+        with mock.patch.object(self.hmlib, "yq_bin", side_effect=self.hmlib.ConfigError("yq is not installed (brew install yq).")), \
+                mock.patch.object(sys, "argv", [module.__name__ + ".py", *argv]), contextlib.redirect_stderr(err), \
+                contextlib.redirect_stdout(io.StringIO()):
+            return module.main(), err.getvalue()
+
+    def test_init_repo_writes_nothing(self):
+        for dry in ([], ["--dry-run"]):
+            rc, err = self.main(self.init_repo, str(self.d), "--components", "ansible,discovery", *dry)
+            self.assertEqual(rc, 2)
+            self.assertIn("brew install yq", err)
+            self.assertIn("Nothing was written", err)
+            self.assertEqual(list(self.d.iterdir()), [])
+        rc, _ = self.main(self.init_repo, "--list-components")   # needs no yq
+        self.assertEqual(rc, 0)
+
+    def test_config_set_clean_error(self):
+        cfg = self.d / "homelab.yaml"
+        cfg.write_text("site:\n  domain: a\n")
+        rc, err = self.main(self.config_set, "--file", str(cfg), "site.domain=b")
+        self.assertEqual(rc, 2)
+        self.assertIn("config_set: yq is not installed (brew install yq).", err)
+        self.assertEqual(cfg.read_text(), "site:\n  domain: a\n")
