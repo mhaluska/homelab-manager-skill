@@ -102,7 +102,7 @@ scan that also logs in read-only over SSH to see which hosts Ansible could manag
    Onboarding existing hosts). It skips hosts already in the managed inventory and lists them.
 5. Summarise per host: IP, name / Proxmox guest, type guess, OS and usable Python, and a status —
    **managed** (already in inventory), **candidate** (probe OK; suggested OS group), **auth failed**
-   (key not authorized or wrong user), **no POSIX shell** (appliance), **no SSH** (ports seen, no 22;
+   (key not authorized or wrong user; `no SSH key loaded` = empty ssh-agent), **no POSIX shell** (appliance), **no SSH** (ports seen, no 22;
    Windows hosts need WinRM/OpenSSH — references/windows-appliances.md).
 Adding candidates to the managed inventory is a separate yes (`ssh_probe.py … --draft`, then
 references/ansible.md step 3–4); a full scan never edits the inventory.

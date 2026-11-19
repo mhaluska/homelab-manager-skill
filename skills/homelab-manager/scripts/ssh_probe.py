@@ -33,6 +33,7 @@ import concurrent.futures as cf
 import datetime as dt
 import ipaddress
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -140,9 +141,53 @@ def ssh_command(ip: str, user: str | None, port: int, timeout: int, known_hosts:
             "-o", "LogLevel=ERROR", "-p", str(port), *(["-l", user] if user else []), ip, "sh", "-s"]
 
 
-def ssh_error(rc: int, err: str) -> str:
+NO_KEY_HINT = "ssh-add --apple-use-keychain ~/.ssh/<key>"
+
+
+def agent_has_keys(sock: str | None) -> bool:
+    """`ssh-add -l` lists an identity in the agent at sock (None: $SSH_AUTH_SOCK)."""
+    if sock is not None and not sock:
+        return False
+    env = {**os.environ, **({"SSH_AUTH_SOCK": sock} if sock else {})}
+    try:
+        r = subprocess.run([shutil.which("ssh-add") or "/usr/bin/ssh-add", "-l"], capture_output=True, text=True,
+                           timeout=10, env=env)
+    except (OSError, subprocess.TimeoutExpired):
+        return True    # can't tell: don't claim there is no key
+    return r.returncode == 0
+
+
+def has_key(ip: str, user: str | None, port: int, agents: dict) -> bool:
+    """ssh would have a key to offer ip: the agent its config names (IdentityAgent, else $SSH_AUTH_SOCK) holds
+    one, or an identity file it would try exists on disk (GitHub issue #122). `ssh -G` only reads the config."""
+    try:
+        r = subprocess.run([shutil.which("ssh") or "/usr/bin/ssh", "-G", "-p", str(port),
+                            *(["-l", user] if user else []), ip], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return True
+    if r.returncode != 0:
+        return True
+    opts: dict[str, list[str]] = {}
+    for line in r.stdout.splitlines():
+        k, _, v = line.partition(" ")
+        opts.setdefault(k.lower(), []).append(v.strip())
+    agent = (opts.get("identityagent") or [""])[0]
+    sock = None if agent in ("", "SSH_AUTH_SOCK") else ("" if agent == "none" else
+                                                          os.path.expanduser(agent.strip('"')))
+    if sock not in agents:
+        agents[sock] = agent_has_keys(sock)
+    if agents[sock]:
+        return True
+    home = os.path.expanduser("~")
+    return any(Path(os.path.expanduser(f.strip('"').replace("%d", home))).is_file()
+               for f in opts.get("identityfile") or [])
+
+
+def ssh_error(rc: int, err: str, no_key: bool = False) -> str:
     e = err.lower()
-    for needle, why in (("permission denied", "auth failed (key not authorized for this user — try --user)"),
+    denied = (f"auth failed (no SSH key loaded — {NO_KEY_HINT})" if no_key
+              else "auth failed (key not authorized for this user — try --user)")
+    for needle, why in (("permission denied", denied),
                         ("connection refused", "connection refused"),
                         ("timed out", "timeout"), ("no route to host", "no route to host"),
                         ("host key verification failed", "host key verification failed"),
@@ -181,7 +226,7 @@ def parse_probe(out: str) -> dict:
     return r
 
 
-def probe_host(ip: str, user: str | None, port: int, timeout: int, known_hosts: str) -> dict:
+def probe_host(ip: str, user: str | None, port: int, timeout: int, known_hosts: str, no_key: bool = False) -> dict:
     cmd = ssh_command(ip, user, port, timeout, known_hosts)
     try:
         p = subprocess.run(cmd, input=PROBE, capture_output=True, text=True, timeout=timeout * 2 + 5)
@@ -189,7 +234,7 @@ def probe_host(ip: str, user: str | None, port: int, timeout: int, known_hosts: 
         return {"ok": False, "error": f"no answer within {timeout * 2 + 5}s (session hangs — not a POSIX shell?)"}
     if "hm_probe=1" not in p.stdout:
         if p.returncode == 255:
-            return {"ok": False, "error": ssh_error(p.returncode, p.stderr)}
+            return {"ok": False, "error": ssh_error(p.returncode, p.stderr, no_key)}
         return {"ok": False, "error": "logged in, but `sh` did not run the probe (no POSIX shell: network "
                                       "appliance? see references/windows-appliances.md)"}
     return {"ok": True, **parse_probe(p.stdout)}
@@ -329,11 +374,17 @@ def probe_site(a, cfg: dict, managed: dict, net_site: dict, scope_site: str | No
         return [] if skipped else None
     users = {ip: ssh_user(cfg, managed, ip, a.user) for ip in chosen}
     shown = sorted({u or "(ssh config user)" for u in users.values()})
+    agents: dict = {}
+    keyless = {ip for ip in chosen if not has_key(ip, users[ip], a.port, agents)}
+    if keyless:
+        print(f"warning: no SSH key to offer {len(keyless)} host(s): the ssh-agent has no identities and no key "
+              f"file exists — load one first ({NO_KEY_HINT})", file=sys.stderr)
     print(f"Probing {len(chosen)} host(s) at site {hmlib.site_key(net_site)} as {', '.join(shown)}…", file=sys.stderr)
     with tempfile.TemporaryDirectory() as d:
         kh = str(Path(d) / "known_hosts")
         with cf.ThreadPoolExecutor(max_workers=max(1, a.jobs)) as ex:
-            results = dict(zip(chosen, ex.map(lambda ip: probe_host(ip, users[ip], a.port, a.timeout, kh), chosen)))
+            results = dict(zip(chosen, ex.map(
+                lambda ip: probe_host(ip, users[ip], a.port, a.timeout, kh, ip in keyless), chosen)))
 
     now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     if not a.no_write:

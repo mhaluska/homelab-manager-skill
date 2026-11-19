@@ -32,7 +32,7 @@ Install collections once: `ansible-galaxy collection install -r requirements.yml
    Same as `raw` (no Python needed) over `ssh -T`, agent keys only, a timeout per host and a throwaway
    known_hosts; csh root shells work. It shows the Python this ansible-core can use, the
    `ansible_python_interpreter` to set when `python3` is too old, an OS group, and merges into network.json
-   (better `device_type_guess`). `auth failed` = key not authorized or wrong user: fix, don't skip.
+   (better `device_type_guess`). `auth failed` = key not authorized or wrong user (`no SSH key loaded`: the agent is empty, `ssh-add` first): fix, don't skip.
    `sh did not run` = no POSIX shell (RouterOS, switches): an appliance, not a Linux host.
    Put the reviewed hosts in `hosts.yml`. The probe trusts no host key: `ansible.cfg` checks them, so before
    the first run accept each once (`ssh -o StrictHostKeyChecking=accept-new <host> true`) on a network you trust.
