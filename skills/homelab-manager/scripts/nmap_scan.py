@@ -92,7 +92,7 @@ DEVICE_HINTS = [  # (word/phrase in vendor/OS/service/product, device type) — 
     ("opnsense", "firewall"), ("pfsense", "firewall"), ("fortinet", "firewall"), ("fortigate", "firewall"),
     ("synology", "nas"), ("qnap", "nas"), ("truenas", "nas"),
     ("ipp", "printer"), ("jetdirect", "printer"), ("printer", "printer"), ("brother", "printer"),
-    ("hikvision", "camera"), ("rtsp", "camera"), ("idrac", "bmc"), ("ilo", "bmc"), ("ipmi", "bmc"),
+    ("hikvision", "camera"), ("rtsp", "camera"), ("airplay", "macos"), ("idrac", "bmc"), ("ilo", "bmc"), ("ipmi", "bmc"),
     ("lights-out", "bmc"), ("megarac", "bmc"), ("supermicro", "bmc"), ("asmb", "bmc"), ("xclarity", "bmc"), ("home assistant", "iot"), ("espressif", "iot"), ("shelly", "iot"),
     ("raspberry", "sbc"), ("linux", "linux"), ("openssh", "linux"),
 ]
@@ -136,6 +136,24 @@ def _hint(text: str) -> tuple[str | None, bool]:
     return None, False
 
 
+DYNAMIC_PORTS = 49152   # IANA dynamic range: HomeKit/AirPlay, UPnP and RPC listeners
+
+
+def evidence_ports(ports: list[dict]) -> list[dict]:
+    """The ports whose service/product count as device-type evidence (GitHub issue #130).
+
+    Ports in the dynamic range don't count: nmap's version probes match tiny signatures there by accident (its
+    "MikroTik bandwidth-test server" is the 4 bytes 01 00 00 00) and no appliance serves its management there.
+    The AirPlay receiver (rtsp without a product on both 5000 and 7000: Macs, Apple TVs, HomePods) becomes one
+    `airplay` piece of evidence, an Apple device, not a camera."""
+    kept = [p for p in ports if (p.get("port") or 0) < DYNAMIC_PORTS]
+    bare = {p.get("port") for p in kept if p.get("service") == "rtsp" and not p.get("product")}
+    if {5000, 7000} <= bare:
+        kept = [p for p in kept if p.get("port") not in (5000, 7000) or p.get("product") or p.get("service") != "rtsp"]
+        kept.append({"port": 7000, "service": "airplay"})
+    return kept
+
+
 def guess_type(h: dict) -> str:
     """Score evidence: vendor (MAC OUI), OS matches, an OS named in a service banner and what ssh_probe.py read
     on the host weigh 3, a default host name prefix (uap-, ilo-…) 2, each open port's service/product 1.
@@ -152,9 +170,9 @@ def guess_type(h: dict) -> str:
     ports = h.get("ports", [])
     probe = h.get("ssh_probe") or {}  # what the host said about itself over SSH (ssh_probe.py)
     sources = [((h.get("vendor") or "").lower(), 3)]
-    texts = [f"{p.get('service') or ''} {p.get('product') or ''}".lower() for p in ports]
-    # a bare rtsp port is weak camera evidence: AirPlay receivers (Macs, Apple TVs) open two (5000, 7000), so it
-    # counts once per host (GitHub issue #121); a camera's product name (Hikvision…) still counts on every port
+    texts = [f"{p.get('service') or ''} {p.get('product') or ''}".lower() for p in evidence_ports(ports)]
+    # a bare rtsp port is weak camera evidence: it counts once per host (GitHub issue #121); a camera's product
+    # name (Hikvision…) still counts on every port
     sources += [(t, 1) for i, t in enumerate(texts) if t.strip() != "rtsp" or t not in texts[:i]]
     sources += [(str(probe.get(k) or "").lower(), 3) for k in ("product", "os_name") if probe.get(k)]
     scores: dict[str, int] = {}
