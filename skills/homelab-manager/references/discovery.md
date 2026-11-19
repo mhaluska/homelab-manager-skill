@@ -105,7 +105,13 @@ python3 $HM/scripts/nmap_scan.py --site home --profile services --only-live  # a
   An OS named in a banner (`OpenSSH … Debian`, nmap's `ostype` such as `Mac OS X`) outranks nmap's OS fingerprint;
   a bare `rtsp` port counts once, and the AirPlay pair (rtsp on 5000 and 7000: Macs, Apple TVs, HomePods) counts as
   an Apple device, not a camera. Ports 49152+ (dynamic range) are no evidence: version probes match tiny signatures
-  there by accident (a HomePod "MikroTik bandwidth-test server"). On routed
+  there by accident (a HomePod "MikroTik bandwidth-test server"). Smart home: `iot` from IoT vendors (Netatmo,
+  Yeelink, Xiaomi Electronics, Tuya, Signify/Philips Lighting, Espressif, Shelly, …) or an embedded stack (lwIP,
+  FreeRTOS) serving only web ports; a TP-Link MAC with nothing but a web page is `iot/network` (plug or switch);
+  `media` is an Apple device with none of a Mac's services (Apple TV, HomePod) and Sonos. A VM's virtual NIC vendor
+  (Proxmox, VMware, QEMU, Xen) is no evidence. Routed hosts have no MAC from nmap:
+  `routeros_audit.py --group routeros --leases` fills in the one the router's ARP table or a bound lease has (with
+  its vendor, `mac_source: router`) and guesses again. On routed
   `os` scans the gateway can answer the closed-port probes, so hosts with identical OS guess lists get
   `os_suspect` (the other IPs; shown as `? ` in the table): don't quote those guesses as the host's OS.
   A `bmc` (iLO, iDRAC, IPMI) is an exposed management interface: point it out, it belongs on a management VLAN.

@@ -120,7 +120,8 @@ CRS) a few MiB free is normal on RouterOS 7, so only less than `routeros_audit.m
 or 5 MiB is `low`. `--recompute` applies changed rules or thresholds to `discovery/routeros.json` without
 connecting. `--leases` also reads DHCP leases and ARP and proposes names for
 unknown scanned addresses (references/discovery.md, drift report); a router whose lease or ARP table could not be
-read is listed as **Incomplete**, so missing names there are not proof it has none. The script reads each device
+read is listed as **Incomplete**, so missing names there are not proof it has none. It also gives scanned hosts
+without a MAC the router's (vendor and a new device guess in `discovery/network.json`; not with `--no-write`). The script reads each device
 in one SSH session (routers may refuse logins that come too quickly one after another).
 
 Plain-text services the audit flags: `playbooks/routeros-disable-services.yml` (the report prints the command
