@@ -4630,7 +4630,7 @@ class SshProbeTests(unittest.TestCase):  # issue 25
 
 
 FAKE_ROS_SSH = r'''#!/usr/bin/env python3
-import json, os, sys
+import json, os, re, sys
 if "-G" in sys.argv:                       # ssh -G: the user from ssh config
     print("hostname " + sys.argv[-1] + "\nuser cfguser\nport 22"); sys.exit(0)
 host, cmd = sys.argv[-2], sys.argv[-1]
@@ -4675,6 +4675,17 @@ out = {
  "/ip firewall nat print terse without-paging": "" if chr_ else (
    " 0    comment=web chain=dstnat action=dst-nat to-addresses=10.0.0.5 to-ports=443 protocol=tcp dst-port=443\n"),
 }
+flaky = os.environ.get("FAKE_ROS_FLAKY", "")   # "host:section": that section fails in the batch only (#131)
+if cmd.startswith(':put "==hm:'):          # one session, every section after a marker (GitHub issue #131)
+    for put, do in zip(*[iter(cmd.split("\n"))] * 2):
+        section = re.fullmatch(r':put "==hm:(\w+)=="', put).group(1)
+        inner = re.fullmatch(r':do \{ \[:parse "(.+)"\] \} on-error=\{ :put "==hm-error==" \}', do).group(1)
+        print("==hm:" + section + "==")
+        if inner not in out or (chr_ and "routerboard" in inner) or flaky == host + ":" + section:
+            print("==hm-error==")
+        else:
+            sys.stdout.write(out[inner])
+    sys.exit(0)
 if cmd not in out or (chr_ and "routerboard" in cmd):
     print("bad command name routerboard (line 1 column 9)"); sys.exit(1)
 sys.stdout.write(out[cmd])
@@ -4783,6 +4794,48 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         saved = json.loads((self.d / "discovery/routeros.json").read_text())["devices"]
         self.assertFalse({"leases", "arp"} & {k for d in saved.values() for k in list(d) + list(d["errors"])})
 
+    def test_one_session_retry_and_incomplete_leases(self):  # GitHub issue #131
+        (self.d / "discovery").mkdir(exist_ok=True)
+        (self.d / "discovery/network.json").write_text(json.dumps({"hosts": {
+            ip: {"ip": ip, "device_type_guess": "unknown"} for ip in ("10.0.0.40", "10.0.0.77")}}))
+        self.env["FAKE_ROS_FLAKY"] = "10.0.0.1:nat"
+        r = self.audit("--group", "routeros", "--leases", "--no-write", "10.0.0.9")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        calls = [json.loads(l)[-2:] for l in self.log.read_text().splitlines()]
+        self.assertEqual(sorted(h for h, c in calls if c.startswith(":put")), ["10.0.0.1", "10.0.0.2", "10.0.0.9"])
+        self.assertEqual([c for h, c in calls if not c.startswith(":put")],
+                         ["/ip firewall nat print terse without-paging"])     # only the failed section, alone
+        self.assertNotIn("nat:", r.stdout)                                     # the retry read it
+        out = r.stdout[r.stdout.index("## Names for unknown scanned addresses"):]
+        self.assertIn("**Incomplete:**", out)
+        self.assertIn("- 10.0.0.9: not reachable (auth failed", out)
+        self.assertIn("1 of 2 unknown scanned address(es) have a DHCP lease name", out)
+
+    def test_batch_fallbacks(self):  # GitHub issue #131
+        ra = self.ra
+        detail = "board-name: hEX\nversion: 7.20\n"
+        seen = []
+        def old_router(h, u, p, t, cmd):                                       # ignores the script: no markers
+            seen.append(cmd)
+            return True, detail
+        dev = ra.collect("r1", "u", 22, 5, runner=old_router)
+        self.assertTrue(dev["reachable"])
+        self.assertEqual(len(seen), 1 + len(ra.COMMANDS))                      # the script, then one per command
+        def lost_leases(h, u, p, t, cmd):
+            if cmd.startswith(":put"):
+                return True, "".join(f"==hm:{s}==\n" + ("==hm-error==\n" if s in ("leases", "arp") else detail)
+                                     for s in {**ra.COMMANDS, **ra.LEASE_COMMANDS})
+            return False, "auth failed (key not authorized for this user — --user?)"
+        dev = ra.collect("r1", "u", 22, 5, runner=lost_leases, leases=True)
+        self.assertEqual(sorted(dev["errors"]), ["arp", "leases"])
+        self.assertEqual(ra.unread_tables([{**dev, "identity": {"name": "core"}}]),
+                         ["core: leases, arp (auth failed (key not authorized for this user — --user?))"])
+        report = ra.proposal_report([], 3, False, ra.unread_tables([dev]))
+        self.assertIn("- r1: leases, arp", report)
+        report = ra.proposal_report([], 3, True, ["r1: leases (timeout)"])
+        self.assertIn("No lease read names any of the 3 unknown scanned address(es).", report)
+        self.assertEqual(ra.proposal_report([], 3, True, []).count("Incomplete"), 0)
+
     def test_live_connection_is_not_a_second_service(self):
         dev = {"reachable": True, "services": [
             {"name": "api", "port": "8728", "_flags": ""},
@@ -4844,8 +4897,10 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
                 self.assertEqual(c[c.index("-l") + 1], "auditor+ct512w")              # from group_vars/routeros.yml
             else:
                 self.assertEqual(c[c.index("-l") + 1], "cfguser+ct512w")              # given directly: ssh -G
-            self.assertRegex(c[-1], r"^/[a-z /-]+ print( terse)? without-paging$")    # read-only
-        self.assertFalse(any(c[-2] == "10.0.0.2" and "routerboard" in c[-1] for c in calls))  # skipped on CHR
+            for line in c[-1].split("\n"):                                          # read-only
+                self.assertRegex(line, r'^(:put "==hm:\w+=="|:do \{ \[:parse "/[a-z /-]+ print( terse)? without-paging"\] '
+                                       r'\} on-error=\{ :put "==hm-error==" \})$')
+        self.assertEqual(sorted(c[-2] for c in calls), ["10.0.0.1", "10.0.0.2", "10.0.0.9"])  # one session each (#131)
         out = r.stdout
         self.assertIn("| 10.0.0.1 | sw-rack | CRS326-24G-2S+ | 7.16.1 (stable) | 7.12 | 3.1MiB |", out)
         self.assertIn("| 10.0.0.2 | core-chr | CHR QEMU", out)
