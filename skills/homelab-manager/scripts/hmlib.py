@@ -755,6 +755,29 @@ def outside_site(cfg: dict, st: dict, targets: list[str]) -> list[str]:
     return out
 
 
+def site_scan_ranges(cfg: dict, name: str) -> tuple[list[str], list[str]]:
+    """(targets, skipped) for `nmap_scan.py --site name` without targets (GitHub issue #118): the site's ranges
+    clipped to network.authorized_ranges — a range only partly authorized gives its authorized parts — and the
+    site ranges (or parts) left out. Raises ConfigError for an unknown site or one with no ranges."""
+    st = site(cfg, name)
+    if not st["ranges"]:
+        raise ConfigError(f"site {site_title(st)} has no ranges in homelab.yaml: give the scan targets.")
+    allowed, _ = scan_scope(cfg)
+    outer = lambda nets: [n for n in nets if not any(o != n and o.version == n.version and n.subnet_of(o)
+                                                     for o in nets)]
+    keep, skipped = [], []
+    for r in st["ranges"]:
+        if any(r.version == a.version and r.subnet_of(a) for a in allowed):
+            keep.append(r)
+            continue
+        parts = outer(list(dict.fromkeys(a for a in allowed if r.version == a.version and a.subnet_of(r))))
+        keep += parts
+        if sum(n.num_addresses for n in parts) < r.num_addresses:
+            skipped.append(f"{r} (scanning only {', '.join(map(str, parts))})" if parts else str(r))
+    # no merging of neighbours: each target must stay inside one authorized range for check_targets and the guard
+    return [str(n) for n in sorted(outer(list(dict.fromkeys(keep))), key=lambda n: (n.version, n))], skipped
+
+
 _RANGE_RE = re.compile(r"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.)(\d{1,3})-(\d{1,3})$")
 
 
