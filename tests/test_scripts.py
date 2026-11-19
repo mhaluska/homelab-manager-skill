@@ -338,6 +338,18 @@ class ReportTests(unittest.TestCase):
         self.assertIn("SKILL-004  CREATE", self.issues("report", "--dry-run").stdout)
         self.assertNotIn("SKILL-001", self.issues("report", "--dry-run").stdout)
 
+    def test_report_redaction_summary_same_for_dry_run_and_send(self):  # GitHub issue #126
+        self.issues("add", "--title", "packer validate fails on debian13", "--kind", "template",
+                    "--body", "Build VM at 10.1.2.3 timed out.")
+        line = lambda out: next(l for l in out.splitlines() if l.startswith("Redacted:"))
+        dry = line(self.issues("report", "--dry-run").stdout)
+        self.assertIn("1 IPv4", dry)
+        r = self.issues("report")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(line(r.stdout), dry)
+        create = next(c for c in self.calls() if c[:2] == ["issue", "create"])
+        self.assertNotIn("10.1.2.3", json.dumps(create))
+
     def test_report_ids_keeps_marker_for_other_unsent(self):  # GitHub issue #16
         self.issues("add", "--title", "packer validate fails on debian13", "--kind", "template")
         self.issues("add", "--title", "Another unrelated problem", "--kind", "other")
