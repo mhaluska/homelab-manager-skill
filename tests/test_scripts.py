@@ -4148,6 +4148,11 @@ class NmapLocalProbeTests(unittest.TestCase):  # GitHub issue #128
             with contextlib.redirect_stderr(err):
                 self.assertIsNone(n.icmp_sweep(addrs, rate=10000, wait=0))      # nothing went out
             self.assertIn("Local Network privacy", err.getvalue())
+            Sock.fail = errno.EHOSTDOWN                                         # own segment, ARP found nobody
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(n.icmp_sweep(addrs, rate=10000, wait=0), set())  # a sweep, not a blocked one
+            self.assertEqual(err.getvalue(), "")
 
     def test_parse_arp(self):
         out = ("? (192.0.2.5) at 8:55:31:2b:39:83 on en0 ifscope [ethernet]\n"
