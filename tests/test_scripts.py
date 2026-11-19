@@ -3285,6 +3285,20 @@ class DiscoveryLayoutTests(unittest.TestCase):  # GitHub issue #73
                 self.assertRegex(h, rf"\b{var} \| replace\(',', ':'\)")
             self.assertNotRegex(h, r"\btarget \| default\(")
 
+    def test_set_fact_blocks_that_render_nothing_stay_strings(self):  # GitHub issue #136
+        # Ansible turns a set_fact value whose Jinja block renders nothing into None, and `None | length` fails
+        # the host: a block that may be empty goes in task vars, the fact is `default('', true)` of it
+        for pb in sorted((SCRIPTS.parent / "assets/repo-template/ansible/playbooks").glob("*.yml")):
+            text = pb.read_text()
+            for task in re.split(r"\n    - name: ", text):
+                if "ansible.builtin.set_fact:" not in task:
+                    continue
+                facts = task.split("ansible.builtin.set_fact:")[1].split("\n      vars:")[0]
+                self.assertNotRegex(facts, r"\n        \w+: >-\n *\{%-? if", f"{pb.name}: {task.splitlines()[0]}")
+        pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/patch-linux.yml").read_text()
+        self.assertIn("hm_autoremove_skip: \"{{ hm_skip_why | default('', true) }}\"", pb)
+        self.assertNotIn("hm_autoremove_skip | default('') |", pb)
+
     def test_check_updates_covers_qnap_read_only(self):  # GitHub issue #81
         pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/check-updates.yml").read_text()
         play = pb.split("- name: Firmware and app versions on QNAP NAS")[1].split("\n- name:")[0]
