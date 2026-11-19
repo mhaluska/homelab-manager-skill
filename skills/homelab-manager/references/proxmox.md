@@ -180,7 +180,7 @@ config_set.py 'sites+={name: offsite, label: Rented server, ranges: [192.0.2.0/2
   sites). A site may set its own `vmid_ranges`, `vmid_scheme` and `templates` (build network) in its entry;
   otherwise the top-level ones apply. `network.vlans` entries name a `site` (a VLAN only there; `site: all` =
   every site on purpose; none = every site too): `--vlan <name>` resolves with the site's VLANs.
-- Network scans: `nmap_scan.py … --site offsite` / `ssh_probe.py --site offsite` → its part of `discovery/network.json`.
+- Network scans: `nmap_scan.py [<ranges>] --site offsite` / `ssh_probe.py --site offsite` → its part of `discovery/network.json`.
   `ssh_probe.py <ip>` without `--site` files each address under its inventory host's site (else the site whose
   ranges hold it) and logs in as that host's `ansible_user`.
   `network.excluded_hosts` and `discovery.ignore_unmanaged` take `{ip: 10.0.0.5, site: offsite}` next to plain

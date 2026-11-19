@@ -49,11 +49,15 @@ python3 $HM/scripts/nmap_scan.py 10.0.10.0/24                     # ping sweep (
 python3 $HM/scripts/nmap_scan.py 10.0.10.0/24 --profile services  # top 200 TCP ports + versions, no root
 python3 $HM/scripts/nmap_scan.py 10.0.10.5 --profile os           # + OS detection; sudo → user approval
 python3 $HM/scripts/nmap_scan.py 10.0.10.0/24 --profile os --only-live  # OS-scan only hosts already seen up
+python3 $HM/scripts/nmap_scan.py --site home --profile services --only-live  # a site's authorized ranges
 ```
 - Targets must be inside `network.authorized_ranges`; `excluded_hosts` are always skipped.
 - Several sites (proxmox.md "Several sites"): pass `--site <name>` for the site the Mac is at (ssh_probe.py too):
   the scan goes under that site in `discovery/network.json` (no `--site`: the default site) and that site's
   `{ip, site}` exclusions apply with the plain ones; without `--site` every site's exclusions apply.
+  `--site <name>` with no targets scans the site's `ranges` that lie inside `authorized_ranges` (an only partly
+  authorized range: its authorized part) and lists the ones it left out — use it for "rescan site X" instead of
+  intersecting the two lists by hand. Explicit targets outside `authorized_ranges` are still refused.
   The script and the guard hook both enforce this. If the user asks for a range that isn't
   authorized, say so and offer to add it to `homelab.yaml` **if they confirm they own it**.
 - "My management subnet": resolve the name from `homelab.yaml` comments/ranges or ask which

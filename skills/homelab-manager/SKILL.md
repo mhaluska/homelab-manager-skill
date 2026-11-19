@@ -227,7 +227,7 @@ Scripts (all in `$HM/scripts/`):
 | `pve_guest.py status\|start <guest…>` | guest status; start a stopped guest (after an approved reboot or rollback) | — |
 | `lxd_snapshot.py list\|check\|create\|delete\|restore <host…> [--name N]` | LXD/Incus instance snapshots (NAS; host vars lxd_host, lxd_snapshots) (delete/restore: approval) | — |
 | `pve_node_plan.py <node> [--site N] [--max-mem-pct 85] [--no-migrate]` | read-only plan for patching one Proxmox node: migrate, HA, stop/restore per guest | `discovery/pve-patch.json` |
-| `nmap_scan.py <targets> [--profile ping\|services\|os] [--only-live] [--site N]` | scope-checked scan | `discovery/network.json` |
+| `nmap_scan.py <targets>\|--site N [--profile ping\|services\|os] [--only-live]` | scope-checked scan | `discovery/network.json` |
 | `drift_report.py [--tofu-json F]` / `--stale` | Proxmox ↔ OpenTofu ↔ Ansible ↔ network / is drift.md out of date | `discovery/drift.md` |
 | `tofu_to_inventory.py [--site N]` | OpenTofu output → Ansible inventory | `ansible/inventory/managed/tofu_hosts[-<site>].yml` |
 | `proxmox_to_inventory.py [--vlan N] [--range CIDR] [--type vm\|lxc]` | draft inventory entries for existing Linux guests (review before use) | — (stdout) |
