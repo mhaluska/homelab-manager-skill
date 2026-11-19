@@ -8,8 +8,9 @@ network.vlans, clusters), discovery/proxmox.json (nodes, storage, guests, backup
 certificates), network.json (scanned addresses, services, TLS certificates), unifi.json, routeros.json (devices,
 NAT rules, CHR licences), bmc.json, containers.json, qnap-containers.json, updates.json, the managed
 Ansible inventory (`ansible-inventory --list`; --no-ansible skips it), discovery/drift.md and the newest
-docs/security-audit-*.md. Network devices start from the inventory (routeros, unifi, bmc, qnap, appliances groups)
-and are enriched from the discovery files; "Other scanned addresses" holds only addresses nothing in the repo names.
+docs/security-audit-*.md. Network devices and appliances start from the inventory (routeros, unifi, qnap,
+appliances groups) and are enriched from the discovery files; BMCs (bmc group) are server hardware, each next to
+the server it belongs to (host var bmc_of, else the name bmc-<host>, <host>-bmc or <host>-ipmi; GitHub issue #117); "Other scanned addresses" holds only addresses nothing in the repo names.
 Per site also: start order after an outage, what stops when a node, gateway, storage server or NAS goes down, port
 forwards and how to reach each host; then expirations (GitHub issue #89).
 Writes OVERVIEW.md in the repository root (--out - prints it).
@@ -462,8 +463,21 @@ def hmlib_parts(doc: dict) -> list[dict]:
     return [p for p in sites.values() if isinstance(p, dict)] if isinstance(sites, dict) else [doc]
 
 
-def device_rows(cfg: dict, st: dict, docs: dict, managed: dict, net: dict, unifi: dict, guests: Guests) -> list[dict]:
-    """Network devices of a site (GitHub issue #94): inventory hosts in the device groups first, enriched from
+def bmc_server(name: str, host_vars: dict, hosts: set) -> str:
+    """The server a BMC belongs to (GitHub issue #117): the host var bmc_of, else the naming convention bmc-<host>,
+    <host>-bmc or <host>-ipmi when that host is in the inventory or a Proxmox node; "" when unknown."""
+    if host_vars.get("bmc_of"):
+        return str(host_vars["bmc_of"])
+    for pattern in (r"bmc-(.+)", r"(.+)-bmc", r"(.+)-ipmi"):
+        m = re.fullmatch(pattern, name, re.I)
+        if m and m.group(1) in hosts:
+            return m.group(1)
+    return ""
+
+
+def device_rows(cfg: dict, st: dict, docs: dict, managed: dict, net: dict, unifi: dict, guests: Guests,
+                nodes: tuple = ()) -> list[dict]:
+    """Network devices, appliances and BMCs of a site (GitHub issue #94): inventory hosts in the device groups first, enriched from
     routeros.json, unifi.json, bmc.json, updates.json (QNAP) and nmap; then discovered devices not in the
     inventory. Model (GitHub issue #104): the host var hm_model, else the audit/controller/BMC/QNAP data, else what
     ssh_probe.py read, else the Proxmox guest it runs as; an nmap OS guess is never a model, only a labelled guess
@@ -507,12 +521,13 @@ def device_rows(cfg: dict, st: dict, docs: dict, managed: dict, net: dict, unifi
                 r["state"] = "no data (unifi-info.yml)"
         elif kind == "BMC":
             d = bmc.get(h)
+            r["server"] = bmc_server(h, v, set(managed) | set(nodes))
             if d:
                 r.update(model=d.get("model") or "", firmware=d.get("bmc_firmware") or "",
-                         state=f"health {bmc_text(bmc_health(d, v))}, power {d.get('power_state') or '?'}"
-                         + (f" ({stamp(d.get('collected_at'))})" if d.get("collected_at") else ""))
+                         health=bmc_text(bmc_health(d, v)), power=d.get("power_state") or "?",
+                         seen=max(stamp(d.get("collected_at")), r["seen"]))
             else:
-                r["state"] = "no data (bmc-info.yml)"
+                r["health"] = "no data (bmc-info.yml)"
         elif kind == "QNAP NAS":
             d = upd.get(h) or {}
             fw = d.get("firmware") or {}
@@ -959,6 +974,16 @@ def access(cfg: dict, st: dict, net: dict, managed: dict, known: Known) -> list[
         table(["Host", "Address", "SSH", "Web UI", "Other services"], out), len(out), "host") + [""]
 
 
+def server_hardware(bmcs: list[dict], sub) -> list[str]:
+    """The site's BMCs as server hardware (GitHub issue #117), each with the server it belongs to."""
+    if not bmcs:
+        return []
+    return sub("Server hardware") + table(
+        ["Server", "BMC", "Model", "Address", "Firmware", "Health", "Power", "Last seen"],
+        [[d["server"], d["name"], d["model"], d["address"], d["firmware"], d.get("health"), d.get("power"), d["seen"]]
+         for d in bmcs]) + [""]
+
+
 def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, all_guests: Guests,
                  multi: bool = False) -> tuple[list[str], dict]:
     root = Path(cfg["_root"])
@@ -975,7 +1000,9 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
         g["_ip"], g["_tag"], g["_vlan"] = guest_net(g, cfg, st["name"], prefer if is_ip(prefer) else None, vl)
         g["_links"] = guest_links(g)
         guests_by.setdefault(g.get("node"), []).append(g)
-    devices = device_rows(cfg, st, docs, managed, net, unifi, all_guests)
+    devices = device_rows(cfg, st, docs, managed, net, unifi, all_guests,
+                          tuple(n.get("node") for n in px.get("nodes") or [] if n.get("node")))
+    hardware = sorted((d for d in devices if d["kind"] == "BMC"), key=lambda d: (not d["server"], d["server"], d["name"]))
     stats = {"nodes": len(px.get("nodes") or []), "guests": len(guests), "vlans": len(vl), "warnings": [],
              "memory": 0, "storage": 0, "backup": 0, "backup_old": 0}
     role = roles(cfg, st, px, guests, vl, known, managed)
@@ -1040,6 +1067,7 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
         if not any(n.get("pveversion") or n.get("kernel") for n in px.get("nodes") or []):   # snapshot before 0.34.0
             head, rows = head[:2] + head[4:], [r[:2] + r[4:] for r in rows]
         out += sub("Proxmox nodes") + table(head, rows) + [""]
+        out += server_hardware(hardware, sub)
         rows, seen = [], set()
         for s in sorted(px.get("storage") or [], key=lambda s: (s.get("storage") or "", s.get("node") or "")):
             key = s.get("storage") if s.get("shared") else (s.get("storage"), s.get("node"))
@@ -1097,11 +1125,13 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
     if imp:
         out += sub("If it goes down") + imp
 
-    # devices
-    if devices:
-        out += sub("Network devices") + table(
+    if not px:
+        out += server_hardware(hardware, sub)
+    network = [d for d in devices if d["kind"] != "BMC"]
+    if network:
+        out += sub("Network devices and appliances") + table(
             ["Kind", "Name", "Model", "Address", "Firmware", "State", "Last seen"],
-            [[d["kind"], d["name"], d["model"], d["address"], d["firmware"], d["state"], d["seen"]] for d in devices]) + [""]
+            [[d["kind"], d["name"], d["model"], d["address"], d["firmware"], d["state"], d["seen"]] for d in network]) + [""]
     fwd = port_forwards(cfg, st, docs, known)
     if fwd:
         out += sub("Port forwards") + fwd
@@ -1335,7 +1365,11 @@ def health(cfg: dict, root: Path, docs: dict, managed: dict, warnings: list[str]
             if nocheck:
                 out += ["", "Not checked yet (`check-updates.yml`): " + ", ".join(cell(h) for h in nocheck) + "."]
             if other:
-                out += ["", "Not covered by `check-updates.yml` (see Network devices): " + ", ".join(cell(h) for h in other) + "."]
+                kinds = {kind_of(groups_of(managed[h]), DEVICE_KINDS) for h in other}
+                see = [n for n, hit in (("Server hardware", "BMC" in kinds),
+                                        ("Network devices and appliances", bool(kinds - {"BMC", ""}))) if hit]
+                out += ["", "Not covered by `check-updates.yml`" + (f" (see {' and '.join(see)})" if see else "") + ": "
+                        + ", ".join(cell(h) for h in other) + "."]
         elif missing:
             out += ["", "Not checked: " + ", ".join(cell(h) for h in missing) + "."]
         out.append("")
