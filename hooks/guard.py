@@ -406,6 +406,32 @@ def check_nmap(argv: list[str], cwd: str, label: str = "nmap") -> list[tuple[str
     return [(DENY, f"Scan refused: {p}") for p in problems]
 
 
+def option_value(args: list[str], name: str) -> str | None:
+    """The value of option name (`--site x` or `--site=x`) in args, None when absent."""
+    for i, a in enumerate(args):
+        if a == name and i + 1 < len(args):
+            return args[i + 1]
+        if a.startswith(name + "="):
+            return a.split("=", 1)[1]
+    return None
+
+
+def check_site_scan(site: str, cwd: str) -> list[tuple[str, str]]:
+    """`nmap_scan.py --site N` without targets scans the site's ranges inside network.authorized_ranges: allowed
+    when the site exists and some of its ranges are authorized, the same computation the script makes."""
+    if UNKNOWN in site:
+        return [(ASK, "nmap_scan.py gets its site at run time; this hook cannot verify the scan targets.")]
+    root = hmlib.find_repo_root(cwd)
+    if not root:
+        return [(ASK, "nmap_scan.py outside a homelab-infrastructure repo: no homelab.yaml, so no authorized ranges "
+                      "to check against.")]
+    try:
+        targets, _ = hmlib.site_scan_ranges(hmlib.load_config(root), site)
+    except hmlib.ConfigError as e:
+        return [(DENY, f"Scan refused: {e}")]
+    return [] if targets else [(DENY, f"Scan refused: no range of site {site} is inside network.authorized_ranges.")]
+
+
 def check_tofu_apply(tok: list[str], cwd: str) -> list[tuple[str, str]]:
     """`tofu apply` is fine only with a saved plan that deletes/replaces nothing."""
     if "apply" not in tok:
@@ -653,7 +679,10 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
             args = tok[tok.index(next(t for t in tok if t.endswith(script.name))) + 1:]
             targets = [a for i, a in enumerate(args) if not a.startswith("-")
                        and (i == 0 or args[i - 1] not in value_opts)]
-            if targets or script.name == "nmap_scan.py":  # ssh_probe.py without targets: hosts from network.json
+            site = option_value(args, "--site")
+            if not targets and site is not None and script.name == "nmap_scan.py":
+                findings += check_site_scan(site, cwd)  # the site's authorized ranges (GitHub issue #118)
+            elif targets or script.name == "nmap_scan.py":  # ssh_probe.py without targets: hosts from network.json
                 findings += check_nmap(targets, cwd, label=script.name)
         elif script and depth < 2:
             try:
