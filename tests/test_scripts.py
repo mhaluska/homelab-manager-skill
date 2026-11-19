@@ -1585,6 +1585,32 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
                 "backup_jobs": [{"id": "daily", "enabled": True, "all": False, "vmid": [101]}]}
         Path(self.d, "discovery/proxmox.json").write_text(json.dumps(snap))
 
+    def test_hosts_missing_from_ping_sweep_listed_apart(self):  # GitHub issue #127
+        r = run("config_set.py", "network.authorized_ranges+=10.9.20.0/24", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        Path(self.d, "discovery/network.json").write_text(json.dumps({"hosts": {
+            "10.9.20.42": {"ip": "10.9.20.42", "device_type_guess": "linux", "last_seen": "2026-11-18T10:00:00+00:00"},
+            "10.9.20.44": {"ip": "10.9.20.44", "device_type_guess": "phone", "hostnames": ["old-lease"],
+                           "last_seen": "2026-11-01T10:00:00+00:00",
+                           "missing_since": "2026-11-18T10:00:00+00:00"}}}))
+        r = run("drift_report.py", "--no-tofu", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sec = r.stdout[r.stdout.index("## Network devices not in managed inventory"):]
+        current, gone = sec.split("Not answering since the last ping sweep (1)")
+        self.assertIn("1 device(s)", current)
+        self.assertIn("- 10.9.20.42", current)
+        self.assertNotIn("10.9.20.44", current)
+        self.assertIn("- 10.9.20.44 old-lease — missing since 2026-11-18, last seen 2026-11-01", gone)
+        r = run("overview.py", "--no-ansible", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        md = Path(self.d, "OVERVIEW.md").read_text()
+        other = md[md.index("### Other scanned addresses"):]
+        current, gone = other.split("<details><summary>1 address nothing names, not answering since the last ping "
+                                    "sweep</summary>")
+        self.assertIn("| 10.9.20.42 |", current)
+        self.assertNotIn("10.9.20.44", current)
+        self.assertIn("| 10.9.20.44 | old-lease | phone | 2026-11-18 | 2026-11-01 |", gone)
+
     def test_named_unmanaged_devices(self):  # issue 100
         r = run("config_set.py", "network.authorized_ranges+=10.9.20.0/24",
                 "discovery.ignore_unmanaged+={ip: 10.9.20.40, name: Living room TV}",
@@ -3728,6 +3754,43 @@ class PerSiteScanTests(unittest.TestCase):  # GitHub #72, #66: scans know their 
         with self.assertRaises(self.h.ConfigError):   # scan scope stays IPs and CIDRs
             self.h.scan_scope({**cfg, "network": {**cfg["network"], "authorized_ranges": ["10.0.0.1-50"]}})
 
+    def test_ping_sweep_marks_missing_hosts_and_forget_drops_them(self):  # GitHub issue #127
+        nmap = lambda *a: subprocess.run([sys.executable, str(SCRIPTS / "nmap_scan.py"), *a], cwd=self.d,
+                                         env=self.env, capture_output=True, text=True)
+        net = self.h.network_file(self.d)
+        home = self.h.site(self.h.load_config(self.d), "home")
+        self.h.write_site_part(net, home, {"hosts": {ip: {"ip": ip, "last_seen": "2026-01-01T00:00:00+00:00"}
+                                                     for ip in ("10.0.0.7", "10.0.0.1", "10.0.1.7")}})
+        r = nmap("10.0.0.0/24", "--site", "home")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("1 known host(s) did not answer", r.stdout)
+        hosts = self.h.site_part(net, home, "t")["hosts"]
+        self.assertIn("missing_since", hosts["10.0.0.7"])          # inside the targets, did not answer
+        self.assertNotIn("missing_since", hosts["10.0.0.1"])       # excluded: never scanned
+        self.assertNotIn("missing_since", hosts["10.0.1.7"])       # outside the targets
+        self.assertNotIn("missing_since", hosts["10.0.0.5"])       # answered
+        first = hosts["10.0.0.7"]["missing_since"]
+        hosts["10.0.0.7"]["missing_since"] = "2026-01-01T00:00:00+00:00"
+        self.h.write_site_part(net, home, {"hosts": hosts})
+        r = nmap("10.0.0.0/24", "--site", "home", "--profile", "services")   # --open: never marks
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("did not answer", r.stdout)
+        self.assertEqual(self.h.site_part(net, home, "t")["hosts"]["10.0.0.7"]["missing_since"],
+                         "2026-01-01T00:00:00+00:00")             # the first miss is kept
+        self.assertTrue(first > "2026-01-01")
+        before = self.log.read_text()
+        self.assertNotEqual(nmap("--forget-missing", "30", "10.0.0.0/24", "--site", "home").returncode, 0)
+        r = nmap("--forget-missing", "30", "--dry-run", "--site", "home")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("10.0.0.7", r.stdout)
+        self.assertIn("10.0.0.7", self.h.site_part(net, home, "t")["hosts"])
+        r = nmap("--forget-missing", "30", "--site", "home")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Dropped 1 host(s)", r.stdout)
+        self.assertEqual(sorted(self.h.site_part(net, home, "t")["hosts"]),
+                         ["10.0.0.1", "10.0.0.5", "10.0.0.9", "10.0.1.7"])
+        self.assertEqual(self.log.read_text(), before)             # --forget-missing ran no nmap
+
     def test_site_scan_without_targets(self):  # GitHub #118: the site's ranges, clipped to the authorized ones
         r = run("config_set.py", "sites+={name: lab, ranges: [10.0.0.0/23, 10.9.0.0/24]}", cwd=self.d)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -3848,6 +3911,15 @@ class NmapInterfaceTests(unittest.TestCase):  # issue 18
         ping = self.n.merge_host(os_scan, {"ip": "10.0.10.2", "os": [], "ports": []}, "ping", "t4")
         self.assertEqual(ping["device_type_guess"], "hypervisor")
         self.assertEqual(ping["first_seen"], "t1")
+
+    def test_answer_clears_missing_mark(self):  # GitHub issue #127
+        back = self.n.merge_host({"ip": "10.0.10.2", "missing_since": "t1"}, {"ip": "10.0.10.2", "os": [], "ports": []},
+                                 "ping", "t2")
+        self.assertNotIn("missing_since", back)
+        db = {"hosts": {"10.0.10.5": {}, "10.0.10.6": {"missing_since": "t0"}, "10.0.10.1": {}, "10.0.11.2": {}}}
+        gone = self.n.mark_missing(db, ["10.0.10.0/24"], [self.n.ipaddress.ip_network("10.0.10.1/32")], {"10.0.10.5"}, "t3")
+        self.assertEqual(gone, ["10.0.10.6"])
+        self.assertEqual(db["hosts"]["10.0.10.6"]["missing_since"], "t0")
 
     # GitHub issue #28: the gateway's OS fingerprint mustn't turn a Debian VM behind it into `network`
     GW_OS = [{"name": "Linux 4.15 - 5.19", "accuracy": 92}, {"name": "MikroTik RouterOS 7.2 - 7.14 (Linux 5.6.3)",

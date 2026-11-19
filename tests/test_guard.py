@@ -160,6 +160,15 @@ class GuardNmapTests(unittest.TestCase):
             Path(r, "homelab.yaml").write_text("network:\n  authorized_ranges: []\nsites:\n  - {name: lab}\n")
             self.assertEqual(decision(f"python3 {script} --site lab", r), "deny")
 
+    def test_nmap_scan_forget_missing_scans_nothing(self):  # GitHub #127: edits network.json only
+        with Repo() as r:
+            script = ROOT / "skills/homelab-manager/scripts/nmap_scan.py"
+            self.assertIsNone(decision(f"python3 {script} --forget-missing 30 --dry-run", r))
+            self.assertIsNone(decision(f"python3 {script} --forget-missing=30 --site home", r))
+            self.assertIsNone(decision(f"python3 {script} --forget-missing 30 10.0.10.0/24", r))    # script refuses
+            self.assertEqual(decision(f"python3 {script} --forget-missing 30 192.168.0.0/24", r), "deny")
+            self.assertEqual(decision(f"python3 {script} --forget-missing 30 example.com", r), "deny")
+
     def test_ssh_probe_targets_are_scope_checked(self):  # issue 25
         with Repo() as r:
             script = ROOT / "skills/homelab-manager/scripts/ssh_probe.py"
