@@ -991,6 +991,62 @@ def server_hardware(bmcs: list[dict], sub) -> list[str]:
          for d in bmcs]) + [""]
 
 
+def scan_coverage(cfg: dict, cidr, scanned: list[str]) -> str:
+    """"" when a VLAN's CIDR lies inside network.authorized_ranges and the scan saw a host there, else "not scanned"
+    or "partly scanned" (GitHub issue #134)."""
+    try:
+        net = ipaddress.ip_network(str(cidr), strict=False)
+        auth = hmlib._networks(hmlib.get(cfg, "network.authorized_ranges", []) or [])
+    except (ValueError, hmlib.ConfigError):
+        return ""
+    if not any(in_net(ip, net) for ip in scanned):
+        return "not scanned"
+    over = [a for a in auth if a.version == net.version and a.overlaps(net)]
+    if any(net.subnet_of(a) for a in over):
+        return ""
+    inside = sum(a.num_addresses for a in collapse(over) if a.subnet_of(net))
+    return "" if inside >= net.num_addresses else "partly scanned"
+
+
+def collapse(nets: list) -> list:
+    return list(ipaddress.collapse_addresses(nets)) if nets else []
+
+
+def guest_addresses(g: dict) -> set[str]:
+    """Every address of a guest: its NICs' (config, agent, LXC) and the one it is reached at (inventory)."""
+    return {a["ip"] for a in hmlib.guest_nic_addresses(g) if is_ip(a["ip"])} | ({g["_ip"]} if is_ip(g.get("_ip")) else set())
+
+
+def vlan_usage(cfg: dict, st: dict, cidr, scanned: list[str], guests: list[dict], known: Known) -> dict:
+    """Every address the repository knows in a VLAN's CIDR, de-duplicated (GitHub issue #134): {guest, infra,
+    other: set of IPs, all, named: {guest name: its IPs known by name}, scan}. guest = any NIC address of this site's guests; infra = what the repo manages
+    or names otherwise (inventory hosts and hm_extra_ips, Proxmox nodes, gateways, VIPs, RouterOS/UniFi, NAS
+    containers); other = scanned hosts nothing names and discovery.ignore_unmanaged devices."""
+    inside = lambda ip: is_ip(ip) and in_net(ip, cidr)
+    def here(ip):   # Known is repo-wide: an address another site's ranges claim is that site's
+        other = hmlib.site_of_address(cfg, ip)
+        return other is None or other["name"] == st["name"]
+    guest = {ip for g in guests for ip in guest_addresses(g) if inside(ip)}
+    # an address the repo knows by a guest's name (a CHR's RouterOS interface, hm_extra_ips) is that guest's
+    names = {str(g.get("name")) for g in guests if g.get("name")}
+    named: dict[str, set] = {}
+    for ip, (name, _) in known.addr.items():
+        if name in names and inside(ip) and here(ip):
+            named.setdefault(name, set()).add(ip)
+            guest.add(ip)
+    infra = {ip for ip, (_, kind) in known.addr.items() if kind != "known device" and inside(ip) and here(ip)} - guest
+    ignored = set()   # single addresses only: a range a.b.c.x-y or a CIDR is a reservation, not devices in use
+    for item in hmlib.get(cfg, hmlib.IGNORE_KEY, []) or []:
+        ip = str((item.get("ip") if isinstance(item, dict) else item) or "").strip().removesuffix("/32")
+        if is_ip(ip) and (not isinstance(item, dict) or item.get("site") in (None, "", st["name"])):
+            ignored.add(ip)
+    other = ({ip for ip in scanned if inside(ip)}
+             | {ip for ip, (_, kind) in known.addr.items() if kind == "known device" and inside(ip) and here(ip)}
+             | {ip for ip in ignored if inside(ip)}) - guest - infra
+    return {"guest": guest, "infra": infra, "other": other, "all": guest | infra | other, "named": named,
+            "scan": scan_coverage(cfg, cidr, scanned)}
+
+
 def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, all_guests: Guests,
                  multi: bool = False) -> tuple[list[str], dict]:
     root = Path(cfg["_root"])
@@ -1041,21 +1097,35 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
     guest_ips = {g["_ip"] for g in guests if g["_ip"]}
     used, rows = {}, []
     for v in vl:
-        addrs = {ip for ip, _ in scanned if in_net(ip, v.get("cidr"))} | {ip for ip in guest_ips if in_net(ip, v.get("cidr"))}
-        used[v["id"]] = len(addrs)
+        u = vlan_usage(cfg, st, v.get("cidr"), [ip for ip, _ in scanned], guests, known)
+        used[v["id"]] = len(u["all"])
         try:
             size = max(ipaddress.ip_network(str(v.get("cidr")), strict=False).num_addresses - 2, 1)
         except ValueError:
             size = None
-        rows.append([v["id"], v.get("name"), v.get("cidr"), v.get("gw"),
-                     len([g for g in guests if v["id"] in {t for t, _ in g["_links"]}   # every NIC (GitHub issue #107)
-                          or (g["_tag"] is None and g["_ip"] and in_net(g["_ip"], v.get("cidr")))]),
-                     f"{len(addrs)}/{size}" if size else len(addrs)])
+        count = f"{len(u['all'])}/{size}" if size else str(len(u["all"]))
+        on = [g for g in guests if v["id"] in {t for t, _ in g["_links"]}   # every NIC (GitHub issue #107)
+              or (g["_tag"] is None and g["_ip"] and in_net(g["_ip"], v.get("cidr")))]
+        blind = sum(1 for g in on if not (guest_addresses(g) | u["named"].get(str(g.get("name")), set())) & u["guest"])
+        parts = [(len(u["guest"]), "guest IP", "guest IPs"), (len(u["infra"]), "infra", "infra"),
+                 (len(u["other"]), "other", "other")]
+        use = " · ".join(f"{n} {one if n == 1 else many}" for n, one, many in parts if n)
+        if blind and v.get("cidr"):   # no agent, DHCP, … (GitHub issue #134)
+            use += f" (+{blind} guest{'s' if blind > 1 else ''}, address unknown)"
+        rows.append([v["id"], v.get("name"), v.get("cidr"), v.get("gw"), len(on),
+                     count + (f" ({u['scan']})" if u["scan"] and v.get("cidr") else ""), use.strip() or "–"])
     gateways = {v["id"]: (known.addr.get(v["gw"], ("", ""))[0] if known.addr.get(v["gw"], ("", ""))[1] != "gateway"
                           else "") or v["gw"] if is_ip(v.get("gw")) else v.get("gw") for v in vl if v.get("gw")}
     out += sub("Map") + site_map(st, px, vl, guests_by, gateways, devices, used) + [""]
     if vl:
-        out += sub("Network") + table(["VLAN", "Name", "CIDR", "Gateway", "Guests", "Addresses used"], rows) + [""]
+        out += sub("Network") + table(["VLAN", "Name", "CIDR", "Gateway", "Guests", "Addresses used", "In use by"],
+                                      rows) + [""]
+        out += ["Addresses used: every address the repository knows in the CIDR, scanned or not. Guest IPs are any "
+                "NIC of a Proxmox guest; infra is what the inventory, Proxmox nodes, gateways, VIPs, network devices and "
+                "NAS containers use; other is scanned hosts nothing names and `discovery.ignore_unmanaged` devices."
+                + (" Not scanned / partly scanned: the CIDR is (partly) outside `network.authorized_ranges`, or the scan "
+                   "found no host there, so only the addresses the repository knows are counted."
+                   if any(r[5].endswith("scanned)") for r in rows) else ""), ""]
 
     # Proxmox
     if px:
