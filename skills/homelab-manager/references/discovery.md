@@ -45,7 +45,9 @@ rather than `verify_tls: false`.
 ## Network discovery (nmap)
 
 ```bash
-python3 $HM/scripts/nmap_scan.py 10.0.10.0/24                     # ping sweep (default)
+python3 $HM/scripts/nmap_scan.py 10.0.10.0/24                     # ping sweep (default): ICMP, no root, no nmap
+python3 $HM/scripts/nmap_scan.py 10.0.10.0/24 --tcp               # + nmap's TCP probes: a device ICMP missed
+python3 $HM/scripts/nmap_scan.py 10.0.10.0/24 --arp               # + the Mac's ARP table (its own segment only)
 python3 $HM/scripts/nmap_scan.py 10.0.10.0/24 --profile services  # top 200 TCP ports + versions, no root
 python3 $HM/scripts/nmap_scan.py 10.0.10.5 --profile os           # + OS detection; sudo → user approval
 python3 $HM/scripts/nmap_scan.py 10.0.10.0/24 --profile os --only-live  # OS-scan only hosts already seen up
@@ -63,8 +65,23 @@ python3 $HM/scripts/nmap_scan.py --site home --profile services --only-live  # a
   next to other sites, a site without `ranges` is refused. Explicit targets outside `authorized_ranges` are still refused.
   The script and the guard hook both enforce this. If the user asks for a range that isn't
   authorized, say so and offer to add it to `homelab.yaml` **if they confirm they own it**.
+- The ping sweep is an ICMP echo sweep `nmap_scan.py` sends itself (unprivileged ICMP socket, no root, no nmap).
+  It cannot see hosts that drop ICMP: Windows with its firewall on, macOS in stealth mode, some NAS boxes. When
+  the user says a device they know is missing, widen in this order, on the range the device should be in (not a
+  whole site: TCP probes wait out a timeout on every empty address, which takes many minutes on routed /24s):
+  1. `--tcp`: also `nmap -sn` with TCP connect probes to 22, 80, 443, 445, 3389, 5000, 8080, 8443, 62078.
+  2. `--arp`, only when the range is on the Mac's own network segment (no gateway; refused otherwise): also
+     the Mac's ARP table after the sweep, which has every host that answered ARP — even one that drops ICMP and
+     every port. Entries get the MAC and the vendor from nmap's MAC prefix list.
+  3. Still missing: on a routed range the router knows it (`routeros_audit.py --leases` reads its ARP table), or
+     the user may run a root ARP sweep themselves (`sudo nmap -sn <range>` on the Mac's own segment).
+  Each host records the probes that answered it in `discovered_by` (`icmp`, `tcp`, `arp`). Then scan a host found
+  this way with `--profile services --no-ping` (nmap `-Pn`, at most 16 addresses): nmap's own ping misses it too.
+  `--only-live` skips nmap's ping the same way for the known hosts of a range (not those marked missing).
 - A ping sweep marks the known hosts inside its targets that did not answer with `missing_since` (the deeper
-  profiles never mark: `--open` hides hosts without open ports); answering clears it. drift.md and OVERVIEW.md list
+  profiles never mark: `--open` hides hosts without open ports); answering clears it. A host found before only
+  by probes this sweep didn't send (a `--tcp`-only host in a plain ICMP sweep, or one with no `discovered_by`,
+  found by nmap before 0.43.0) is not marked. drift.md and OVERVIEW.md list
   them apart from current devices — usually an old DHCP lease. `nmap_scan.py --forget-missing DAYS --dry-run
   [--site N]` lists hosts missing longer than that; without `--dry-run` it drops them (with the user's yes).
 - "My management subnet": resolve the name from `homelab.yaml` comments/ranges or ask which
