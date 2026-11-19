@@ -135,6 +135,9 @@ class GuardNmapTests(unittest.TestCase):
             self.assertIsNone(decision(f"python3 {script} 10.0.10.0/24 --site offsite", r))   # GitHub #72: a value
             self.assertIsNone(decision(f"python3 {script} --site offsite 10.0.10.0/24", r))
             self.assertEqual(decision(f"python3 {script} --site offsite 192.168.0.0/24", r), "deny")
+            self.assertIsNone(decision(f"python3 {script} 10.0.10.0/24 --tcp --arp", r))       # GitHub #128: flags,
+            self.assertEqual(decision(f"python3 {script} --tcp 192.168.0.0/24 --arp", r), "deny")   # not targets
+            self.assertIsNone(decision(f"python3 {script} 10.0.10.5 --profile services --no-ping", r))
 
     def test_nmap_scan_site_without_targets(self):  # GitHub #118: the site's ranges inside authorized_ranges
         with Repo() as r:

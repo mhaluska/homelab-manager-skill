@@ -3673,9 +3673,32 @@ args = sys.argv[1:]
 with open(os.environ["FAKE_NMAP_LOG"], "a") as f:
     f.write(json.dumps(args) + "\n")
 out = args[args.index("-oX") + 1]
-rows = "".join(f'<host><status state="up" reason="echo-reply"/><address addr="{ip}" addrtype="ipv4"/></host>'
+rows = "".join(f'<host><status state="up" reason="syn-ack"/><address addr="{ip}" addrtype="ipv4"/></host>'
                for ip in ("10.0.0.5", "10.0.0.9"))
 open(out, "w").write(f"<nmaprun>{rows}</nmaprun>")
+'''
+
+# runs nmap_scan.main() with the probes nmap_scan sends itself faked, so tests send no packets (GitHub issue #128):
+# FAKE_ICMP = addresses that answer the ICMP sweep, FAKE_ARP = `arp -an` output, FAKE_ROUTE = "en0" or "en0,gw"
+NMAP_SCAN_RUNNER = r'''
+import json, os, sys
+sys.path.insert(0, os.environ["HM_SCRIPTS"])
+import nmap_scan
+answers = set(filter(None, os.environ.get("FAKE_ICMP", "").split(",")))
+def fake_icmp(addrs, **kw):
+    if os.environ.get("FAKE_ICMP") == "none":   # no unprivileged ICMP socket
+        return None
+    with open(os.environ["FAKE_NMAP_LOG"] + ".icmp", "a") as f:
+        f.write(json.dumps(addrs) + "\n")
+    return {a for a in addrs if a in answers}
+nmap_scan.icmp_sweep = fake_icmp
+nmap_scan.arp_table = lambda: nmap_scan.parse_arp(os.environ.get("FAKE_ARP", ""))
+if "FAKE_ROUTE" in os.environ:
+    iface, _, gw = os.environ["FAKE_ROUTE"].partition(",")
+    nmap_scan.route_get = lambda ip: (iface or None, gw == "gw")
+nmap_scan.reverse_names = lambda ips, **kw: {}
+sys.argv = ["nmap_scan.py", *sys.argv[1:]]
+sys.exit(nmap_scan.main())
 '''
 
 
@@ -3694,14 +3717,20 @@ class PerSiteScanTests(unittest.TestCase):  # GitHub #72, #66: scans know their 
         (bin_ / "nmap").write_text(FAKE_NMAP)
         (bin_ / "nmap").chmod(0o755)
         self.log = self.d / "nmap.log"
-        self.env = {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "FAKE_NMAP_LOG": str(self.log)}
+        self.env = {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "FAKE_NMAP_LOG": str(self.log),
+                    "HM_SCRIPTS": str(SCRIPTS), "FAKE_ICMP": "10.0.0.5,10.0.0.9"}
+        self.runner = bin_ / "nmap_scan_runner.py"
+        self.runner.write_text(NMAP_SCAN_RUNNER)
         sys.path.insert(0, str(SCRIPTS))
         import hmlib
         self.h = hmlib
 
+    def nmap(self, *args, **env):
+        return subprocess.run([sys.executable, str(self.runner), *args], cwd=self.d, env={**self.env, **env},
+                              capture_output=True, text=True)
+
     def scan(self, *args):
-        r = subprocess.run([sys.executable, str(SCRIPTS / "nmap_scan.py"), "10.0.0.0/24", *args], cwd=self.d,
-                           env=self.env, capture_output=True, text=True)
+        r = self.nmap("10.0.0.0/24", "--tcp", *args)
         self.assertEqual(r.returncode, 0, r.stderr)
         last = json.loads(self.log.read_text().splitlines()[-1])
         return last[last.index("--exclude") + 1], r
@@ -3755,13 +3784,12 @@ class PerSiteScanTests(unittest.TestCase):  # GitHub #72, #66: scans know their 
             self.h.scan_scope({**cfg, "network": {**cfg["network"], "authorized_ranges": ["10.0.0.1-50"]}})
 
     def test_ping_sweep_marks_missing_hosts_and_forget_drops_them(self):  # GitHub issue #127
-        nmap = lambda *a: subprocess.run([sys.executable, str(SCRIPTS / "nmap_scan.py"), *a], cwd=self.d,
-                                         env=self.env, capture_output=True, text=True)
+        nmap = self.nmap
         net = self.h.network_file(self.d)
         home = self.h.site(self.h.load_config(self.d), "home")
         self.h.write_site_part(net, home, {"hosts": {ip: {"ip": ip, "last_seen": "2026-01-01T00:00:00+00:00"}
                                                      for ip in ("10.0.0.7", "10.0.0.1", "10.0.1.7")}})
-        r = nmap("10.0.0.0/24", "--site", "home")
+        r = nmap("10.0.0.0/24", "--site", "home", "--tcp")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("1 known host(s) did not answer", r.stdout)
         hosts = self.h.site_part(net, home, "t")["hosts"]
@@ -3791,6 +3819,96 @@ class PerSiteScanTests(unittest.TestCase):  # GitHub #72, #66: scans know their 
                          ["10.0.0.1", "10.0.0.5", "10.0.0.9", "10.0.1.7"])
         self.assertEqual(self.log.read_text(), before)             # --forget-missing ran no nmap
 
+    def test_ping_is_icmp_first_then_tcp_and_arp_on_request(self):  # GitHub issue #128
+        net = self.h.network_file(self.d)
+        home = self.h.site(self.h.load_config(self.d), "home")
+        hosts = lambda: self.h.site_part(net, home, "t")["hosts"]
+        r = self.nmap("10.0.0.0/24", "--site", "home")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(self.log.exists())                                    # ICMP only: no nmap
+        self.assertIn("2 host(s) up (ICMP: 2)", r.stdout)
+        self.assertIn("Re-run with --tcp", r.stdout)
+        self.assertNotIn("--arp", r.stdout)                                    # routed (or unknown): no ARP hint
+        r = self.nmap("10.0.0.0/24", "--site", "home", FAKE_ROUTE="en0")
+        self.assertIn("or --arp (the Mac's ARP table", r.stdout)
+        swept = json.loads(Path(str(self.log) + ".icmp").read_text().splitlines()[-1])
+        self.assertEqual(len(swept), 253)                                      # .1-.254 minus the excluded .1
+        self.assertNotIn("10.0.0.1", swept)
+        self.assertEqual(hosts()["10.0.0.5"]["discovered_by"], ["icmp"])
+        r = self.nmap("10.0.0.0/24", "--site", "home", "--tcp", FAKE_ICMP="10.0.0.9")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("-PS22,80,443", " ".join(json.loads(self.log.read_text().splitlines()[-1])))
+        self.assertIn("(ICMP: 1, TCP: 2)", r.stdout)
+        self.assertEqual(hosts()["10.0.0.5"]["discovered_by"], ["tcp"])       # ICMP was sent and not answered
+        self.assertEqual(hosts()["10.0.0.9"]["discovered_by"], ["icmp", "tcp"])
+        r = self.nmap("10.0.0.0/24", "--site", "home", FAKE_ICMP="10.0.0.5")   # ICMP only again
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("missing_since", hosts()["10.0.0.9"])                    # answered ICMP before: missing now
+        self.assertEqual(hosts()["10.0.0.5"]["discovered_by"], ["icmp", "tcp"])  # tcp not sent: kept
+        h = hosts()
+        h["10.0.0.6"] = {"ip": "10.0.0.6", "discovered_by": ["tcp"]}
+        h["10.0.0.7"] = {"ip": "10.0.0.7"}                                      # from before 0.43.0
+        self.h.write_site_part(net, home, {"hosts": h})
+        r = self.nmap("10.0.0.0/24", "--site", "home", FAKE_ICMP="10.0.0.5")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("missing_since", hosts()["10.0.0.6"])                 # only TCP ever saw it
+        self.assertNotIn("missing_since", hosts()["10.0.0.7"])                 # nmap's TCP probes found it
+        r = self.nmap("10.0.0.0/24", "--site", "home", "--tcp", FAKE_ICMP="10.0.0.5")
+        self.assertIn("missing_since", hosts()["10.0.0.6"])
+        self.assertIn("missing_since", hosts()["10.0.0.7"])
+
+        r = self.nmap("10.0.0.0/24", "--site", "home", "--arp", FAKE_ROUTE="en0,gw")
+        self.assertEqual(r.returncode, 4)
+        self.assertIn("reached through a gateway", r.stderr)
+        arp = ("? (10.0.0.20) at 0:c:29:a:b:c on en0 ifscope [ethernet]\n"
+               "? (10.0.0.9) at 52:54:0:12:34:56 on en0 ifscope [ethernet]\n"
+               "? (10.0.0.30) at (incomplete) on en0 ifscope [ethernet]\n"
+               "? (10.0.0.40) at 0:c:29:a:b:d on en1 ifscope [ethernet]\n"
+               "? (10.0.0.1) at 0:c:29:a:b:e on en0 ifscope [ethernet]\n"
+               "? (10.0.1.20) at 0:c:29:a:b:f on en0 ifscope [ethernet]\n")
+        r = self.nmap("10.0.0.0/24", "--site", "home", "--arp", FAKE_ROUTE="en0", FAKE_ARP=arp, FAKE_ICMP="10.0.0.9")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("(ICMP: 1, ARP: 2)", r.stdout)
+        self.assertEqual(hosts()["10.0.0.20"]["discovered_by"], ["arp"])
+        self.assertEqual(hosts()["10.0.0.20"]["mac"], "00:0C:29:0A:0B:0C")
+        self.assertEqual(hosts()["10.0.0.9"]["discovered_by"], ["arp", "icmp", "tcp"])
+        for ip in ("10.0.0.30", "10.0.0.40", "10.0.0.1", "10.0.1.20"):          # incomplete, other NIC, excluded,
+            self.assertNotIn(ip, hosts())                                       # outside the targets
+        self.assertIn("Re-run with --tcp", r.stdout)
+        self.assertNotIn("--arp (", r.stdout)
+        r = self.nmap("10.0.0.0/24", "--site", "home", "--arp", "--tcp", FAKE_ROUTE="en0", FAKE_ARP=arp)
+        self.assertNotIn("Re-run", r.stdout)                                   # every probe sent
+
+        r = self.nmap("10.0.0.0/24", "--site", "home", FAKE_ICMP="none")       # no ICMP socket: nmap's probes
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("(TCP: 2)", r.stdout)
+        self.assertNotIn("missing_since", hosts()["10.0.0.20"])                # ARP-only: not probed this time
+
+    def test_no_ping_and_profile_options(self):  # GitHub issue #128
+        r = self.nmap("10.0.0.5", "--no-ping")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("--no-ping goes with --profile services or os", r.stderr)
+        for opt in ("--tcp", "--arp"):
+            r = self.nmap("10.0.0.5", "--profile", "services", opt)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("go with the ping profile", r.stderr)
+        r = self.nmap("10.0.0.0/24", "--profile", "services", "--no-ping")
+        self.assertEqual(r.returncode, 4)
+        self.assertIn("at most 16 addresses", r.stderr)
+        self.assertFalse(self.log.exists())
+        r = self.nmap("10.0.0.16/28", "--profile", "services", "--no-ping")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("-Pn", json.loads(self.log.read_text().splitlines()[-1]))
+        r = self.nmap("10.0.0.0/24", "--profile", "services")
+        self.assertNotIn("-Pn", json.loads(self.log.read_text().splitlines()[-1]))
+        net = self.h.network_file(self.d)
+        home = self.h.site(self.h.load_config(self.d), "home")
+        self.h.write_site_part(net, home, {"hosts": {"10.0.0.5": {"ip": "10.0.0.5"},
+                                                     "10.0.0.6": {"ip": "10.0.0.6", "missing_since": "2026-01-01"}}})
+        r = self.nmap("10.0.0.0/24", "--site", "home", "--profile", "services", "--only-live")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(self.log.read_text().splitlines()[-1])[-1:], ["10.0.0.5"])   # not the missing
+
     def test_site_scan_without_targets(self):  # GitHub #118: the site's ranges, clipped to the authorized ones
         r = run("config_set.py", "sites+={name: lab, ranges: [10.0.0.0/23, 10.9.0.0/24]}", cwd=self.d)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -3805,8 +3923,7 @@ class PerSiteScanTests(unittest.TestCase):  # GitHub #72, #66: scans know their 
             self.h.site_scan_ranges({"network": net, "sites": [{"name": "home"}, {"name": "lab"}]}, "lab")
         only = {"network": net, "sites": [{"name": "home"}]}
         self.assertEqual(self.h.site_scan_ranges(only, "home"), (["10.0.0.0/16"], []))   # GitHub #125
-        nmap = lambda *a: subprocess.run([sys.executable, str(SCRIPTS / "nmap_scan.py"), *a], cwd=self.d,
-                                         env=self.env, capture_output=True, text=True)
+        nmap = self.nmap
         r = nmap("--site", "lab", "--profile", "services")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads(self.log.read_text().splitlines()[-1])[-1], "10.0.0.0/24")
@@ -3814,9 +3931,10 @@ class PerSiteScanTests(unittest.TestCase):  # GitHub #72, #66: scans know their 
                       "10.9.0.0/24", r.stderr)
         self.assertNotIn("is this the right --site", r.stderr)
         self.assertEqual(sorted(json.loads((self.d / "discovery/network.json").read_text())["sites"]), ["lab"])
-        r = nmap("--site=lab", "--only-live")
+        r = nmap("--site=lab", "--only-live", "--profile", "services")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads(self.log.read_text().splitlines()[-1])[-2:], ["10.0.0.5", "10.0.0.9"])
+        self.assertIn("-Pn", json.loads(self.log.read_text().splitlines()[-1]))   # known hosts: no ping (#128)
         r = nmap("10.9.0.0/24", "--site", "lab")                                   # explicit targets: still refused
         self.assertEqual(r.returncode, 4)
         self.assertIn("outside the authorized ranges", r.stderr)
@@ -3857,6 +3975,73 @@ class PerSiteScanTests(unittest.TestCase):  # GitHub #72, #66: scans know their 
         import upgrade_notes
         note = next(n for n in upgrade_notes.all_notes() if n["id"] == "network-scans-per-site")
         self.assertTrue(upgrade_notes._check(note, self.h.load_config(self.d), self.d)[0])
+
+
+class NmapLocalProbeTests(unittest.TestCase):  # GitHub issue #128
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import nmap_scan
+        import ipaddress
+        self.n, self.ip = nmap_scan, ipaddress
+
+    def test_sweep_addresses(self):
+        net = self.ip.ip_network
+        self.assertEqual(len(self.n.sweep_addresses(["10.0.0.0/24"], [])), 254)
+        self.assertEqual(self.n.sweep_addresses(["10.0.0.0/24"], [net("10.0.0.0/25"), net("10.0.0.128/26"),
+                                                                  net("10.0.0.192/27"), net("10.0.0.224/28"),
+                                                                  net("10.0.0.240/29")]),
+                         [f"10.0.0.{i}" for i in range(248, 255)])
+        self.assertEqual(self.n.sweep_addresses(["10.0.0.7", "10.0.0.6-8", "10.0.0.10/31"], []),
+                         ["10.0.0.7", "10.0.0.6", "10.0.0.8", "10.0.0.10", "10.0.0.11"])
+        self.assertEqual(len(self.n.sweep_addresses(["10.0.0.0/16"], [], limit=1000)), 1000)
+        self.assertEqual(self.n.sweep_addresses(["fd00::/120"], []), [])        # ICMP sweep: IPv4 only
+
+    def test_icmp_reply_type(self):
+        echo = bytes([0, 0, 0, 0, 0x12, 0x34, 0, 1])
+        self.assertEqual(self.n.icmp_reply_type(echo), 0)                       # Linux: no IP header
+        self.assertEqual(self.n.icmp_reply_type(bytes([0x45]) + bytes(19) + echo), 0)   # macOS: with it
+        self.assertEqual(self.n.icmp_reply_type(bytes([0x46]) + bytes(23) + bytes([3, 1, 0, 0])), 3)
+        self.assertIsNone(self.n.icmp_reply_type(b""))
+        hdr = bytes([8, 0, 0, 0, 0x12, 0x34, 0, 1]) + b"homelab-manager"
+        pkt = hdr[:2] + self.n._icmp_checksum(hdr).to_bytes(2, "big") + hdr[4:]
+        self.assertEqual(self.n._icmp_checksum(pkt), 0)
+
+    def test_parse_arp(self):
+        out = ("? (192.0.2.5) at 8:55:31:2b:39:83 on en0 ifscope [ethernet]\n"
+               "? (192.0.2.6) at (incomplete) on en0 ifscope [ethernet]\n"
+               "? (192.0.2.7) at d0:11:e5:94:5:95 on en0 ifscope permanent [ethernet]\n"
+               "? (192.0.2.255) at ff:ff:ff:ff:ff:ff on en0 ifscope [ethernet]\n"
+               "? (224.0.0.251) at 1:0:5e:0:0:fb on en0 ifscope permanent [ethernet]\n"
+               "? (192.0.2.8) at 0:0:5e:0:1:1 on en0 ifscope [ethernet]\n"
+               "gw.lan (198.51.100.1) at aa:bb:cc:dd:ee:ff [ether] on eth0\n")        # Linux net-tools
+        self.assertEqual(self.n.parse_arp(out), {"192.0.2.5": ("08:55:31:2B:39:83", "en0"),
+                                                 "192.0.2.8": ("00:00:5E:00:01:01", "en0"),
+                                                 "198.51.100.1": ("AA:BB:CC:DD:EE:FF", "eth0")})
+
+    def test_arp_hosts_and_proxy_arp(self):
+        table = {f"10.0.0.{i}": (f"00:00:5E:00:01:{i:02X}", "en0") for i in range(2, 6)}
+        table["10.0.0.9"] = ("00:00:5E:00:01:09", "en1")
+        addrs = {f"10.0.0.{i}" for i in range(1, 255)}
+        found, proxy = self.n.arp_hosts(table, {"en0"}, addrs, {"10.0.0.2"})
+        self.assertEqual(sorted(found), ["10.0.0.3", "10.0.0.4", "10.0.0.5"])
+        self.assertIsNone(proxy)
+        same = {f"10.0.0.{i}": ("00:00:5E:00:01:01", "en0") for i in range(2, 40)}
+        self.assertEqual(self.n.arp_hosts(same, {"en0"}, addrs, set()), ({}, "00:00:5E:00:01:01"))
+
+    def test_mac_vendor(self):
+        vendors = {"000C29": "VMware", "0050C2A": "Longer", "70B3D5123": "Longest"}
+        self.assertEqual(self.n.mac_vendor("00:0C:29:0A:0B:0C", vendors), "VMware")
+        self.assertEqual(self.n.mac_vendor("00:50:C2:A1:00:00", vendors), "Longer")
+        self.assertEqual(self.n.mac_vendor("70:B3:D5:12:34:56", vendors), "Longest")
+        self.assertIsNone(self.n.mac_vendor("12:85:75:45:2E:FF", vendors))    # locally administered (random)
+        self.assertIsNone(self.n.mac_vendor("00:11:22:33:44:55", vendors))
+        nmap = shutil.which("nmap")
+        if nmap:                                                               # the real list, when installed
+            self.assertTrue(len(self.n.mac_vendors(nmap)) > 1000)
+
+    def test_ping_probes(self):
+        self.assertIn("-PS" + self.n.DISCOVERY_PORTS, self.n.PROFILES["ping"])
+        self.assertEqual(self.n.DISCOVERY_PORTS.split(",")[0], "22")
 
 
 class NmapInterfaceTests(unittest.TestCase):  # issue 18
