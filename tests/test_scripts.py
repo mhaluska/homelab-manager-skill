@@ -4240,6 +4240,19 @@ class NmapInterfaceTests(unittest.TestCase):  # issue 18
                          {"port": 80, "service": "http", "product": "Hikvision IP camera httpd"}]}
         self.assertEqual(self.n.guess_type(hik), "camera")
 
+    def test_airplay_speaker_is_not_camera_or_network(self):  # GitHub issue #130
+        speaker = {"ports": [{"port": 53, "service": "domain", "product": "dnsmasq"},
+                             {"port": 5000, "service": "rtsp"}, {"port": 7000, "service": "rtsp"},
+                             {"port": 49152, "service": "tcpwrapped"},
+                             {"port": 49153, "service": "bandwidth-test", "product": "MikroTik bandwidth-test server"}]}
+        self.assertEqual(self.n.guess_type(speaker), "macos")                    # Apple, not camera/network
+        ports = [p["port"] for p in self.n.evidence_ports(speaker["ports"])]
+        self.assertEqual(sorted(ports), [53, 7000])                              # the dynamic range doesn't count
+        self.assertEqual(self.n.evidence_ports([{"port": 5000, "service": "rtsp"}]),
+                         [{"port": 5000, "service": "rtsp"}])                    # one rtsp port alone stays rtsp
+        btest = {"ports": [{"port": 2000, "service": "bandwidth-test", "product": "MikroTik bandwidth-test server"}]}
+        self.assertEqual(self.n.guess_type(btest), "network")                   # on its own port it still counts
+
     def test_real_router_keeps_network(self):
         gw = {"os": [dict(o) for o in self.GW_OS], "os_suspect": ["10.0.20.11"],
               "ports": [{"port": 22, "service": "ssh", "product": "MikroTik RouterOS sshd"},
