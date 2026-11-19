@@ -871,6 +871,37 @@ class DriftTests(unittest.TestCase):
         self.assertIn("proxmox.nodes.pve3 needs default_storage", out)
 
 
+class DriftWithoutProxmoxTests(unittest.TestCase):  # GitHub issue #123
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d)
+        run("init_repo.py", self.d, "--components", "ansible,discovery,appliances", cwd=self.d)
+        Path(self.d, "discovery/network.json").write_text(json.dumps(
+            {"updated_at": "2026-11-19T10:00:00+00:00",
+             "hosts": {"10.0.20.11": {"ip": "10.0.20.11", "ports": [], "hostnames": []}}}))
+        Path(self.d, "ansible/inventory/managed/hosts.yml").write_text(
+            "all:\n  children:\n    linux:\n      hosts:\n        seen:\n          ansible_host: 10.0.20.11\n"
+            "        gone:\n          ansible_host: 10.0.20.12\n")
+
+    def test_no_proxmox_or_tofu_sources(self):
+        r = run("drift_report.py", cwd=self.d)   # no --no-tofu needed
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("| Proxmox / OpenTofu | not used (components.proxmox: false) |", r.stdout)
+        self.assertNotIn("Proxmox snapshot", r.stdout)
+        self.assertNotIn("proxmox_inventory.py", r.stdout)
+        self.assertNotIn("OpenTofu state", r.stdout)
+        self.assertIn("- `gone` (10.0.20.12) — not seen on the network", r.stdout)   # the scan alone decides
+        self.assertNotIn("`seen`", r.stdout)
+        self.assertNotIn("Needs both snapshots", r.stdout)
+
+    def test_overview_sources(self):
+        r = run("overview.py", "--out", "-", "--no-ansible", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("| discovery/proxmox.json | not used (components.proxmox: false) |", r.stdout)
+        self.assertNotIn("proxmox_inventory.py", r.stdout)
+        self.assertNotIn("Proxmox node", r.stdout.split("## At a glance")[1].split("\n\n")[1])
+
+
 class DriftExtraIpsTests(unittest.TestCase):
     """#31: hm_extra_ips makes a host's other addresses known; --stale says when drift.md is out of date."""
 
