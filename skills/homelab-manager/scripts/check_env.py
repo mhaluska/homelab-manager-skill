@@ -38,6 +38,8 @@ TOOLS = {
     "git": (["git", "--version"], "xcode-select --install"),
     "gh": (["gh", "--version"], "brew install gh   (only needed to report GitHub issues)"),
 }
+# a tool only a component uses: skipped while homelab.yaml disables that component (GitHub issue #120)
+TOOL_COMPONENT = {"tofu": "proxmox", "packer": "templates", "ansible": "ansible", "nmap": "discovery"}
 SELFTEST_SERVICE = "homelab/_selftest"
 
 
@@ -51,9 +53,14 @@ def run(cmd, timeout=15, input_text=None, cwd=None):
         return 127, "", "not found"
 
 
-def check_tools():
+def check_tools(cfg=None):
+    """Every tool; with a homelab.yaml, the tools of disabled components are reported as not needed."""
     out = []
     for name, (cmd, install) in TOOLS.items():
+        comp = TOOL_COMPONENT.get(name)
+        if cfg and comp and not hmlib.get(cfg, f"components.{comp}", True):
+            out.append({"check": f"tool:{name}", "ok": None, "detail": f"not needed (components.{comp}: false)"})
+            continue
         if not shutil.which(cmd[0]):
             out.append({"check": f"tool:{name}", "ok": False, "detail": f"missing — {install}"})
             continue
@@ -456,10 +463,10 @@ def check_git_upstream(cfg):
 
 
 def main(argv):
-    results = check_tools() + check_ssh_agent() + check_gh() + check_keychain_unlocked()
+    cfg_results, cfg = check_config_and_secrets()
+    results = check_tools(cfg) + check_ssh_agent() + check_gh() + check_keychain_unlocked()
     if "--keychain" in argv:
         results += check_keychain_selftest()
-    cfg_results, cfg = check_config_and_secrets()
     results += (cfg_results + check_proxmox_tls(cfg) + check_tofu_sites(cfg) + check_ansible_targets(cfg)
                 + check_site_ambiguity(cfg)
                 + check_git_upstream(cfg))
