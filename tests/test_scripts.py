@@ -3958,10 +3958,12 @@ class PerSiteScanTests(unittest.TestCase):  # GitHub #72, #66: scans know their 
         r = self.nmap("10.0.0.0/24", "--site", "home", "--arp", FAKE_ROUTE="en0", FAKE_ARP="")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("ARP table has no entry on en0", r.stderr)               # e.g. Local Network privacy
-        self.assertIn("re-run with the system Python: /usr/bin/python3 ", r.stderr)
-        r = self.nmap("10.0.0.0/24", "--site", "home", "--arp", FAKE_ROUTE="en0", FAKE_ARP="", FAKE_ICMP="10.0.0.9")
         self.assertIn("reached the network (ICMP answered), but macOS still hides the ARP table", r.stderr)  # #135
+        self.assertIn("Re-run with the system Python: /usr/bin/python3 ", r.stderr)
         self.assertNotIn("allow it in System Settings", r.stderr)              # already allowed: nothing to do there
+        r = self.nmap("10.0.0.0/24", "--site", "home", "--arp", FAKE_ROUTE="en0", FAKE_ARP="", FAKE_ICMP="none")
+        self.assertIn("allow it in System Settings", r.stderr)                 # no ICMP: maybe not allowed yet
+        self.assertIn("re-run with the system Python: /usr/bin/python3 ", r.stderr)
         r = self.nmap("10.0.0.0/24", "--site", "home", "--arp", FAKE_ROUTE="en0", FAKE_ARP=arp, FAKE_ICMP="10.0.0.9")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("ARP table has no entry", r.stderr)
