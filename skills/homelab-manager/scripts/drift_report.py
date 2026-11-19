@@ -313,9 +313,10 @@ def main():
                 print("stale: OVERVIEW.md differs from the repository data — run overview.py (after drift_report.py)")
         return 1 if newer or overview_stale else 0
 
+    use_px = bool(hmlib.get(cfg, "components.proxmox", True))   # off: no Proxmox or OpenTofu sources (GitHub #123)
     try:
         all_sites = hmlib.sites(cfg)
-        snaps = hmlib.proxmox_snapshots(cfg)
+        snaps = hmlib.proxmox_snapshots(cfg) if use_px else []
         nets = hmlib.network_snapshots(cfg)   # per site, from network.json (GitHub #72, #75)
         ignores = {st["name"]: hmlib.site_entries(cfg, "discovery.ignore_unmanaged", st["name"]) for st in all_sites}
         known_devices = hmlib.known_devices(cfg)
@@ -337,7 +338,7 @@ def main():
         for ip, h in (db.get("hosts") or {}).items():
             net["hosts"].setdefault(ip, h)
     states = {}   # site name → (state or None, why / source); each site is compared with its own environment
-    for st in all_sites:
+    for st in all_sites if use_px else []:
         if st["default"]:
             states[st["name"]] = load_tofu(a, root, env)
         else:
@@ -349,14 +350,15 @@ def main():
 
     L = [f"# Drift report — {dt.datetime.now().strftime('%Y-%m-%d %H:%M')}", "",
          "| Source | Status |", "|---|---|",
-         f"| Proxmox snapshot{in_site(all_sites[0])} | {px['collected_at'] if px else 'missing — run proxmox_inventory.py'} |",
-         *[f"| Proxmox snapshot{in_site(st)} | " + (next((p['collected_at'] for x, p in others if x["name"] == st["name"]), None)
-           or f"missing — run proxmox_inventory.py --site {st['name']}") + " |"
-           for st in all_sites[1:] if st["proxmox"] and st["proxmox"].get("endpoint")],
+         *([f"| Proxmox snapshot{in_site(all_sites[0])} | {px['collected_at'] if px else 'missing — run proxmox_inventory.py'} |",
+            *[f"| Proxmox snapshot{in_site(st)} | " + (next((p['collected_at'] for x, p in others if x["name"] == st["name"]), None)
+              or f"missing — run proxmox_inventory.py --site {st['name']}") + " |"
+              for st in all_sites[1:] if st["proxmox"] and st["proxmox"].get("endpoint")]]
+           if use_px else ["| Proxmox / OpenTofu | not used (components.proxmox: false) |"]),
          *([f"| Network scan{in_site(st) if len(nets) > 1 else ''} | {db.get('updated_at')} |" for st, db in nets]
            or ["| Network scan | missing — run nmap_scan.py |"]),
          *[f"| OpenTofu state{in_site(st)} | {msg if state is not None else 'unavailable: ' + msg} |"
-           for st in all_sites for state, msg in [states[st["name"]]]
+           for st in all_sites if use_px for state, msg in [states[st["name"]]]
            if st["default"] or (st["proxmox"] and st["proxmox"].get("endpoint"))],
          f"| Ansible inventory | {ans_src} ({len(ans)} hosts) |", ""]
     issues = 0
@@ -443,8 +445,9 @@ def main():
             ip = v.get("ansible_host")
             in_px = h.lower().split(".")[0] in live_names or (ip or "").lower() in guest_ips
             in_net = bool(({ip} | set(extra_ips(v))) & net_ips) if ip else bool(set(extra_ips(v)) & net_ips)
-            if snaps and net and not in_px and not in_net:
-                ghosts.append(f"- `{h}` ({ip or 'no ansible_host'}) — not a Proxmox guest and not seen on the network")
+            if (snaps or not use_px) and net and not in_px and not in_net:
+                ghosts.append(f"- `{h}` ({ip or 'no ansible_host'}) — "
+                              + ("not a Proxmox guest and not seen on the network" if use_px else "not seen on the network"))
         known_sites = {st["name"] for st in all_sites if st["name"]}
         site_problems = []
         for h, v in sorted(ans.items()):
@@ -465,7 +468,8 @@ def main():
             issues += len(ghosts)
             L += [f"**Inventory hosts not found anywhere ({len(ghosts)})**:", "", *ghosts, ""]
         else:
-            L += ["All inventory hosts accounted for." if (snaps and net) else "Needs both snapshots to check.", ""]
+            L += ["All inventory hosts accounted for." if ((snaps or not use_px) and net)
+                  else "Needs both snapshots to check." if use_px else "Needs a network scan to check.", ""]
 
     matched = match_guests(all_guests, net["hosts"]) if (snaps and net) else {}
     if snaps and net:

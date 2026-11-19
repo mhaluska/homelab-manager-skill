@@ -691,10 +691,17 @@ def tls_url(ip: str, p: dict) -> str | None:
 
 # --------------------------------------------------------------------------- sections
 
-def sources(root: Path, docs: dict) -> list[str]:
+SOURCE_COMPONENT = {"proxmox.json": "proxmox", "network.json": "discovery"}   # GitHub issue #123
+
+
+def sources(root: Path, docs: dict, cfg: dict | None = None) -> list[str]:
     rows = []
     for name, cmd in SOURCES:
         f = root / "discovery" / name
+        comp = SOURCE_COMPONENT.get(name)
+        if comp and not f.is_file() and not hmlib.get(cfg or {}, f"components.{comp}", True):
+            rows.append([f"discovery/{name}", f"not used (components.{comp}: false)", ""])
+            continue
         rows.append([f"discovery/{name}", collected(docs[name]) or ("present, no time" if f.is_file() else "–"),
                      cmd if not f.is_file() else ""])
     for extra in ("drift.md", "guest-map.md"):
@@ -1488,7 +1495,9 @@ def render(cfg: dict, managed: dict, note: str) -> str:
         for k in ("nodes", "guests", "memory", "storage", "backup", "backup_old"):
             totals[k] += stats[k]
     exp = expirations(cfg, root, docs, managed, known, totals)
-    glance = [plural(len(st_list), "site"), plural(totals["nodes"], "Proxmox node"), plural(totals["guests"], "guest")]
+    glance = [plural(len(st_list), "site")]
+    if hmlib.get(cfg, "components.proxmox", True) or totals["nodes"]:   # GitHub issue #123
+        glance += [plural(totals["nodes"], "Proxmox node"), plural(totals["guests"], "guest")]
     if managed:
         glance.append(plural(len(managed), "Ansible host"))
     out += ["## At a glance", "", ", ".join(glance) + "."]
@@ -1500,7 +1509,7 @@ def render(cfg: dict, managed: dict, note: str) -> str:
         out += ["## Sites", ""] + sites_map(rows) + [""]
     out += body + containers(cfg, docs, managed) + management(cfg, managed, note) + health(cfg, root, docs, managed, warnings)
     out += exp
-    out += sources(root, docs) + [""]
+    out += sources(root, docs, cfg) + [""]
     text = "\n".join(out)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return contents(redact(text, cfg) if hmlib.get(cfg, "overview.redact", False) is True else text)
