@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.43.0 — 2026-11-19
+- The ping sweep is now an ICMP echo sweep that `nmap_scan.py` sends itself, without root and without nmap
+  ([#128](https://github.com/mhaluska/homelab-manager-skill/issues/128)). nmap sends ICMP only as root, so it used to find hosts only by TCP connects to 80 and 443 and
+  missed hosts that serve neither. When the user knows a device the sweep missed, re-run it with `--tcp` (also
+  nmap's TCP probes, to 22, 80, 443, 445, 3389, 5000, 8080, 8443 and 62078) and, for a range on the Mac's own
+  network segment, `--arp` (also the Mac's ARP table, which has hosts that drop ICMP and every port; refused for
+  routed ranges). Each host records the probes that answered it in `discovered_by`. A host found before only by
+  probes a sweep didn't send is not marked missing by that sweep, so a host that answers only TCP stays current.
+  If macOS Local Network privacy blocks the Python running the script, the ICMP sweep and `--arp` say so: the
+  sweep then falls back to nmap's TCP probes instead of finding nothing.
+- `nmap_scan.py --only-live` skips nmap's ping for the services and os profiles (`-Pn`): those hosts are known to
+  be up, and nmap's ping missed the ones that drop it. Hosts marked missing are left out. `--no-ping` does the same
+  for explicit targets of at most 16 addresses, e.g. a host only `--arp` found.
+
 ## 0.42.0 — 2026-11-19
 - A ping sweep marks the known hosts inside its targets that did not answer with `missing_since` ([#127](https://github.com/mhaluska/homelab-manager-skill/issues/127)),
   and any scan they answer clears it. `drift.md` and OVERVIEW.md list these hosts apart from current devices, with
