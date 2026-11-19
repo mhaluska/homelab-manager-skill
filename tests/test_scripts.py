@@ -3796,6 +3796,20 @@ class NmapInterfaceTests(unittest.TestCase):  # issue 18
         self.assertEqual(self.n.banner_os({"product": "Apache httpd", "version": "2.4.62", "ostype": "Linux"}), "linux")
         self.assertIsNone(self.n.banner_os({"product": "OpenSSH", "version": "9.6"}))
 
+    def test_mac_with_airplay_is_macos_not_camera(self):  # GitHub issue #121
+        mac = {"ports": [{"port": 22, "service": "ssh", "product": "OpenSSH", "version": "10.5"},
+                         {"port": 88, "service": "tcpwrapped"}, {"port": 5000, "service": "rtsp"},
+                         {"port": 5900, "service": "vnc", "product": "Apple remote desktop vnc", "ostype": "Mac OS X"},
+                         {"port": 7000, "service": "rtsp"}]}
+        self.assertEqual(self.n.guess_type(mac), "macos")
+        self.assertEqual(self.n.banner_os({"product": "Apple remote desktop vnc", "ostype": "Mac OS X"}), "macos")
+        self.assertIsNone(self.n.banner_os({"product": "Cisco IOS XR sshd"}))
+        cam = {"ports": [{"port": 554, "service": "rtsp"}, {"port": 8554, "service": "rtsp"}]}
+        self.assertEqual(self.n.guess_type(cam), "camera")
+        hik = {"ports": [{"port": 22, "service": "ssh", "product": "OpenSSH"}, {"port": 554, "service": "rtsp"},
+                         {"port": 80, "service": "http", "product": "Hikvision IP camera httpd"}]}
+        self.assertEqual(self.n.guess_type(hik), "camera")
+
     def test_real_router_keeps_network(self):
         gw = {"os": [dict(o) for o in self.GW_OS], "os_suspect": ["10.0.20.11"],
               "ports": [{"port": 22, "service": "ssh", "product": "MikroTik RouterOS sshd"},
