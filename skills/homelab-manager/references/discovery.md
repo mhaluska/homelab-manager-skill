@@ -103,7 +103,9 @@ python3 $HM/scripts/nmap_scan.py --site home --profile services --only-live  # a
   everything known about the host after each scan; a product name (Proxmox, TrueNAS, iDRAC…) beats plain
   Linux evidence. Proxmox's web UI port 8006 is not in the top 200: add `--ports 22,8006,…` to confirm nodes. Say "probably".
   An OS named in a banner (`OpenSSH … Debian`, nmap's `ostype` such as `Mac OS X`) outranks nmap's OS fingerprint;
-  bare `rtsp` ports count once (Macs and Apple TVs open two for AirPlay), so they alone don't make a camera. On routed
+  a bare `rtsp` port counts once, and the AirPlay pair (rtsp on 5000 and 7000: Macs, Apple TVs, HomePods) counts as
+  an Apple device, not a camera. Ports 49152+ (dynamic range) are no evidence: version probes match tiny signatures
+  there by accident (a HomePod "MikroTik bandwidth-test server"). On routed
   `os` scans the gateway can answer the closed-port probes, so hosts with identical OS guess lists get
   `os_suspect` (the other IPs; shown as `? ` in the table): don't quote those guesses as the host's OS.
   A `bmc` (iLO, iDRAC, IPMI) is an exposed management interface: point it out, it belongs on a management VLAN.
