@@ -119,7 +119,9 @@ CRS) a few MiB free is normal on RouterOS 7, so only less than `routeros_audit.m
 `512KiB`) is an `info` — such a device may need extra packages removed before an upgrade; on larger flash under 10 %
 or 5 MiB is `low`. `--recompute` applies changed rules or thresholds to `discovery/routeros.json` without
 connecting. `--leases` also reads DHCP leases and ARP and proposes names for
-unknown scanned addresses (references/discovery.md, drift report).
+unknown scanned addresses (references/discovery.md, drift report); a router whose lease or ARP table could not be
+read is listed as **Incomplete**, so missing names there are not proof it has none. The script reads each device
+in one SSH session (routers may refuse logins that come too quickly one after another).
 
 Plain-text services the audit flags: `playbooks/routeros-disable-services.yml` (the report prints the command
 for each device in the inventory). `routeros_disable_services` (default `[api, www]`; may add `telnet`, `ftp`,
