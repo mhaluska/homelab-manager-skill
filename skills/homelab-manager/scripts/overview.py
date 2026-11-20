@@ -507,7 +507,7 @@ def device_rows(cfg: dict, st: dict, docs: dict, managed: dict, net: dict, unifi
                 res = d.get("resource") or {}
                 ident = (d.get("identity") or {}).get("name")
                 r.update(model=ros_model(d, ros_guest(guests, d, h)), firmware=res.get("version") or "",
-                         state=(f"{len(d['findings'])} audit findings" if d.get("findings") else "audited, no findings")
+                         state=ros_state(d)
                          + f" ({stamp(d.get('collected_at'))})"
                          + (f", identity {ident}" if ident and ident != h else ""))
             else:
@@ -559,7 +559,7 @@ def device_rows(cfg: dict, st: dict, docs: dict, managed: dict, net: dict, unifi
         rows.append({"kind": "RouterOS", "name": (d.get("identity") or {}).get("name") or host,
                      "model": ros_model(d, ros_guest(guests, d)),
                      "address": host, "firmware": res.get("version") or "",
-                     "state": f"{len(d.get('findings') or [])} audit findings, not in inventory",
+                     "state": f"{ros_state(d)}, not in inventory",
                      "seen": stamp((scanned.get(host) or {}).get("last_seen"))})
     inventory = {str(v.get("ansible_host") or "") for v in managed.values()}
     for e in hmlib.known_devices(cfg):   # named in discovery.ignore_unmanaged (GitHub issue #100)
@@ -1475,8 +1475,11 @@ def health(cfg: dict, root: Path, docs: dict, managed: dict, warnings: list[str]
     if ros:
         sev: dict = {}
         for _, f in ros:
-            sev[str(f.get("severity"))] = sev.get(str(f.get("severity")), 0) + 1
-        out += ["RouterOS audit findings: " + ", ".join(f"{n} {cell(s)}" for s, n in sorted(sev.items()))
+            if not f.get("accepted"):
+                sev[str(f.get("severity"))] = sev.get(str(f.get("severity")), 0) + 1
+        accepted = sum(1 for _, f in ros if f.get("accepted"))
+        out += ["RouterOS audit findings: " + ", ".join([f"{n} {cell(s)}" for s, n in sorted(sev.items())]
+                                                        + ([f"{accepted} accepted"] if accepted else []))
                 + " (`routeros_audit.py`).", ""]
     newer = [(h, (d.get("update") or {})) for h, d in sorted(devs.items())
              if (d.get("update") or {}).get("latest-version") and (d.get("update") or {}).get("latest-version")
@@ -1503,6 +1506,14 @@ def health(cfg: dict, root: Path, docs: dict, managed: dict, warnings: list[str]
     return out if len(out) > 2 else []
 
 
+def ros_state(d: dict) -> str:
+    """'N audit findings[, M accepted]' of a routeros.json device (accepted ones not in N, GitHub issue #138), or
+    'audited, no findings'."""
+    f = d.get("findings") or []
+    acc = sum(1 for x in f if x.get("accepted"))
+    return (f"{len(f) - acc} audit findings" + (f", {acc} accepted" if acc else "")) if f else "audited, no findings"
+
+
 ROS_WARN = ("critical", "high", "medium")   # routeros_audit.py severities that count as warnings; low and info don't
 HEALTH_RANK = {"Critical": 0, "Warning": 1}
 
@@ -1523,7 +1534,7 @@ def glance_warnings(docs: dict, managed: dict, counts: dict) -> list[str]:
     for d in (docs["routeros.json"].get("devices") or {}).values():
         for f in d.get("findings") or []:
             k = str(f.get("severity") or "").lower()
-            if k in ROS_WARN:
+            if k in ROS_WARN and not f.get("accepted"):   # routeros_audit_accept (GitHub issue #138)
                 sev[k] = sev.get(k, 0) + 1
     if sev:
         out.append("RouterOS audit: " + ", ".join(f"{sev[k]} {k}" for k in ROS_WARN if k in sev))

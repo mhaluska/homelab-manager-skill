@@ -5077,7 +5077,7 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         self.assertIn("**Version drift:** 7.15.3: 10.0.0.2; 7.16.1: 10.0.0.1", out)
         sw = out[out.index("## 10.0.0.1"):out.index("## 10.0.0.2")]
         self.assertIn("**high** — plain-text service `telnet` enabled (port 23, from any address): disable it and use ssh", sw)
-        self.assertIn("**low** — plain-text service `www` enabled (port 80, limited to 10.0.0.0/24): disable it and use www-ssl\n", sw)
+        self.assertIn("**low** — plain-text service `www` enabled (port 80, limited to 10.0.0.0/24): disable it and use www-ssl · `plaintext-www`\n", sw)
         self.assertNotIn("`ftp`", sw)                                                 # disabled (X flag)
         self.assertIn("RouterBOOT firmware 7.12 is behind 7.16.1", sw)
         self.assertIn("**low** — low free flash: 3.1MiB of 128.0MiB", sw)
@@ -5110,6 +5110,41 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         self.assertEqual(db["10.0.0.1"]["bridges"][0]["vlan-filtering"], "yes")      # comment didn't look like an error
         self.assertEqual(db["10.0.0.1"]["bridge_vlans"][0]["tagged"], "bridge,sfp1")
 
+    def test_accepted_findings(self):  # GitHub issue #138
+        inv = self.d / "ansible/inventory/managed"
+        (inv / "host_vars").mkdir(exist_ok=True)
+        (inv / "host_vars/sw-rack.yml").write_text(
+            "routeros_audit_accept: [SSH-any-address, default-admin, plaintext-telnet, winbox-any-address]\n")
+        r = self.audit("--group", "routeros")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        sw = r.stdout[r.stdout.index("## 10.0.0.1"):r.stdout.index("## 10.0.0.2")]
+        self.assertNotIn("**high** — plain-text service `telnet`", sw)
+        self.assertNotIn("default user `admin`", sw)
+        self.assertIn("- Accepted (routeros_audit_accept): `plaintext-telnet` (high), `ssh-any-address` (low), "
+                      "`default-admin` (low)", sw)
+        self.assertIn("not found any more (remove them?): `winbox-any-address`", sw)
+        self.assertIn('"routeros_disable_services": ["www"]', sw)                      # telnet accepted: not fixed
+        self.assertIn("| 10.0.0.1 | sw-rack | CRS326-24G-2S+ | 7.16.1 (stable) | 7.12 | 3.1MiB | 5 |", r.stdout)
+        chr_ = r.stdout[r.stdout.index("## 10.0.0.2"):]
+        self.assertIn("default user `admin` is enabled: use named accounts and disable it · `default-admin`", chr_)
+        db = json.loads((self.d / "discovery/routeros.json").read_text())["devices"]
+        f = {x["key"]: x for x in db["10.0.0.1"]["findings"]}
+        self.assertTrue(f["default-admin"]["accepted"])
+        self.assertNotIn("accepted", f["plaintext-www"])
+        self.assertNotIn("accepted", {x["key"]: x for x in db["10.0.0.2"]["findings"]}["default-admin"])
+        sys.path.insert(0, str(SCRIPTS))
+        import overview
+        docs = {"routeros.json": {"devices": db}, "bmc.json": {}, "updates.json": {}}
+        self.assertEqual(overview.ros_state(db["10.0.0.1"]), "5 audit findings, 3 accepted")
+        warn = [w for w in overview.glance_warnings(docs, {}, {}) if w.startswith("RouterOS")]
+        self.assertEqual(warn, ["RouterOS audit: 1 high, 3 medium"])                   # only chr1's telnet: sw-rack's is accepted
+        (inv / "host_vars/sw-rack.yml").write_text("routeros_audit_accept: plaintext-www\n")
+        r = self.audit("--recompute")                                                  # a changed list, no SSH
+        self.assertEqual(r.returncode, 0, r.stderr)
+        f = {x["key"]: x for x in json.loads((self.d / "discovery/routeros.json").read_text())["devices"]["10.0.0.1"]["findings"]}
+        self.assertEqual([k for k, x in f.items() if x.get("accepted")], ["plaintext-www"])
+        self.assertEqual(self.ra.accept_lists({"r1": {"ansible_host": "10.0.0.7", "routeros_audit_accept": ["{{ x }}", " "]}}), {})
+
     def test_licence_deadline(self):  # issue 71: next-renewal-at is only the next renewal attempt
         dev = {"reachable": True, "errors": {}, "resource": {"board-name": "CHR"},
                "license": {"level": "p10", "next-renewal-at": "2026-12-07 10:00:00", "deadline-at": "2027-01-06"}}
@@ -5120,8 +5155,8 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         self.assertIn("deadline 2027-01-06: within 30 days", f[0][1])
         self.assertEqual([s for s, _ in self.ra.findings(dev, day(2027, 1, 7))], ["high"])
         f = self.ra.licence_findings("p10", "2027-03-01", "2026-12-07", day(2026, 12, 10))  # renewal passed, not moved
-        self.assertEqual([s for s, _ in f], ["medium"])
-        self.assertIn("renewal was due 2026-12-07", f[0][1])
+        self.assertEqual([k for k, s, _ in f], ["licence-renewal-overdue"])
+        self.assertIn("renewal was due 2026-12-07", f[0][2])
         dev["license"] = {"level": "p1", "next-renewal-at": "soon"}
         self.assertEqual([s for s, _ in self.ra.findings(dev, day(2026, 11, 18))], ["info"])
 

@@ -129,6 +129,14 @@ proposals inside those addresses, for one reviewable commit per VLAN; `--leases-
 `routeros.json` as it is. The script reads each device
 in one SSH session (routers may refuse logins that come too quickly one after another).
 
+Each finding ends with its key (`ssh-any-address`, `plaintext-www`, `default-admin`, `routerboot-<version>`, …).
+When the user decides to keep a device as it is (e.g. management limited by the input firewall or port knocking
+instead of a service address), record the decision with its reason in `docs/decisions.md` and the keys in the host
+var `routeros_audit_accept: [ssh-any-address, default-admin]` (or group var), then `routeros_audit.py --recompute`.
+The report lists them as accepted and gives no fix for them, OVERVIEW.md doesn't count them, and a new finding still
+shows; keys that no longer match are listed so the user can remove them. Version keys change with each release, so
+accepting an update postpones only that one. Only on the user's request.
+
 Plain-text services the audit flags: `playbooks/routeros-disable-services.yml` (the report prints the command
 for each device in the inventory). `routeros_disable_services` (default `[api, www]`; may add `telnet`, `ftp`,
 `api-ssl`, `www-ssl`, `winbox`, never `ssh`) lists what to turn off. Run it with `-l <host> --check` first and

@@ -255,8 +255,8 @@ same rules), and scanned hosts whose hostname is a known host's (listed in a col
 nmap's best guess with its match %; on a tie a vendor/product match beats a generic "Linux x - y". Then containers
 (including QNAP's), Ansible groups, clusters and critical hosts, and health: updates of every Proxmox node and
 critical host plus any host with something pending (stale data marked), inventory hosts without update data, BMC
-health with its cause (accepted per host: `bmc_health_accept`), RouterOS findings and updates, capacity and
-backup warnings, a one-line drift summary; and when each source was collected. With several sites, a sites diagram first.
+health with its cause (accepted per host: `bmc_health_accept`), RouterOS findings (accepted per host:
+`routeros_audit_accept`) and updates, capacity and backup warnings, a one-line drift summary; and when each source was collected. With several sites, a sites diagram first.
 Recovery and dependencies per site (GitHub issue #89), only from what the repo records, nothing guessed from names:
 - **Last backup**: a Guests column and, under Backups, the guests in a job with no successful backup within
   `overview.backup_max_age_days` (default 7) or whose newest backup failed, from `proxmox_inventory.py --details`.
