@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.47.0 — 2026-11-20
+- `routeros_audit.py --leases` can be limited to part of the network ([#137](https://github.com/mhaluska/homelab-manager-skill/issues/137)). `--range CIDR` and
+  `--vlan ID|NAME` (repeatable; a VLAN is looked up in `network.vlans` at each device's site) keep the MAC fill in
+  `discovery/network.json` and the name proposals inside those addresses, so each VLAN can go into its own commit.
+  `--leases-only` reads only identity, resources, leases and ARP, prints no audit and leaves `routeros.json` as it is.
+  A host given by its inventory name or address takes its user, port and site from the managed inventory, like
+  `--group`, and a device named twice is read once.
+- RouterOS findings can be accepted per device ([#138](https://github.com/mhaluska/homelab-manager-skill/issues/138)). Every finding has a stable key, shown in the
+  report and kept in `routeros.json` (`ssh-any-address`, `plaintext-www`, `default-admin`,
+  `routerboot-<version>`, …). The host or group var `routeros_audit_accept: [keys]` marks the ones the user decided
+  to keep. The report lists them apart and gives no fix for them, and OVERVIEW.md counts them as accepted, not under
+  their severity. A new finding still shows, and keys that match nothing any more are listed. `--recompute`
+  applies a changed list without connecting.
+- A RouterOS service open to any address now shows how the IPv4 input firewall treats new connections to its port
+  (the deciding rules in order, e.g. `accept in-interface-list=TRUSTED; drop the rest`) ([#138](https://github.com/mhaluska/homelab-manager-skill/issues/138)). This is
+  evidence to judge by, not a verdict: the severity stays, jumps are not followed and IPv6 is not covered. The audit
+  now also reads `/ip firewall filter`.
+
 ## 0.46.0 — 2026-11-19
 - `patch-linux.yml` no longer fails a host that has nothing to autoremove ([#136](https://github.com/mhaluska/homelab-manager-skill/issues/136)). An empty skip reason
   became `None` instead of `''`, the `when` failed, and with `max_fail_percentage: 0` the batch stopped after the
