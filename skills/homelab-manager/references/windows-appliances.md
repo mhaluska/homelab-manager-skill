@@ -109,7 +109,9 @@ Identify and audit, read-only:
 ```bash
 python3 $HM/scripts/routeros_audit.py 10.0.10.1 10.0.10.2 [--user audit]
 python3 $HM/scripts/routeros_audit.py --group routeros     # hosts, users and ports from the inventory
+python3 $HM/scripts/routeros_audit.py --group routeros --leases-only --vlan IoT   # MACs and names for one VLAN
 ```
+A host of the managed inventory given by name or address also takes its user, port and site from there.
 It prints a Markdown report (save it as `docs/security-audit-<date>.md` when the user wants one) and keeps
 the data in `discovery/routeros.json`, including the NAT rules (OVERVIEW.md lists the port forwards). Fixing a
 finding is a change: `/system routerboard upgrade` and a
@@ -121,7 +123,10 @@ or 5 MiB is `low`. `--recompute` applies changed rules or thresholds to `discove
 connecting. `--leases` also reads DHCP leases and ARP and proposes names for
 unknown scanned addresses (references/discovery.md, drift report); a router whose lease or ARP table could not be
 read is listed as **Incomplete**, so missing names there are not proof it has none. It also gives scanned hosts
-without a MAC the router's (vendor and a new device guess in `discovery/network.json`; not with `--no-write`). The script reads each device
+without a MAC the router's (vendor and a new device guess in `discovery/network.json`; not with `--no-write`).
+`--range CIDR` and `--vlan ID|NAME` (network.vlans at the device's site; repeatable) keep the MAC fill and the
+proposals inside those addresses, for one reviewable commit per VLAN; `--leases-only` skips the audit and leaves
+`routeros.json` as it is. The script reads each device
 in one SSH session (routers may refuse logins that come too quickly one after another).
 
 Plain-text services the audit flags: `playbooks/routeros-disable-services.yml` (the report prints the command

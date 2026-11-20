@@ -4884,6 +4884,59 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         saved = json.loads((self.d / "discovery/routeros.json").read_text())["devices"]
         self.assertFalse({"leases", "arp"} & {k for d in saved.values() for k in list(d) + list(d["errors"])})
 
+    def test_leases_scoped_to_range_or_vlan(self):  # GitHub issue #137
+        (self.d / "discovery").mkdir(exist_ok=True)
+        f = self.d / "discovery/network.json"
+        hosts = {ip: {"ip": ip, "mac": None, "vendor": None, "ports": [], "os": [], "device_type_guess": "unknown"}
+                 for ip in ("10.0.0.40", "10.0.0.42", "10.0.0.99")}
+        f.write_text(json.dumps({"hosts": hosts}))
+        r = run("config_set.py", "network.vlans+={id: 40, name: IoT, cidr: 10.0.0.32/28}", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = self.audit("--group", "routeros", "--leases", "--no-write")
+        self.assertIn("Would give 3 scanned host(s) without a MAC", r.stderr)            # unscoped: all of them
+        self.assertIn("| 10.0.0.99 | phone |", r.stdout)
+        r = self.audit("--group", "routeros", "--leases-only", "--vlan", "iot")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Gave 2 scanned host(s) in VLAN 40 IoT (10.0.0.32/28) without a MAC", r.stderr)
+        self.assertNotIn("# RouterOS audit", r.stdout)                                     # no audit
+        self.assertIn("Only inside VLAN 40 IoT (10.0.0.32/28) (--range/--vlan).", r.stdout)
+        self.assertIn("2 of 2 unknown scanned address(es) have a DHCP lease name", r.stdout)
+        self.assertNotIn("10.0.0.99", r.stdout)
+        got = json.loads(f.read_text())["sites"]["default"]["hosts"]
+        self.assertEqual(got["10.0.0.40"]["mac_source"], "router")
+        self.assertIsNone(got["10.0.0.99"]["mac"])                                         # outside the VLAN
+        self.assertFalse((self.d / "discovery/routeros.json").exists())                    # --leases-only
+        sent = [json.loads(l)[-1] for l in self.log.read_text().splitlines()]
+        self.assertIn("/ip dhcp-server lease print", sent[-1])
+        self.assertNotIn("/ip service", sent[-1])                                          # only what it needs
+        r = self.audit("sw-rack", "--leases-only", "--range", "10.0.0.96/28", "--no-write")   # by inventory name
+        self.assertEqual(r.returncode, 0, r.stderr)
+        call = json.loads(self.log.read_text().splitlines()[-1])
+        self.assertEqual((call[-2], call[call.index("-l") + 1]), ("10.0.0.1", "auditor+ct512w"))
+        self.assertIn("1 of 1 unknown scanned address(es)", r.stdout)
+        self.assertIn("| 10.0.0.99 | phone |", r.stdout)
+        r = self.audit("--group", "routeros", "10.0.0.1", "--leases-only", "--no-write")
+        self.assertEqual(r.stderr.count("Inspecting 2 device(s)"), 1)                      # 10.0.0.1 = sw-rack, once
+        r = self.audit("--group", "routeros", "--range", "10.0.0.0/24")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("--range and --vlan limit --leases", r.stderr)
+        r = self.audit("--group", "routeros", "--leases", "--vlan", "cameras")
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("--vlan 'cameras': no VLAN with that ID or name and a cidr", r.stderr)
+        cfg = {"network": {"vlans": [{"id": 40, "name": "IoT", "cidr": "10.0.0.32/28", "site": "a"},
+                                     {"id": 41, "name": "IoT", "cidr": "10.0.1.0/24", "site": "b"},
+                                     {"id": 42, "name": "iot", "cidr": "10.0.2.0/24", "site": "b"}]},
+               "sites": [{"name": "a", "ranges": ["10.0.0.0/24"]}, {"name": "b", "ranges": ["10.0.1.0/24"]}]}
+        nets, labels = self.ra.scope_networks(cfg, ["192.0.2.0/25"], ["IoT"], ["a"])        # the device's site only
+        self.assertEqual(labels, ["192.0.2.0/25", "VLAN 40 IoT (10.0.0.32/28)"])
+        with self.assertRaisesRegex(self.ra.hmlib.ConfigError, "ambiguous .* at site b"):
+            self.ra.scope_networks(cfg, [], ["iot"], ["a", None])                           # no site: every site
+        self.assertEqual(self.ra.scope_networks(cfg, [], ["41"], [None])[1], ["VLAN 41 IoT (10.0.1.0/24)"])
+        self.assertTrue(self.ra.in_scope("10.0.0.40", nets))
+        self.assertFalse(self.ra.in_scope("10.0.1.7", nets))
+        self.assertFalse(self.ra.in_scope("2001:db8::1", nets))
+        self.assertTrue(self.ra.in_scope("2001:db8::1", []))
+
     def test_one_session_retry_and_incomplete_leases(self):  # GitHub issue #131
         (self.d / "discovery").mkdir(exist_ok=True)
         (self.d / "discovery/network.json").write_text(json.dumps({"hosts": {

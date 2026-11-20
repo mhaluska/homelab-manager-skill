@@ -2,10 +2,12 @@
 """Read-only inspection and audit of MikroTik RouterOS devices (routers, CRS switches, CHR) over SSH.
 
     routeros_audit.py <host> [<host> ...] [--group G] [--user U] [--port 22] [--timeout 10] [--no-write] [--leases]
+    routeros_audit.py --group G --leases-only [--range CIDR] [--vlan ID|NAME]   # MACs and names only, no audit
     routeros_audit.py --recompute [--no-write]     # findings again from discovery/routeros.json, no SSH
 
-Hosts are addresses or names, or every host of an Ansible group in the managed inventory (--group,
-using each host's ansible_host / ansible_user / ansible_port). --user overrides the user for all.
+Hosts are addresses or names, or every host of an Ansible group in the managed inventory (--group). A host of the
+managed inventory, given by its name or address, uses its ansible_host / ansible_user / ansible_port and site
+(GitHub issue #137), like --group; --user overrides the user for all.
 
 Runs only `print` commands, all of a device's in one `ssh -T` session (GitHub issue #131: a router may refuse
 logins that come too fast after one another, so one connection per command failed the later ones). Each command
@@ -35,7 +37,9 @@ name yet, matched by address or MAC, with the `config_set.py 'discovery.ignore_u
 to record the ones the user confirms. Leases and ARP are not kept in routeros.json; nothing is written to
 homelab.yaml. Scanned hosts without a MAC (routed ranges: nmap sees no MACs there) get the one the router's ARP table
 or a bound lease has, with its vendor and `mac_source: router`, in discovery/network.json (unless --no-write), and
-their device type is guessed again (GitHub issue #132).
+their device type is guessed again (GitHub issue #132). --range CIDR and --vlan ID|NAME (network.vlans, at each
+device's site; both repeatable) limit the MAC fill and the name proposals to those addresses; --leases-only reads
+only identity, resource, leases and ARP, prints no audit and leaves routeros.json as it is (GitHub issue #137).
 """
 from __future__ import annotations
 
@@ -77,6 +81,7 @@ LEASE_COMMANDS = {   # --leases (GitHub issue #100): names for unknown scanned a
     "leases": ("/ip dhcp-server lease print terse without-paging", True),
     "arp": ("/ip arp print terse without-paging", True),
 }
+LEASES_ONLY = {"identity": COMMANDS["identity"], "resource": COMMANDS["resource"], **LEASE_COMMANDS}   # --leases-only
 _NAME_OK = re.compile(r"[^A-Za-z0-9 ._()+-]")
 PLAINTEXT = {"telnet": ("high", "ssh"), "ftp": ("high", "sftp over ssh"), "www": ("medium", "www-ssl"),
              "api": ("medium", "api-ssl")}  # service → (severity open to any address, encrypted alternative)
@@ -265,10 +270,12 @@ def split_batch(out: str) -> dict[str, str]:
     return {k: "".join(v) for k, v in parts.items()}
 
 
-def collect(host: str, user: str | None, port: int, timeout: int, runner=ssh_run, leases: bool = False) -> dict:
+def collect(host: str, user: str | None, port: int, timeout: int, runner=ssh_run, leases: bool = False,
+            sections: dict | None = None) -> dict:
     """Every section in one SSH session (GitHub issue #131); a section that failed there is retried alone, and a
-    device that didn't run the script (no markers in its output) is read one command per connection."""
-    sections = {**COMMANDS, **(LEASE_COMMANDS if leases else {})}
+    device that didn't run the script (no markers in its output) is read one command per connection. sections
+    replaces the default set (COMMANDS, plus LEASE_COMMANDS with leases); it must hold `resource`."""
+    sections = sections or {**COMMANDS, **(LEASE_COMMANDS if leases else {})}
     ok, out = runner(host, user, port, timeout, batch_script(sections))
     if not ok:
         return {"host": host, "user": user, "errors": {"resource": out}, "reachable": False}
@@ -537,12 +544,13 @@ def router_macs(devs: list[dict]) -> dict[str, tuple[str, str]]:
     return {ip: v for ip, v in {**lease, **arp}.items() if count.get(v[0], 0) < PROXY_ARP_HOSTS}
 
 
-def fill_macs(cfg: dict, devs: list[dict], write: bool) -> tuple[int, int]:
+def fill_macs(cfg: dict, devs: list[dict], write: bool, nets: list | None = None) -> tuple[int, int]:
     """Give scanned hosts without a MAC the one a router knows, with its vendor (`mac_source: router`), and guess
     their type again (GitHub issue #132): routed ranges never get a MAC from nmap. A MAC nmap saw itself is never
-    replaced. Writes discovery/network.json unless write is False. (hosts filled, of them with a vendor)"""
+    replaced; with nets (--range/--vlan, GitHub issue #137) only hosts inside them are filled. Writes
+    discovery/network.json unless write is False. (hosts filled, of them with a vendor)"""
     from nmap_scan import guess_type, mac_vendor, mac_vendors
-    macs = router_macs(devs)
+    macs = {ip: v for ip, v in router_macs(devs).items() if in_scope(ip, nets or [])}
     if not macs:
         return 0, 0
     vendors = mac_vendors(shutil.which("nmap") or "/opt/homebrew/bin/nmap")
@@ -630,8 +638,11 @@ def unread_tables(devs: list[dict]) -> list[str]:
     return out
 
 
-def proposal_report(rows: list[dict], unknown: int, read: bool, unread: list[str] | None = None) -> str:
+def proposal_report(rows: list[dict], unknown: int, read: bool, unread: list[str] | None = None,
+                    scope: list[str] | None = None) -> str:
     lines = ["", "## Names for unknown scanned addresses", ""]
+    if scope:
+        lines += [f"Only inside {', '.join(scope)} (--range/--vlan).", ""]
     gaps = (["**Incomplete:** these tables could not be read, so addresses they would name are missing here:", ""]
             + [f"- {u}" for u in unread] + [""]) if unread else []
     if not read:
@@ -655,25 +666,90 @@ def proposal_report(rows: list[dict], unknown: int, read: bool, unread: list[str
 
 # --------------------------------------------------------------------------- main
 
-def group_hosts(root: Path, group: str) -> list[tuple[str, str | None, int | None, str | None]]:
-    """(address, user, port, site) of every host of an Ansible group; site from its site_<name> group."""
+def load_inventory(root: Path) -> dict:
+    """The managed inventory's hosts with their variables (drift_report.load_ansible), read once per run."""
     from drift_report import load_ansible
-    hosts, _ = load_ansible(root)
+    return load_ansible(root)[0]
+
+
+def inventory_target(name: str, v: dict) -> tuple[str, str | None, int | None, str | None]:
+    """(address, user, port, site) of an inventory host; site from its site_<name> group."""
     lit = hmlib.literal  # ansible-inventory does not render templates
-    out = []
+    port = lit(v.get("ansible_port"))
+    return (str(lit(v.get("ansible_host")) or name), lit(v.get("ansible_user")), int(port) if port else None,
+            (hmlib.host_sites(v.get("_groups_all")) or [None])[0])
+
+
+def group_hosts(root: Path, group: str, hosts: dict | None = None) -> list[tuple[str, str | None, int | None, str | None]]:
+    """(address, user, port, site) of every host of an Ansible group."""
+    hosts = load_inventory(root) if hosts is None else hosts
+    return [inventory_target(name, v) for name, v in sorted(hosts.items()) if group in v.get("groups", [])]
+
+
+def resolve_host(cfg: dict, hosts: dict, given: str) -> tuple[str, str | None, int | None, str | None]:
+    """A host given on the command line by its inventory name or address: address, user, port and site from the
+    managed inventory, as --group does (GitHub issue #137); else as given, its site from the site ranges."""
     for name, v in sorted(hosts.items()):
-        if group in v.get("groups", []):
-            port = lit(v.get("ansible_port"))
-            out.append((str(lit(v.get("ansible_host")) or name), lit(v.get("ansible_user")),
-                        int(port) if port else None, (hmlib.host_sites(v.get("_groups_all")) or [None])[0]))
-    return out
+        if given in (name, str(hmlib.literal(v.get("ansible_host")) or "")):
+            return inventory_target(name, v)
+    return given, None, None, (hmlib.site_of_address(cfg, given) or {}).get("name") or None
 
 
-def inventory_names(root: Path) -> dict[str, str]:
+def inventory_names(root: Path, hosts: dict | None = None) -> dict[str, str]:
     """address (ansible_host, else the name) → inventory name of the managed inventory's hosts."""
-    from drift_report import load_ansible
-    hosts, _ = load_ansible(root)
+    hosts = load_inventory(root) if hosts is None else hosts
     return {str(v.get("ansible_host") or n): n for n, v in hosts.items() if "{{" not in str(v.get("ansible_host"))}
+
+
+def scope_networks(cfg: dict, ranges: list[str], vlan_values: list[str],
+                   site_names: list[str | None]) -> tuple[list, list[str]]:
+    """([networks], [labels]) that --range and --vlan limit --leases to (GitHub issue #137). A VLAN (ID or name) is
+    looked up in network.vlans of each audited device's site, of every site when a device has none; it needs a
+    cidr. Raises ConfigError (unknown, ambiguous or without a cidr) or ValueError (a range that is no CIDR)."""
+    nets, labels = [], []
+    for r in ranges:
+        n = ipaddress.ip_network(r, strict=False)
+        if n not in nets:
+            nets.append(n)
+            labels.append(str(n))
+    if not vlan_values:
+        return nets, labels
+    sts = sorted({s for s in site_names if s})
+    if not sts or any(not s for s in site_names):
+        sts = [s["name"] for s in hmlib.sites(cfg)]
+    for value in vlan_values:
+        s = str(value).strip()
+        found = []
+        for st in sts:
+            table = hmlib.vlans(cfg, st)
+            if s.isdigit():
+                hits = [v for v in table if v["id"] == int(s)]
+            else:
+                hits = [v for v in table if str(v.get("name") or "").lower() == s.lower()]
+                if len({v["id"] for v in hits}) > 1:
+                    raise hmlib.ConfigError(f"--vlan {s!r} is ambiguous in network.vlans of homelab.yaml"
+                                            + (f" at site {st}" if st else "") + ": pass the VLAN ID.")
+            found += [v for v in hits if v.get("cidr") and v not in found]
+        if not found:
+            raise hmlib.ConfigError(f"--vlan {s!r}: no VLAN with that ID or name and a cidr in network.vlans of "
+                                    "homelab.yaml" + (f" (sites: {', '.join(sts)})" if any(sts) else "") + ".")
+        for v in found:
+            n = ipaddress.ip_network(str(v["cidr"]), strict=False)
+            if n not in nets:
+                nets.append(n)
+                labels.append(f"VLAN {v['id']}" + (f" {safe_name(v.get('name'))}" if v.get("name") else "") + f" ({n})")
+    return nets, labels
+
+
+def in_scope(ip: str, nets: list) -> bool:
+    """True without a scope, else when ip is inside one of nets."""
+    if not nets:
+        return True
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(a.version == n.version and a in n for n in nets)
 
 
 def recompute(root: Path, min_free: float, no_write: bool) -> int:
@@ -704,10 +780,19 @@ def main():
     ap.add_argument("--no-write", action="store_true", help="don't merge into discovery/routeros.json")
     ap.add_argument("--leases", action="store_true",
                     help="also read DHCP leases and ARP, and propose names for unknown scanned addresses")
+    ap.add_argument("--leases-only", action="store_true",
+                    help="--leases without the audit: no report of findings, discovery/routeros.json left as it is")
+    ap.add_argument("--range", action="append", default=[], metavar="CIDR",
+                    help="with --leases: fill MACs and propose names only for addresses in this CIDR (repeatable)")
+    ap.add_argument("--vlan", action="append", default=[], metavar="ID|NAME",
+                    help="with --leases: only for addresses in this VLAN's cidr from network.vlans (repeatable)")
     ap.add_argument("--recompute", action="store_true",
                     help="recompute the findings in discovery/routeros.json from the data already there, without "
                          "connecting (after a rule or routeros_audit.min_free_flash change)")
     a = ap.parse_args()
+    a.leases = a.leases or a.leases_only
+    if (a.range or a.vlan) and not a.leases:
+        ap.error("--range and --vlan limit --leases (or --leases-only)")
     try:
         cfg = hmlib.load_config()
         min_free = min_free_flash(cfg)
@@ -717,23 +802,32 @@ def main():
     root = Path(cfg["_root"])
     if a.recompute:
         return recompute(root, min_free, a.no_write)
-    targets = [(h, None, None, (hmlib.site_of_address(cfg, h) or {}).get("name") or None) for h in a.hosts]
+    inventory = load_inventory(root)
+    targets = [resolve_host(cfg, inventory, h) for h in a.hosts]
     if a.group:
-        found = group_hosts(root, a.group)
+        found = group_hosts(root, a.group, inventory)
         if not found:
             print(f"routeros_audit: no hosts in Ansible group {a.group!r}.", file=sys.stderr)
             return 4
         targets += found
     if not targets:
         ap.error("give hosts or --group")
+    seen: set = set()
+    targets = [t for t in targets if not (t[0] in seen or seen.add(t[0]))]   # one run per device
+    try:
+        nets, scope = scope_networks(cfg, a.range, a.vlan, [st for *_, st in targets])
+    except (hmlib.ConfigError, ValueError) as e:
+        print(f"routeros_audit: {e}", file=sys.stderr)
+        return 3
     jobs = [(h, a.user or u, a.port if p is None else p) for h, u, p, _ in targets]
     site_of = {h: st for h, _, _, st in targets}   # each device's site (GitHub issue #75)
+    sections = LEASES_ONLY if a.leases_only else None
     print(f"Inspecting {len(jobs)} device(s), read-only…", file=sys.stderr)
     with cf.ThreadPoolExecutor(max_workers=8) as ex:
-        devs = list(ex.map(lambda j: collect(j[0], j[1], j[2], a.timeout, leases=a.leases), jobs))
+        devs = list(ex.map(lambda j: collect(j[0], j[1], j[2], a.timeout, leases=a.leases, sections=sections), jobs))
 
     now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
-    if not a.no_write:
+    if not a.no_write and not a.leases_only:
         f = root / "discovery" / "routeros.json"
         db = json.loads(f.read_text()) if f.exists() else {}
         db.setdefault("devices", {})
@@ -748,18 +842,19 @@ def main():
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(json.dumps(db, indent=2, sort_keys=True) + "\n")
         print(f"Merged into {f.relative_to(root)}", file=sys.stderr)
-    sys.stdout.write(report(devs, names=inventory_names(root), min_free=min_free))
+    if not a.leases_only:
+        sys.stdout.write(report(devs, names=inventory_names(root, inventory), min_free=min_free))
     if a.leases:
-        from drift_report import load_ansible
-        filled, named = fill_macs(cfg, devs, not a.no_write)
+        filled, named = fill_macs(cfg, devs, not a.no_write, nets)
         if filled:
-            print(f"{'Would give' if a.no_write else 'Gave'} {filled} scanned host(s) without a MAC the one a router "
+            print(f"{'Would give' if a.no_write else 'Gave'} {filled} scanned host(s) "
+                  + (f"in {', '.join(scope)} " if scope else "") + "without a MAC the one a router "
                   f"knows ({named} with a vendor), and guessed their type again"
                   + (": run without --no-write to keep it in network.json." if a.no_write else
                      f" (merged into {hmlib.network_file(root).relative_to(root)})."), file=sys.stderr)
-        unknown = unknown_addresses(cfg, load_ansible(root)[0])
+        unknown = [(ip, h) for ip, h in unknown_addresses(cfg, inventory) if in_scope(ip, nets)]
         sys.stdout.write(proposal_report(proposals(devs, unknown), len(unknown),
-                                         any("leases" in d for d in devs), unread_tables(devs)))
+                                         any("leases" in d for d in devs), unread_tables(devs), scope))
     return 0 if any(d.get("reachable") for d in devs) else 2
 
 
