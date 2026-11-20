@@ -4762,6 +4762,17 @@ out = {
    " 1 D address=10.0.0.41 mac-address=AA:BB:CC:00:00:02 host-name=\"ev';rm -rf ~;'charger\" status=bound\n"
    " 2 D address=10.0.0.99 mac-address=AA:BB:CC:00:00:03 host-name=phone status=bound\n"),
  "/ip arp print terse without-paging": " 0   address=10.0.0.42 mac-address=AA:BB:CC:00:00:02 interface=bridge\n",
+ "/ip firewall filter print terse without-paging": "" if chr_ else (
+   " 0    chain=input action=accept connection-state=established,related,untracked\n"
+   " 1    chain=input action=drop connection-state=invalid\n"
+   " 2    chain=input action=add-src-to-address-list protocol=tcp dst-port=1234 address-list=knock\n"
+   " 3    chain=input action=accept protocol=tcp dst-port=22,8291 in-interface-list=MGMT\n"
+   " 4    chain=input action=accept protocol=tcp dst-port=22 src-address-list=knock\n"
+   " 5 X  chain=input action=accept protocol=tcp dst-port=22\n"
+   " 6    chain=input action=accept protocol=icmp\n"
+   " 7    chain=input action=accept protocol=tcp dst-port=80 src-address=10.0.0.0/24 comment=\"web ui\"\n"
+   " 8    chain=input action=drop\n"
+   " 9    chain=forward action=fasttrack-connection\n"),
  "/ip firewall nat print terse without-paging": "" if chr_ else (
    " 0    comment=web chain=dstnat action=dst-nat to-addresses=10.0.0.5 to-ports=443 protocol=tcp dst-port=443\n"),
 }
@@ -5085,7 +5096,11 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         self.assertIn("- Fix: `ansible-playbook playbooks/routeros-disable-services.yml -l sw-rack "   # GitHub #79
                       "-e '{\"routeros_disable_services\": [\"telnet\", \"www\"]}' --check`", sw)
         self.assertIn("-l chr1 ", out[out.index("## 10.0.0.2"):])
-        self.assertIn("**low** — `ssh` reachable from any address (port 22): limit it", sw)          # GitHub #80
+        self.assertIn("**low** — `ssh` reachable from any address (port 22): limit it to the management network "   # #80
+                      "(IPv4 input firewall for port 22: accept in-interface-list=MGMT; accept src-address-list=knock; "
+                      "drop the rest) · `ssh-any-address`", sw)                                     # GitHub #138
+        self.assertIn("at least limit it to the management network (IPv4 input firewall for port 23: drop the rest)", sw)
+        self.assertIn("(IPv4 input firewall for port 22: no rule: accepted)", out[out.index("## 10.0.0.2"):])
         self.assertIn("**medium** — MAC server (MAC Telnet) on all interfaces", sw)
         self.assertIn("**low** — neighbour discovery (MNDP/CDP/LLDP) on all interfaces", sw)
         self.assertNotIn("MAC Winbox on all", sw)
@@ -5144,6 +5159,26 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         f = {x["key"]: x for x in json.loads((self.d / "discovery/routeros.json").read_text())["devices"]["10.0.0.1"]["findings"]}
         self.assertEqual([k for k, x in f.items() if x.get("accepted")], ["plaintext-www"])
         self.assertEqual(self.ra.accept_lists({"r1": {"ansible_host": "10.0.0.7", "routeros_audit_accept": ["{{ x }}", " "]}}), {})
+
+    def test_input_firewall_evidence(self):  # GitHub issue #138
+        fw = lambda rules, port=22: self.ra.input_firewall({"filter": rules, "errors": {}}, port)
+        self.assertIsNone(self.ra.input_firewall({"errors": {}}, 22))                        # not read
+        self.assertIsNone(self.ra.input_firewall({"filter": [], "errors": {"filter": "timeout"}}, 22))
+        self.assertTrue(fw([{"chain": "input", "action": "drop", "in-interface-list": "!LAN"}]).endswith(
+            "drop in-interface-list=!LAN; accepted otherwise (end of chain)"))                 # default config
+        self.assertTrue(fw([{"chain": "input", "action": "jump", "jump-target": "mgmt"},
+                            {"chain": "input", "action": "drop"}]).endswith(": jump to mgmt (not followed)"))
+        rules = [{"chain": "input", "action": "accept", "protocol": "udp"},
+                 {"chain": "input", "action": "accept", "protocol": "!udp", "dst-port": "8000-8100"},
+                 {"chain": "input", "action": "accept", "dst-port": "!22", "src-address": "192.0.2.0/24"},
+                 {"chain": "input", "action": "accept", "connection-state": "!established", "src-address": "198.51.100.1"},
+                 {"chain": "input", "action": "accept"}]
+        self.assertTrue(fw(rules).endswith(": accept src-address=198.51.100.1; accept the rest"))
+        self.assertTrue(fw(rules, 8080).endswith(": accept the rest"))                       # !udp, in 8000-8100
+        self.assertIn(": accept src-address=192.0.2.0/24; accept src-address=198.51.100.1;", fw(rules, 23))  # !22
+        many = [{"chain": "input", "action": "accept", "src-address": f"192.0.2.{i}"} for i in range(9)]
+        self.assertEqual(fw(many).count(";"), 6)                                             # five, …, the last
+        self.assertTrue(self.ra.port_matches("x", 22))                                       # unreadable: may match
 
     def test_licence_deadline(self):  # issue 71: next-renewal-at is only the next renewal attempt
         dev = {"reachable": True, "errors": {}, "resource": {"board-name": "CHR"},

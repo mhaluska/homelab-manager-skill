@@ -129,6 +129,9 @@ proposals inside those addresses, for one reviewable commit per VLAN; `--leases-
 `routeros.json` as it is. The script reads each device
 in one SSH session (routers may refuse logins that come too quickly one after another).
 
+A service open to any address also shows how the IPv4 input chain treats new connections to its port (the
+deciding rules in order, e.g. `accept in-interface-list=TRUSTED; drop the rest`; jumps are not followed). That is
+evidence for the user to judge, not a verdict: the severity stays, and IPv6 is not covered.
 Each finding ends with its key (`ssh-any-address`, `plaintext-www`, `default-admin`, `routerboot-<version>`, …).
 When the user decides to keep a device as it is (e.g. management limited by the input firewall or port knocking
 instead of a service address), record the decision with its reason in `docs/decisions.md` and the keys in the host

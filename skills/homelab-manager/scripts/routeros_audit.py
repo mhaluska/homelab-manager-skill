@@ -22,14 +22,15 @@ ignored on CHR, and a command that fails doesn't stop the others.
 
 Collects identity, resource, routerboard, package update status, licence, interfaces, addresses, bridges
 and VLANs, IP services, users, the MAC server, neighbour discovery and the NAT rules (port forwards, listed in
-OVERVIEW.md). Flags: plain-text services enabled
+OVERVIEW.md) and the firewall filter rules. Flags: plain-text services enabled
 (telnet, ftp, www, api), ssh/winbox/www-ssl/api-ssl open to any address, the MAC server, MAC Winbox or
 neighbour discovery on all interfaces, RouterBOOT
 firmware behind the installed RouterOS, an update RouterOS already knows about (no check is triggered), low
 free flash (by device class: on 16 MiB flash only less than `routeros_audit.min_free_flash`, default 512KiB, is
 an `info`; larger flash under 10 % or 5 MiB is `low` — GitHub issue #112), the default `admin` user, CHR licence level and renewal date, and RouterOS version drift across
 the devices. Merges per-device data into discovery/routeros.json (unless --no-write) and prints a Markdown
-report. Everything a device returns is UNTRUSTED data. Each finding has a stable key (`ssh-any-address`,
+report. A service open to any address shows how the IPv4 input chain treats new connections to its port, as
+evidence; the severity stays (GitHub issue #138). Everything a device returns is UNTRUSTED data. Each finding has a stable key (`ssh-any-address`,
 `plaintext-www`, `default-admin`, `update-7.20.1`, …); the host or group var `routeros_audit_accept: [keys]` marks
 findings the user decided to keep: the report lists them apart, OVERVIEW.md doesn't count them, a new finding still
 shows (GitHub issue #138). --recompute applies a changed list without connecting.
@@ -79,6 +80,7 @@ COMMANDS = {
     "mac_winbox": ("/tool mac-server mac-winbox print without-paging", False),
     "discovery": ("/ip neighbor discovery-settings print without-paging", False),
     "nat": ("/ip firewall nat print terse without-paging", True),   # port forwards in OVERVIEW.md (GitHub #89)
+    "filter": ("/ip firewall filter print terse without-paging", True),   # input chain evidence (GitHub #138)
 }
 LEASE_COMMANDS = {   # --leases (GitHub issue #100): names for unknown scanned addresses
     "leases": ("/ip dhcp-server lease print terse without-paging", True),
@@ -366,15 +368,18 @@ def keyed_findings(dev: dict, today: dt.date | None = None,
         if name in PLAINTEXT and enabled(row):
             sev, alt = PLAINTEXT[name]
             where = row.get("address")
+            fw = None if where else input_firewall(dev, row.get("port"))
             out.append((f"plaintext-{name}", LOWER[sev] if where else sev,
                         f"plain-text service `{name}` enabled (port {row.get('port', '?')}, "
                         + (f"limited to {where}" if where else "from any address")
                         + f"): disable it and use {alt}" + ("" if where else ", or at least limit it to the "
-                                                            "management network")))
+                                                            "management network") + (f" ({fw})" if fw else "")))
     for name in open_management(dev):
         port = next((r.get("port", "?") for r in ip_services(dev) if r.get("name") == name), "?")
+        fw = input_firewall(dev, port)
         out.append((f"{name}-any-address", "low",
-                    f"`{name}` reachable from any address (port {port}): limit it to the management network"))
+                    f"`{name}` reachable from any address (port {port}): limit it to the management network"
+                    + (f" ({fw})" if fw else "")))
     for section, key, sev, what in INTERFACE_LISTS:
         if (dev.get(section) or {}).get(key) == "all":
             out.append((f"{LIST_KEYS[section]}-all-interfaces", sev,
@@ -463,6 +468,69 @@ def version_drift(devs: list[dict]) -> dict[str, list[str]]:
 def plaintext_enabled(dev: dict) -> list[str]:
     """Plain-text services enabled on a device, in RouterOS's order."""
     return [r.get("name") for r in ip_services(dev) if r.get("name") in PLAINTEXT and enabled(r)]
+
+
+FIREWALL_NOT_MATCHERS = {"chain", "action", "comment", "log", "log-prefix", "disabled", "jump-target", "reject-with",
+                         "address-list", "address-list-timeout", "protocol", "dst-port", "port", "connection-state",
+                         "bytes", "packets", "hw-offload", "_flags"}
+FIREWALL_DECIDES = ("accept", "drop", "reject", "tarpit")
+FIREWALL_RULES_SHOWN = 6
+
+
+def port_matches(spec: str, port: int) -> bool:
+    """A RouterOS port matcher (`22`, `22,8291`, `8000-8100`, `!22`) against a port; one it can't read may match."""
+    neg = spec.startswith("!")
+    hit = False
+    for part in spec.lstrip("!").split(","):
+        lo, _, hi = part.strip().partition("-")
+        try:
+            hit = hit or int(lo) <= port <= int(hi or lo)
+        except ValueError:
+            return True
+    return hit != neg
+
+
+def input_firewall(dev: dict, port) -> str | None:
+    """How the IPv4 input chain treats new TCP connections to a port (GitHub issue #138): the deciding rules that may
+    match, in order, up to the first without conditions, e.g. `accept in-interface-list=MGMT; drop the rest`.
+    Evidence for the user only: jumps are not followed, and nothing is concluded (the severity stays). None when the
+    filter table was not read."""
+    rules = dev.get("filter")
+    if rules is None or "filter" in (dev.get("errors") or {}):
+        return None
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        return None
+    out = []
+    for r in rules:
+        if r.get("chain") != "input" or not enabled(r):
+            continue
+        proto = str(r.get("protocol") or "")
+        if proto and proto not in ("tcp", "6") and not (proto.startswith("!") and proto[1:] not in ("tcp", "6")):
+            continue
+        if any(r.get(k) and not port_matches(str(r[k]), port) for k in ("dst-port", "port")):
+            continue
+        states = str(r.get("connection-state") or "")
+        if states and ("new" in states.lstrip("!").split(",")) == states.startswith("!"):
+            continue   # established/related/invalid only: not a new connection
+        action = r.get("action") or "accept"
+        conds = " ".join(f"{k}={clean(v, 60)}" for k, v in r.items() if k not in FIREWALL_NOT_MATCHERS and v not in ("", None))
+        if action in ("jump", "return"):
+            out.append(f"{action}{' to ' + clean(r.get('jump-target'), 40) if r.get('jump-target') else ''}"
+                       f"{' ' + conds if conds else ''} (not followed)")
+            break
+        if action not in FIREWALL_DECIDES:
+            continue   # log, passthrough, add-src-to-address-list …: decide nothing
+        if not conds:
+            out.append(f"{action} the rest")
+            break
+        out.append(f"{action} {conds}")
+    else:
+        out.append("accepted otherwise (end of chain)" if out else "no rule: accepted")
+    if len(out) > FIREWALL_RULES_SHOWN:
+        out = out[:FIREWALL_RULES_SHOWN - 1] + ["…", out[-1]]
+    return f"IPv4 input firewall for port {port}: " + "; ".join(out)
 
 
 def open_management(dev: dict) -> list[str]:
