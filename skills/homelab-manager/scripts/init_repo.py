@@ -75,6 +75,7 @@ COMPONENTS = {
                     "ansible/playbooks/bmc-info.yml", "ansible/inventory/managed/group_vars/unifi.yml",
                     "ansible/playbooks/unifi-info.yml", "ansible/playbooks/routeros-disable-services.yml",
                     "ansible/playbooks/routeros-restrict-management.yml",
+                    "ansible/playbooks/routeros-routerboot-upgrade.yml",
                     "ansible/inventory/managed/group_vars/qnap.yml", "ansible/playbooks/qnap-containers.yml"]),
     "kubernetes": ("Kubernetes clusters (rolling patching with drain/uncordon)", ["ansible"],
                    ["ansible/playbooks/hooks/k8s-drain.yml", "ansible/playbooks/hooks/k8s-uncordon.yml"]),

@@ -1,0 +1,192 @@
+# Upgrade the RouterBOOT firmware that routeros_audit.py flags (`routerboot-<version>`), GitHub #140:
+#   ansible-playbook playbooks/routeros-routerboot-upgrade.yml -l <host> --check                  # the plan
+#   ansible-playbook playbooks/routeros-routerboot-upgrade.yml -l <host> -e homelab_read_only=false  # apply
+# Appliances are read-only (group_vars/appliances.yml): without -e homelab_read_only=false (the user's yes) the
+# play only shows what it would upgrade. Applying reboots the device: whatever it routes or switches is down for
+# a minute or two. Devices without RouterBOOT (CHR, x86) and devices already current are skipped.
+# - One device per run: refused when more need the upgrade, unless -e routeros_routerboot_many=true (they are
+#   then done one after another, each verified before the next).
+# - Refused for the device that holds this Mac's default gateway unless -e routeros_routerboot_gateway=true:
+#   its reboot cuts this Mac (and Claude) off the network until it is back.
+# Stages the firmware, checks the log for "Firmware upgraded successfully", reboots, waits for SSH to go down
+# and come back, then fails unless current-firmware is the staged version. Needs a user with write rights
+# (group `full`), not the audit user. Refresh the audit afterwards: routeros_audit.py <host>.
+- name: Read RouterBOOT state
+  hosts: "{{ target | default('routeros') }}"
+  gather_facts: false
+  vars:
+    ansible_connection: ansible.netcommon.network_cli
+    ansible_network_os: community.routeros.routeros
+    # one line per fact: version|..., board|..., current|..., upgrade|... (none on CHR/x86), addr|<address>
+    state_script: >-
+      :put ("version|" . [/system resource get version]);
+      :put ("board|" . [/system resource get board-name]);
+      :do {[:parse ":put (\"current|\" . [/system routerboard get current-firmware]);
+      :put (\"upgrade|\" . [/system routerboard get upgrade-firmware])"]} on-error={:put "current|"};
+      :foreach a in=[/ip address find where !disabled] do={:put ("addr|" . [/ip address get $a address])}
+  tasks:
+    - name: Read the state
+      community.routeros.command:
+        commands: ["{{ state_script }}"]
+      register: before
+      changed_when: false
+      check_mode: false
+
+    - name: Work out the plan
+      ansible.builtin.set_fact:
+        hm_version: "{{ (facts.version | default('')).split(' ')[0] }}"
+        hm_current: "{{ facts.current | default('') }}"
+        hm_target: "{{ facts.upgrade | default('') }}"
+        hm_addresses: "{{ addrs }}"
+        hm_needs: "{{ facts.current | default('') | length > 0 and facts.upgrade | default('') | length > 0
+                      and facts.current != facts.upgrade }}"
+      vars:
+        lines: "{{ before.stdout_lines[0] | map('trim') | select | list }}"
+        facts: >-
+          {%- set out = {} -%}
+          {%- for l in lines if not l.startswith('addr|') and '|' in l -%}
+            {%- set _ = out.update({l.split('|')[0]: l.split('|', 1)[1] | trim}) -%}
+          {%- endfor -%}
+          {{ out }}
+        addrs: "{{ lines | select('match', '^addr[|]') | map('regex_replace', '^addr[|]', '')
+                 | map('regex_replace', '/.*$', '') | list }}"
+
+    - name: What would change
+      ansible.builtin.debug:
+        msg: >-
+          {{ ('RouterBOOT ' ~ hm_current ~ ' -> ' ~ hm_target ~ ' (RouterOS ' ~ hm_version ~ '), then a reboot')
+             if hm_needs else ('no RouterBOOT (CHR or x86)' if hm_current | length == 0
+             else 'RouterBOOT ' ~ hm_current ~ ' is current') }}
+
+    - name: Read this Mac's default gateway
+      ansible.builtin.shell: >-
+        route -n get default 2>/dev/null | awk '/gateway:/ {print $2}';
+        ip route show default 2>/dev/null | awk '{print $3}'
+      delegate_to: localhost
+      run_once: true
+      register: gateway
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Is this device the gateway
+      ansible.builtin.set_fact:
+        hm_is_gateway: "{{ hm_addresses | intersect(gateway.stdout_lines | default([])) | length > 0 }}"
+
+    - name: One device per run, and not this Mac's gateway unless asked
+      ansible.builtin.assert:
+        that:
+          - allow_many or needing | length <= 1
+          - allow_gateway or gateway_devices | length == 0
+        fail_msg: >-
+          {% if needing | length > 1 and not allow_many %}{{ needing | join(', ') }} need the upgrade: limit the run
+          to one with -l <host>, or with the user's yes run them one after another with
+          -e routeros_routerboot_many=true. {% endif %}{% if gateway_devices | length > 0 and not allow_gateway %}{{
+          gateway_devices | join(', ') }} holds this Mac's default gateway ({{ gateway.stdout_lines | join(', ') }}):
+          its reboot cuts this Mac and Claude off the network for a minute or two. With the user's yes, run again
+          with -e routeros_routerboot_gateway=true. {% endif %}Nothing was changed.
+      vars:
+        allow_many: "{{ routeros_routerboot_many | default(false) | bool }}"
+        allow_gateway: "{{ routeros_routerboot_gateway | default(false) | bool }}"
+        needing: "{{ ansible_play_hosts | map('extract', hostvars) | selectattr('hm_needs')
+                     | map(attribute='inventory_hostname') | list }}"
+        gateway_devices: "{{ ansible_play_hosts | map('extract', hostvars) | selectattr('hm_needs')
+                             | selectattr('hm_is_gateway') | map(attribute='inventory_hostname') | list }}"
+      run_once: true
+
+- name: Upgrade RouterBOOT
+  hosts: "{{ target | default('routeros') }}"
+  gather_facts: false
+  serial: 1
+  vars:
+    ansible_connection: ansible.netcommon.network_cli
+    ansible_network_os: community.routeros.routeros
+    log_count: ':put ("fwlog|" . [:len [/log find where message~"[Ff]irmware upgraded successfully"]])'
+    firmware: ':put ("current|" . [/system routerboard get current-firmware])'
+  tasks:
+    - name: Applying needs the user's yes
+      ansible.builtin.assert:
+        that: not (homelab_read_only | default(true) | bool)
+        fail_msg: >-
+          {{ inventory_hostname }} is an appliance (homelab_read_only). Nothing was changed. With the user's yes,
+          run again with -e homelab_read_only=false.
+      when:
+        - hm_needs | bool
+        - not ansible_check_mode
+
+    - name: Upgrade, reboot and verify
+      when:
+        - hm_needs | bool
+        - not ansible_check_mode
+      block:
+        - name: Count the firmware log lines
+          community.routeros.command:
+            commands: ["{{ log_count }}"]
+          register: log_before
+          changed_when: false
+
+        # A background job confirms by itself; the interactive [y/n] prompt would hang network_cli.
+        - name: Stage the firmware
+          community.routeros.command:
+            commands: [':execute script="/system routerboard upgrade"']
+          changed_when: true
+
+        - name: The log says the firmware was upgraded
+          community.routeros.command:
+            commands: ["{{ log_count }}"]
+          register: log_after
+          changed_when: false
+          until: (log_after.stdout[0] | regex_search('\d+$') | int) > (log_before.stdout[0] | regex_search('\d+$') | int)
+          retries: 12
+          delay: 5
+
+        - name: Reboot
+          community.routeros.command:
+            commands: [':execute script=":delay 3s; /system reboot"']
+          changed_when: true
+
+        - name: Drop the old connection
+          ansible.builtin.meta: reset_connection
+
+        - name: Wait for the device to go down
+          ansible.builtin.wait_for:
+            host: "{{ ansible_host | default(inventory_hostname) }}"
+            port: "{{ ansible_port | default(22) | int }}"
+            state: stopped
+            timeout: 180
+          delegate_to: localhost
+
+        - name: Wait for SSH to come back
+          ansible.builtin.wait_for:
+            host: "{{ ansible_host | default(inventory_hostname) }}"
+            port: "{{ ansible_port | default(22) | int }}"
+            state: started
+            delay: 10
+            timeout: 600
+          delegate_to: localhost
+
+        - name: Read the firmware again
+          community.routeros.command:
+            commands: ["{{ firmware }}"]
+          register: after
+          changed_when: false
+          until: after is succeeded
+          retries: 6
+          delay: 10
+
+        - name: The new firmware is running
+          ansible.builtin.assert:
+            that: (after.stdout[0] | trim) == 'current|' ~ hm_target
+            fail_msg: >-
+              {{ inventory_hostname }} runs RouterBOOT {{ after.stdout[0] | regex_replace('^current\|', '') }},
+              expected {{ hm_target }}. Look at /system routerboard and the log on the device.
+            success_msg: >-
+              {{ inventory_hostname }} runs RouterBOOT {{ hm_target }} (RouterOS {{ hm_version }}). Refresh the
+              audit: routeros_audit.py {{ inventory_hostname }}.
+      rescue:
+        - name: Upgrade failed
+          ansible.builtin.fail:
+            msg: >-
+              {{ inventory_hostname }}: {{ ansible_failed_task.name }} failed ({{ ansible_failed_result.msg
+              | default('see above') }}). If the device is down, check it on the console; if the firmware is
+              staged but not running, a reboot by hand finishes it.

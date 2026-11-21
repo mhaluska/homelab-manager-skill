@@ -467,6 +467,14 @@ class GuardConfigTests(unittest.TestCase):
         self.assertIsNone(self.d(pb))                       # refuses by itself: appliances are read-only
         self.assertIsNone(self.d(pb + " -e homelab_read_only=true"))
 
+    def test_routerboot_upgrade_asks(self):  # GitHub issue #140: reboots the device
+        pb = "ansible-playbook playbooks/routeros-routerboot-upgrade.yml -l r1"
+        self.assertEqual(self.d(pb + " -e homelab_read_only=false"), "ask")
+        self.assertEqual(self.d(pb + " -e homelab_read_only=false -e routeros_routerboot_gateway=true"), "ask")
+        self.assertEqual(self.d(pb), "ask")                                  # by its name, even if it would refuse
+        self.assertIsNone(self.d(pb + " --check"))
+        self.assertIsNone(self.d(pb + " --check -e routeros_routerboot_many=true"))
+
     def test_reboot_policy_asks(self):  # issue 39: reboot=always|if_required on any playbook
         self.assertEqual(self.d("ansible-playbook site.yml -e reboot=always"), "ask")
         self.assertEqual(self.d("ansible-playbook site.yml -e reboot=if_required"), "ask")

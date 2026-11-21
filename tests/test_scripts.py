@@ -3262,6 +3262,23 @@ class DiscoveryLayoutTests(unittest.TestCase):  # GitHub issue #73
         self.assertIn("management_ranges: []", (SCRIPTS.parent / "assets/repo-template/homelab.yaml").read_text())
         self.assertIn("ansible/playbooks/routeros-restrict-management.yml", (SCRIPTS / "init_repo.py").read_text())
 
+    def test_routeros_routerboot_playbook(self):  # GitHub issue #140
+        pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/routeros-routerboot-upgrade.yml").read_text()
+        order = [pb.index(t) for t in ("- name: Read the state\n", "- name: One device per run", "- name: Upgrade RouterBOOT\n",
+                                       "- name: Applying needs the user's yes", "- name: Stage the firmware",
+                                       "- name: The log says the firmware was upgraded", "- name: Reboot\n",
+                                       "- name: Wait for the device to go down", "- name: Wait for SSH to come back",
+                                       "- name: The new firmware is running")]
+        self.assertEqual(order, sorted(order))
+        self.assertIn("homelab_read_only | default(true)", pb)
+        self.assertIn("serial: 1", pb)
+        self.assertIn("routeros_routerboot_many | default(false)", pb)
+        self.assertIn("routeros_routerboot_gateway | default(false)", pb)
+        self.assertIn("route -n get default", pb)
+        self.assertNotIn("check_mode: false", pb[pb.index("- name: Upgrade RouterBOOT\n"):])  # nothing runs under --check
+        self.assertEqual(pb.count(":execute script="), 2)                    # no interactive prompt over network_cli
+        self.assertIn("ansible/playbooks/routeros-routerboot-upgrade.yml", (SCRIPTS / "init_repo.py").read_text())
+
     def test_check_updates_target_scopes_every_play(self):  # GitHub issue #92
         pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/check-updates.yml").read_text()
         hosts = dict(re.findall(r'^- name: (.+)\n  hosts: "(.+)"$', pb, re.M))

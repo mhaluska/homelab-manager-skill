@@ -114,8 +114,8 @@ python3 $HM/scripts/routeros_audit.py --group routeros --leases-only --vlan IoT 
 A host of the managed inventory given by name or address also takes its user, port and site from there.
 It prints a Markdown report (save it as `docs/security-audit-<date>.md` when the user wants one) and keeps
 the data in `discovery/routeros.json`, including the NAT rules (OVERVIEW.md lists the port forwards). Fixing a
-finding is a change: `/system routerboard upgrade` and a
-RouterOS upgrade need a reboot (approval), disabling a service can cut off whoever uses it — ask first.
+finding is a change: a RouterBOOT or RouterOS upgrade needs a reboot (approval), disabling a service can cut off
+whoever uses it — ask first.
 Use a dedicated user in group `read` for audits. Free flash is judged by device class: on 16 MiB flash (hAP, small
 CRS) a few MiB free is normal on RouterOS 7, so only less than `routeros_audit.min_free_flash` (homelab.yaml, default
 `512KiB`) is an `info` — such a device may need extra packages removed before an upgrade; on larger flash under 10 %
@@ -147,6 +147,16 @@ show the user what it would disable; with their yes, run it again with `-e homel
 `--check` (the guard asks). Without that it changes nothing: appliances are read-only. It reads the services
 again afterwards and fails if one is still enabled. It needs a user with write rights (group `full`), not the
 audit user.
+
+RouterBOOT behind the installed RouterOS (`routerboot-<version>`): `playbooks/routeros-routerboot-upgrade.yml`,
+same flow: `-l <host> --check` shows current → target, `-e homelab_read_only=false` applies it with the user's yes.
+It skips CHR/x86 and current devices, stages the firmware, checks the log for "Firmware upgraded successfully",
+reboots, waits for SSH and fails unless the new firmware runs; then refresh with `routeros_audit.py <host>`. Say
+what the device routes or switches: it is down for a minute or two. It refuses more than one device per run
+(`-e routeros_routerboot_many=true` does them one after another) and the device holding this Mac's default gateway
+(`-e routeros_routerboot_gateway=true`): its reboot cuts this Mac and Claude off until it is back, so tell the user
+first that the session goes quiet. Instead, `/system routerboard settings set auto-upgrade=yes` (a config change)
+stages the firmware on each RouterOS upgrade, but it still needs a second reboot.
 
 Management access from anywhere (`ssh`, `winbox`, `www-ssl`, `api-ssl` without an address limit; MAC server,
 MAC Winbox or neighbour discovery on all interfaces): `playbooks/routeros-restrict-management.yml` (RouterOS 7),
