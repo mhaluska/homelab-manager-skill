@@ -16,10 +16,9 @@ are Python 3 standard library only; run them as `python3 $HM/scripts/<name>.py`.
 1. **Find the repo.** Walk up from the working directory to `homelab.yaml`.
    - Not found and the directory is empty or a fresh repo → **interactive setup** (section 2).
    - Not found but it's some unrelated project → ask where the homelab repo is.
-2. **Load config** from `homelab.yaml`. It is the only source of site facts: enabled
-   `components`, networks, Proxmox endpoint, storage, bridges, VMID ranges, keychain item names.
-   When a value the task needs is empty, discover it read-only (Proxmox API) or ask the user;
-   never guess an IP range, node, storage or bridge name, because a wrong guess here either
+2. **Load config** from `homelab.yaml`, the only source of site facts: enabled `components`, networks, Proxmox
+   endpoint, storage, bridges, VMID ranges, keychain item names. When a value the task needs is empty, discover it
+   read-only (Proxmox API) or ask the user; never guess an IP range, node, storage or bridge name: a wrong guess
    scans someone else's network or puts a disk on the wrong pool.
 3. **Respect `components`** (none listed = older repo, all enabled). Parts set to `false` aren't used here:
    don't propose them or create their files. If a request needs one ("build a Debian template" with
@@ -135,32 +134,30 @@ Never reboot more than one node of the same cluster (Proxmox, Kubernetes, databa
   `python3 $HM/scripts/with_secrets.py proxmox-rw $STATE -- tofu plan -out=plan.tfplan`
   `$STATE` here and in the references = the `opentofu.state_secret` (e.g. `s3-state`) when `opentofu.state_backend` is `s3`; leave it out for local state.
 - Use the **read-only** token (`proxmox-ro`) for discovery; `proxmox-rw` only for changes (another site: its own tokens).
-- Don't echo, print, write to files or pass secrets as arguments. If a secret ever
-  appears in output, stop, tell the user, and recommend rotating it.
+- Don't echo, print, write to files or pass secrets as arguments. If one appears in output, stop, tell the user and
+  recommend rotating it.
 - SSH uses the agent (`ssh-add -L` for public keys). Private keys are never read.
 
 ## 6. Problems: homelab in reports, skill problems and ideas in skill_issues.md
 
-**Homelab problems** (drift, unmanaged guests, audit findings, failed or partial runs, risky
-settings) are not tracked in a file. Report them in your reply and in the report the task writes:
-`discovery/drift.md`, `docs/security-audit-<date>.md`; offer to fix them through §3.
+**Homelab problems** (drift, unmanaged guests, audit findings, failed or partial runs, risky settings) are not
+tracked in a file: report them in your reply and in the task's report (`discovery/drift.md`,
+`docs/security-audit-<date>.md`); offer to fix them through §3.
 
-**Problems with this skill** go to `skill_issues.md`, so they reach the plugin's maintainer: a bundled
-script crashed or gave wrong results, the guard blocked a legitimate command or let a dangerous one
-through, a scaffolded template failed validation, these instructions or a reference were wrong,
-missing or outdated, setup misbehaved, or the user says the skill did something wrong.
-**Log it the moment you notice it, unasked, in the same turn**: whenever you work around the skill
-(fix up a script's output or a command the skill prescribes, retry with other flags, edit a scaffolded
-file to make it validate, bypass a wrong instruction), run `issues.py add` before your final report.
-Saying "fixing that" in chat is not enough. A hook reminds you when a bundled script fails.
+**Problems with this skill** go to `skill_issues.md`, so they reach the plugin's maintainer: a bundled script crashed
+or gave wrong results, the guard blocked a legitimate command or let a dangerous one through, a scaffolded template
+failed validation, these instructions or a reference were wrong, missing or outdated, setup misbehaved, or the user
+says the skill did something wrong. **Log it the moment you notice it, unasked, in the same turn**: whenever you work
+around the skill (fix up a script's output or a command the skill prescribes, retry with other flags, edit a
+scaffolded file to make it validate, bypass a wrong instruction), run `issues.py add` before your final report. Saying
+"fixing that" in chat is not enough. A hook reminds you when a bundled script fails.
 
-**Ideas to improve this skill** go there too, as `--kind improvement` (an existing script, flag,
-reference or template could work better) or `--kind idea` (something missing). Note one, unasked,
-when the work or the conversation shows it: you did by hand, or repeatedly, what a script or flag
-could do; the user asked a question or wanted a task no reference or script covers; a component,
-OS or appliance isn't supported; the user wishes the skill did something ("it would be nice if…"),
-or says *"note an idea for the skill"*. Only ones that would help other homelabs, written generically
-(the site's own to-do list goes in the reply or `docs/`); finish the task, then add it before the report.
+**Ideas to improve this skill** go there too, as `--kind improvement` (an existing script, flag, reference or template
+could work better) or `--kind idea` (something missing). Note one, unasked, when the work or the conversation shows
+it: you did by hand, or repeatedly, what a script or flag could do; the user asked a question or wanted a task no
+reference or script covers; a component, OS or appliance isn't supported; the user wishes the skill did something ("it
+would be nice if…"), or says *"note an idea for the skill"*. Only ones that would help other homelabs, written
+generically (the site's own to-do list goes in the reply or `docs/`); finish the task, then add it before the report.
 ```bash
 python3 $HM/scripts/issues.py add --title "…" --kind script|guard|instructions|setup|template|other|improvement|idea \
   --key <stable-key> --body-file <details.md>
@@ -235,6 +232,7 @@ Scripts (all in `$HM/scripts/`):
 | `guest_map.py [--site N]` | per-NIC guest map: VLAN, IPs, subnet/ansible_host/VMID checks | `discovery/guest-map.md` |
 | `ssh_probe.py [targets] [--user U] [--draft] [--site N]` | read-only SSH probe of discovered hosts: hostname, OS, usable Python, OS group | `discovery/network.json` |
 | `routeros_audit.py <hosts> [--group G] [--user U]` | read-only MikroTik RouterOS inspection + audit findings (Markdown report) | `discovery/routeros.json` |
+| `security_audit.py [--site N] [--report]` | findings from `security-audit.yml`'s data plus this Mac's checks; report draft (references/security.md) | `discovery/security.json`, `docs/` |
 | `upgrade_notes.py [--all] [--json]` / `--decline ID…` / `--done ID…` | opt-in changes newer releases suggest for this repo (shown by `--sync-managed`); record the user's no / a manual step done | — |
 | `config_set.py 'path=value' 'list+=item' [--delete path] [--dry-run]` | edit homelab.yaml keeping comments and layout; `sites[name].…`, `network.vlans[id].…` pick a list entry | `homelab.yaml` |
 | `issues.py add\|list\|show\|report\|resolve\|fixed\|compact` | note problems with / ideas for this skill; report them (sanitised) to the plugin repo | `skill_issues.md` |

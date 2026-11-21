@@ -29,21 +29,30 @@ never values). Run it after setup, after macOS updates, and whenever a secret re
 ## Security audit ("run a security audit")
 
 Read-only by default; report findings with severity and a proposed fix, change nothing until approved.
-- **Repo**: no secrets in Git history (`git log -p | grep -E 'PRIVATE KEY|PVEAPIToken|ghp_|github_pat_|AKIA'`),
-  `.gitignore` covers state/keys, pre-commit hook active (`git config core.hooksPath`).
-- **Proxmox**: token ACLs (`pveum acl list` — user runs or via ro token `/access/acl`),
-  no `root@pam` tokens, TLS verification on, 2FA on root (ask).
-- **Hosts** (Ansible, `--check`): SSH `PasswordAuthentication no`, `PermitRootLogin
-  prohibit-password|no`, unattended security updates status, firewall active, pending security
-  updates (check-updates.yml), unexpected listening ports vs `discovery/network.json`.
-- **Network**: devices not in managed inventory (drift_report.py), services exposed that
-  shouldn't be (telnet, SMBv1, plain HTTP admin UIs).
-- **Mac Mini**: FileVault / auto-login trade-off (tell the user, don't change), firewall,
-  macOS updates pending (`softwareupdate -l`), SSH agent keys.
-Write the report to `docs/security-audit-<date>.md` (findings by severity, each with evidence, fix and
-a verify command), summarise the high-severity ones in your reply, offer to fix them, and commit. The
-report is the record: findings are not tracked anywhere else, and never sent to GitHub — if the
-homelab repo is public, ask before committing exploitable detail (IPs, versions with known holes).
+1. **Linux hosts**: `ansible-playbook playbooks/security-audit.yml [-e target=site_<name>]` (reads only, also in
+   `--check`) writes `discovery/security.json`: `sshd -T`, accounts with a password or none (names only), NOPASSWD
+   sudo, host firewall, automatic updates, listeners, Samba shares, NFS exports, containers, tunnel clients.
+2. **Findings and this Mac**: `python3 $HM/scripts/security_audit.py [--site <name>] [--report]` contacts no host.
+   It judges that data, checks this Mac (FileVault, firewall, SIP, Gatekeeper, agent keys; `--mac-updates` adds
+   `softwareupdate -l`), writes the findings into security.json (OVERVIEW.md counts them) and prints the report.
+   `--report` saves it as `docs/security-audit-<date>[-<site>].md` and never replaces an existing one (`--force`).
+   FileVault off with auto-login is the known trade-off: tell the user, don't change it.
+3. **By hand** (the report's "Still to check by hand"), adding evidence to the draft:
+   - **Proxmox**: users and TFA (`/access/tfa` via the ro token), tokens (privilege separation, none on
+     `root@pam`), ACL (`/access/acl`), datacenter/node firewall, TLS verification on; privileged LXC with
+     `nesting`/`mount` features, worst behind a port forward (OVERVIEW.md lists the forwards); PBS rights and encryption.
+   - **Network**: `routeros_audit.py --group routeros`, devices not in the inventory (drift_report.py), services
+     that shouldn't be exposed (telnet, SMBv1, plain HTTP admin UIs) from `nmap_scan.py --profile services`.
+   - **Repo**: no secrets in Git history (`git log -p | grep -E 'PRIVATE KEY|PVEAPIToken|ghp_|github_pat_|AKIA'`),
+     `.gitignore` covers state/keys, pre-commit hook active (`git config core.hooksPath`).
+
+Every finding has a stable key (shown after it). Only on the user's decision, a host or group var
+`security_audit_accept: [keys]` (Mac: `security_audit.mac_accept` in homelab.yaml) marks findings as accepted: the
+report lists them apart, OVERVIEW.md doesn't count them, new ones still show; then run the script again.
+Summarise the high-severity findings in your reply, offer to fix them, and commit the report. The report is the
+record: findings are not tracked anywhere else, and never sent to GitHub — if the homelab repo is public
+(`overview.redact`), ask before committing the report or security.json (exploitable detail: IPs, versions,
+open shares).
 
 ## Hard rules (also enforced by hooks/guard.py)
 
