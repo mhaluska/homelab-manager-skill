@@ -5122,6 +5122,9 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         self.assertIn("**low** — neighbour discovery (MNDP/CDP/LLDP) on all interfaces", sw)
         self.assertNotIn("MAC Winbox on all", sw)
         self.assertIn("- Limit: `ansible-playbook playbooks/routeros-restrict-management.yml -l sw-rack --check`", sw)
+        self.assertIn("- Upgrade: `ansible-playbook playbooks/routeros-routerboot-upgrade.yml -l sw-rack --check`", sw)  # #140
+        self.assertIn("`playbooks/routeros-routerboot-upgrade.yml` (stages it and reboots: approval) · `routerboot-7.16.1`", sw)
+        self.assertNotIn("routeros-routerboot-upgrade.yml -l chr1", out)                           # CHR: no RouterBOOT
         self.assertNotIn("on all interfaces", out[out.index("## 10.0.0.2"):out.index("## 10.0.0.9")])
         live = {"services": [{"name": "ssh", "_flags": "D", "remote": "10.0.0.7:5000"},
                              {"name": "ssh", "_flags": "", "address": "10.0.99.0/24"},

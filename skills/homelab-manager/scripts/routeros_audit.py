@@ -388,7 +388,7 @@ def keyed_findings(dev: dict, today: dt.date | None = None,
     cur, upg = rb.get("current-firmware"), rb.get("upgrade-firmware")
     if cur and upg and cur != upg:
         out.append((f"routerboot-{upg}", "medium", f"RouterBOOT firmware {cur} is behind {upg} (the installed RouterOS's): "
-                              "`/system routerboard upgrade`, then a reboot (approval)"))
+                              "`playbooks/routeros-routerboot-upgrade.yml` (stages it and reboots: approval)"))
     up = dev.get("update") or {}
     inst, latest = up.get("installed-version"), up.get("latest-version")
     if inst and latest and inst != latest:
@@ -546,17 +546,22 @@ def wide_open(dev: dict) -> bool:
 
 def fix_hint(dev: dict, name: str | None, accepted: set | frozenset = frozenset()) -> str | None:
     """The playbook commands that fix a device's findings: plain-text services (GitHub issue #79), management
-    access from anywhere (GitHub issue #80); none for findings the user accepted (GitHub issue #138)."""
+    access from anywhere (GitHub issue #80), RouterBOOT behind RouterOS (GitHub issue #140); none for findings
+    the user accepted (GitHub issue #138)."""
     svc = [s for s in plaintext_enabled(dev) if f"plaintext-{s}" not in accepted]
     wide = (any(f"{s}-any-address" not in accepted for s in open_management(dev))
             or any((dev.get(s) or {}).get(k) == "all" and f"{LIST_KEYS[s]}-all-interfaces" not in accepted
                    for s, k, _, _ in INTERFACE_LISTS))
-    if not svc and not wide:
+    rb = dev.get("routerboard") or {}
+    boot = (rb.get("current-firmware") and rb.get("upgrade-firmware") and rb["current-firmware"] != rb["upgrade-firmware"]
+            and f"routerboot-{rb['upgrade-firmware']}" not in accepted)
+    if not svc and not wide and not boot:
         return None
     if not name:
         return ("- Fix: add the device to the `routeros` group of the managed inventory, then run "
                 + " and ".join(f"`playbooks/{p}`" for p, on in (("routeros-disable-services.yml", svc),
-                                                                 ("routeros-restrict-management.yml", wide)) if on)
+                                                                 ("routeros-restrict-management.yml", wide),
+                                                                 ("routeros-routerboot-upgrade.yml", boot)) if on)
                 + " for it.")
     out = []
     if svc:
@@ -568,6 +573,10 @@ def fix_hint(dev: dict, name: str | None, accepted: set | frozenset = frozenset(
         out.append(f"- Limit: `ansible-playbook playbooks/routeros-restrict-management.yml -l {name} --check` "
                    "(network.management_ranges, routeros_management_interface_list); with the user's yes, "
                    "`-e homelab_read_only=false` instead of `--check`.")
+    if boot:
+        out.append(f"- Upgrade: `ansible-playbook playbooks/routeros-routerboot-upgrade.yml -l {name} --check`; with the "
+                   "user's yes, `-e homelab_read_only=false` instead of `--check` (reboots the device: say what it "
+                   "routes or switches).")
     return "\n".join(out)
 
 
