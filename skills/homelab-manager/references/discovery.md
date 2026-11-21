@@ -256,7 +256,8 @@ nmap's best guess with its match %; on a tie a vendor/product match beats a gene
 (including QNAP's), Ansible groups, clusters and critical hosts, and health: updates of every Proxmox node and
 critical host plus any host with something pending (stale data marked), inventory hosts without update data, BMC
 health with its cause (accepted per host: `bmc_health_accept`), RouterOS findings (accepted per host:
-`routeros_audit_accept`) and updates, capacity and backup warnings, a one-line drift summary; and when each source was collected. With several sites, a sites diagram first.
+`routeros_audit_accept`) and updates, security audit findings (`security_audit.py`; accepted:
+`security_audit_accept`), capacity and backup warnings, a one-line drift summary; and when each source was collected. With several sites, a sites diagram first.
 Recovery and dependencies per site (GitHub issue #89), only from what the repo records, nothing guessed from names:
 - **Last backup**: a Guests column and, under Backups, the guests in a job with no successful backup within
   `overview.backup_max_age_days` (default 7) or whose newest backup failed, from `proxmox_inventory.py --details`.
@@ -278,7 +279,7 @@ A Contents list after At a glance links every section and each site's sub-sectio
 several sites, so anchors are unique on GitHub and GitLab); each site ends with "↑ Contents"; Guests, Containers
 and Other scanned addresses tables longer than 15 rows are collapsed with their row count.
 At a glance names every warning category Health shows, most severe first: BMCs not OK (an accepted cause doesn't
-count), RouterOS findings of medium severity and above, failed update checks, hosts with security updates, guests in
+count), RouterOS and security audit findings of medium severity and above, failed update checks, hosts with security updates, guests in
 no backup job, guests without a recent successful backup, expiries within 30 days, full storage, node memory.
 - Regenerate it after every verified change (operating loop step 9) and commit it with that change. The output is
   deterministic (no "generated at" time), so the diff shows what changed. `--check` exits 1 when it is stale; so

@@ -6,7 +6,7 @@
 Renders what the repository already holds and contacts nothing (GitHub issue #87): homelab.yaml (sites,
 network.vlans, clusters), discovery/proxmox.json (nodes, storage, guests, backup jobs, last backups, subscriptions,
 certificates), network.json (scanned addresses, services, TLS certificates), unifi.json, routeros.json (devices,
-NAT rules, CHR licences), bmc.json, containers.json, qnap-containers.json, updates.json, the managed
+NAT rules, CHR licences), bmc.json, containers.json, qnap-containers.json, updates.json, security.json, the managed
 Ansible inventory (`ansible-inventory --list`; --no-ansible skips it), discovery/drift.md and the newest
 docs/security-audit-*.md. Network devices and appliances start from the inventory (routeros, unifi, qnap,
 appliances groups) and are enriched from the discovery files; BMCs (bmc group) are server hardware, each next to
@@ -50,7 +50,7 @@ SOURCES = [  # (discovery file, what writes it)
     ("proxmox.json", "proxmox_inventory.py --details"), ("network.json", "nmap_scan.py"),
     ("unifi.json", "unifi-info.yml"), ("routeros.json", "routeros_audit.py"), ("bmc.json", "bmc-info.yml"),
     ("containers.json", "docker-containers.yml"), ("qnap-containers.json", "qnap-containers.yml"),
-    ("updates.json", "check-updates.yml"),
+    ("updates.json", "check-updates.yml"), ("security.json", "security-audit.yml, then security_audit.py"),
 ]
 # inventory groups whose hosts are network devices / appliances, first match names the kind
 DEVICE_KINDS = [("routeros", "RouterOS"), ("unifi", "UniFi"), ("bmc", "BMC"), ("qnap", "QNAP NAS"),
@@ -1481,6 +1481,11 @@ def health(cfg: dict, root: Path, docs: dict, managed: dict, warnings: list[str]
         out += ["RouterOS audit findings: " + ", ".join([f"{n} {cell(s)}" for s, n in sorted(sev.items())]
                                                         + ([f"{accepted} accepted"] if accepted else []))
                 + " (`routeros_audit.py`).", ""]
+    sec = security_counts(docs)
+    if sec["total"]:
+        out += ["Security audit findings: " + ", ".join([f"{sec[s]} {s}" for s in SEC_SEVERITIES if sec[s]]
+                                                        + ([f"{sec['accepted']} accepted"] if sec["accepted"] else []))
+                + " (`security_audit.py`).", ""]
     newer = [(h, (d.get("update") or {})) for h, d in sorted(devs.items())
              if (d.get("update") or {}).get("latest-version") and (d.get("update") or {}).get("latest-version")
              != (d.get("update") or {}).get("installed-version")]
@@ -1514,13 +1519,32 @@ def ros_state(d: dict) -> str:
     return (f"{len(f) - acc} audit findings" + (f", {acc} accepted" if acc else "")) if f else "audited, no findings"
 
 
+SEC_SEVERITIES = ("high", "medium", "low")   # security_audit.py; info is context, not counted
+SEC_WARN = ("high", "medium")
+
+
+def security_counts(docs: dict) -> dict:
+    """{severity: n, accepted: n, total: n} of the findings security_audit.py wrote into security.json (hosts and
+    this Mac; GitHub issue #139). Accepted ones (security_audit_accept, security_audit.mac_accept) count apart."""
+    doc = docs.get("security.json") or {}
+    found = [f for e in (doc.get("hosts") or {}).values() for f in e.get("findings") or []]
+    found += (doc.get("mac") or {}).get("findings") or []
+    out = {s: 0 for s in SEC_SEVERITIES}
+    out["accepted"] = sum(1 for f in found if f.get("accepted"))
+    for f in found:
+        if not f.get("accepted") and f.get("severity") in out:
+            out[f["severity"]] += 1
+    out["total"] = sum(out[s] for s in SEC_SEVERITIES) + out["accepted"]
+    return out
+
+
 ROS_WARN = ("critical", "high", "medium")   # routeros_audit.py severities that count as warnings; low and info don't
 HEALTH_RANK = {"Critical": 0, "Warning": 1}
 
 
 def glance_warnings(docs: dict, managed: dict, counts: dict) -> list[str]:
     """Every warning Health shows, by category, most severe first (GitHub issue #108): BMCs not OK (an accepted
-    cause, #103, doesn't count), RouterOS findings of medium severity and above, failed update checks, hosts with
+    cause, #103, doesn't count), RouterOS and security audit findings of medium severity and above, failed update checks, hosts with
     security updates, guests in no backup job, full storage, node memory."""
     out = []
     bad: dict = {}
@@ -1538,6 +1562,9 @@ def glance_warnings(docs: dict, managed: dict, counts: dict) -> list[str]:
                 sev[k] = sev.get(k, 0) + 1
     if sev:
         out.append("RouterOS audit: " + ", ".join(f"{sev[k]} {k}" for k in ROS_WARN if k in sev))
+    sec = security_counts(docs)
+    if any(sec[k] for k in SEC_WARN):
+        out.append("Security audit: " + ", ".join(f"{sec[k]} {k}" for k in SEC_WARN if sec[k]))
     upd = docs["updates.json"].get("hosts") or {}
     failed = [h for h, d in upd.items() if d.get("error")]
     if failed:
