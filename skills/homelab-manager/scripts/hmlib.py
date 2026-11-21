@@ -617,6 +617,13 @@ def literal(value):
     return None if value is None or "{{" in str(value) or "{%" in str(value) else value
 
 
+def accept_keys(raw) -> set[str]:
+    """Finding keys from an accept list (routeros_audit_accept, security_audit_accept, …; GitHub issues #138, #139):
+    a list of keys or one key, matched exactly and case-insensitive; Jinja templates and empty entries are dropped."""
+    return {str(k).strip().lower() for k in ([raw] if isinstance(raw, str) else raw if isinstance(raw, list) else [])
+            if literal(k) is not None and str(k).strip()}
+
+
 def inventory_host(managed: dict, key: str) -> tuple[str, dict] | None:
     """(name, vars) of the managed-inventory host whose name or ansible_host is key (drift_report.load_ansible)."""
     if key in managed:

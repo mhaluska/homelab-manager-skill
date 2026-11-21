@@ -448,9 +448,7 @@ def accept_lists(hosts: dict) -> dict[str, set[str]]:
     a list of keys (or one key), matched exactly, case-insensitive; keyed by ansible_host like the audit's devices."""
     out: dict[str, set[str]] = {}
     for name, v in hosts.items():
-        raw = v.get(ACCEPT_VAR)
-        keys = {str(k).strip().lower() for k in ([raw] if isinstance(raw, str) else raw or [])
-                if hmlib.literal(k) is not None and str(k).strip()}
+        keys = hmlib.accept_keys(v.get(ACCEPT_VAR))
         if keys:
             out[inventory_target(name, v)[0]] = keys
     return out
