@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.49.0 — 2026-11-21
+- Security audit of Linux hosts and this Mac with a playbook and a script instead of a hand-run checklist
+  (#139, first part: the issue stays open for Proxmox and the joined report).
+  `playbooks/security-audit.yml` reads, without changing anything (also in `--check`), each host's `sshd -T`, the
+  names of accounts with a usable or empty password, NOPASSWD sudo rules, the host firewall, automatic updates,
+  listeners, Samba shares, NFS exports, containers and tunnel clients into `discovery/security.json`.
+  `security_audit.py [--site N] [--report]` contacts no host: it judges that data with stable finding keys (SSH
+  passwords and root login, empty passwords, second UID 0, guest-writable shares, NFS open to anyone or with
+  `no_root_squash`, containers holding the Docker socket or running privileged, Redis/memcached/Docker API and
+  other risky listeners, no host firewall, no automatic updates, old cloudflared), checks this Mac (FileVault,
+  firewall, SIP, Gatekeeper, SSH agent; `--mac-updates` adds `softwareupdate -l`) and prints the report;
+  `--report` saves it as `docs/security-audit-<date>[-<site>].md` and never replaces an existing one.
+  `security_audit_accept: [keys]` (host or group var) and `security_audit.mac_accept` (homelab.yaml) mark findings
+  the user keeps. OVERVIEW.md counts the rest under Health and warns on high and medium ones. Proxmox, PBS, the
+  routers, the network and the repo are listed in the report as still checked by hand.
+  `init_repo.py --sync-managed` offers the playbook to existing repos as an upgrade note.
+
 ## 0.48.0 — 2026-11-21
 - New `playbooks/routeros-routerboot-upgrade.yml` for the `routerboot-<version>` finding of `routeros_audit.py`
   ([#140](https://github.com/mhaluska/homelab-manager-skill/issues/140)). `-l <host> --check` shows current → target firmware; with the user's yes,
