@@ -253,6 +253,8 @@ class GuardInfraTests(unittest.TestCase):
         self.assertEqual(decision("ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=pve1 "
                                   "-e allow_reboot=true", self.d), "ask")
         self.assertIsNone(decision("ansible-playbook playbooks/check-updates.yml", self.d))
+        self.assertIsNone(decision("ansible-playbook playbooks/security-audit.yml -e target=site_a", self.d))  # #139
+        self.assertIsNone(decision("python3 scripts/security_audit.py --site a --report", self.d))
         self.assertIsNone(decision("ansible-playbook playbooks/zabbix-agent2.yml -l web01", self.d))
         self.assertEqual(decision("ansible-playbook playbooks/site.yml -e allow_reboot=true", self.d), "ask")
 
