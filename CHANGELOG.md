@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.48.0 — 2026-11-21
+- New `playbooks/routeros-routerboot-upgrade.yml` for the `routerboot-<version>` finding of `routeros_audit.py`
+  ([#140](https://github.com/mhaluska/homelab-manager-skill/issues/140)). `-l <host> --check` shows current → target firmware; with the user's yes,
+  `-e homelab_read_only=false` stages the firmware, checks the log for "Firmware upgraded successfully", reboots,
+  waits for SSH and fails unless the new firmware runs. CHR/x86 and current devices are skipped. It refuses more
+  than one device per run (`-e routeros_routerboot_many=true` does them one after another) and the device holding
+  the Mac's default gateway (`-e routeros_routerboot_gateway=true`), whose reboot cuts the session off. The audit
+  report prints the command for each inventory device. `init_repo.py --sync-managed` in repos
+  with the `appliances` component offers it as an upgrade note.
+
 ## 0.47.0 — 2026-11-20
 - `routeros_audit.py --leases` can be limited to part of the network ([#137](https://github.com/mhaluska/homelab-manager-skill/issues/137)). `--range CIDR` and
   `--vlan ID|NAME` (repeatable; a VLAN is looked up in `network.vlans` at each device's site) keep the MAC fill in
