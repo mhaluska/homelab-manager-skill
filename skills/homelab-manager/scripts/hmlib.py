@@ -997,7 +997,11 @@ def guest_nic_addresses(g: dict) -> list[dict]:
         nic = conf.get("net" + k[len("ipconfig"):]) if k.startswith("ipconfig") else v
         mac = _MAC_RE.search(str(nic or ""))
         name = re.search(r"(?<![\w])name=([^,]+)", str(nic or ""))
-        for ip in re.findall(r"(?<![\w])ip6?=([0-9A-Fa-f.:]+)(?:/\d+)?", v):
+        for ip in re.findall(r"(?<![\w])ip6?=([^,/\s]+)", v):
+            try:
+                ipaddress.ip_address(ip)
+            except ValueError:
+                continue    # dhcp, auto, manual (an earlier pattern took ip=dhcp for the address "d")
             if ip.lower() not in seen:
                 seen.add(ip.lower())
                 out.append({"ip": ip.lower(), "source": "config", "iface": name.group(1) if name else "",

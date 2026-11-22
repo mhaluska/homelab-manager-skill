@@ -4505,6 +4505,12 @@ class OverviewCollectorTests(unittest.TestCase):  # GitHub issue #89: data for t
         self.assertIsNone(hmlib.nat_ports("!22"))
         self.assertEqual(len(hmlib.nat_ports("1-65535", limit=10)), 10)
 
+    def test_guest_nic_addresses_skip_dhcp(self):
+        import hmlib
+        g = {"config": {"net0": "name=eth0,ip=dhcp,ip6=auto", "net1": "name=eth1,ip=192.0.2.9/24,ip6=2001:db8::9/64",
+                        "ipconfig0": "ip=dhcp", "net2": "name=eth2,ip=manual"}}
+        self.assertEqual([a["ip"] for a in hmlib.guest_nic_addresses(g)], ["192.0.2.9", "2001:db8::9"])
+
 
 class GitUpstreamTests(unittest.TestCase):  # issue 27
     def setUp(self):
