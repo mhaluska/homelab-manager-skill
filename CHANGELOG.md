@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.51.0 — 2026-11-22
+- `patch-proxmox-node.yml` waits for Proxmox's own onboot start after the reboot
+  ([#141](https://github.com/mhaluska/homelab-manager-skill/issues/141)). `systemctl is-active` with several units exits
+  0 when any one of them is active, so the wait for `pve-guests` passed at once. The playbook then started the stopped
+  guests itself while `startall` was still starting them, ignored their startup delays, and failed on
+  `CT … already running` before its final checks. It now checks every unit and waits until `pve-guests` has finished
+  (up to `pve_guests_timeout` seconds, default 1800). A guest that runs within 30 s of a failed start counts as
+  started, after the reboot and in the shutdown rescue.
+- `patch-linux.yml` names new failed SSSD sockets that conflict with `sssd.conf`
+  ([#142](https://github.com/mhaluska/homelab-manager-skill/issues/142)). On Debian IPA clients a responder still on
+  the `services` line (and `pac`, implied by an IPA domain) refuses to start socket-activated, so its
+  `sssd-*.socket` fails on every boot. The failure message calls it a known SSSD conflict that the update did not
+  cause, and `references/patching.md` describes the two fixes (use only one of them).
+- `docker-containers.yml` records `memory` for running containers with a memory limit: limit, usage, and since the
+  container's start how often it hit the limit, its OOM kills and the evicted file pages it read again (cgroup v2,
+  Docker and Podman) ([#143](https://github.com/mhaluska/homelab-manager-skill/issues/143)). OVERVIEW.md warns
+  under Health and At a glance about a container with OOM kills, or one whose page cache thrashes (it hits its
+  limit 1000 times an hour and re-reads 10000 pages an hour), and names the Compose project to raise `mem_limit` in.
+
 ## 0.50.0 — 2026-11-22
 - The security audit covers Proxmox and joins the other discovery files
   ([#139](https://github.com/mhaluska/homelab-manager-skill/issues/139), second and last part).
