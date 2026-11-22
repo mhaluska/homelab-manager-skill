@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.50.0 — 2026-11-22
+- The security audit covers Proxmox and joins the other discovery files
+  ([#139](https://github.com/mhaluska/homelab-manager-skill/issues/139), second and last part).
+  `security_audit.py` reads each site's Proxmox with the read-only token (GET only; `--no-proxmox` re-judges the
+  last read): administrators without a second factor, API tokens on `root@pam` or without privilege separation,
+  expired tokens, the datacenter and node firewall, privileged LXC containers and what weakens them (`nesting`,
+  `mount`, `fuse`, raw AppArmor/cgroup/capability settings). It joins `routeros.json` (port forwards that open RDP,
+  SMB, a database, the Proxmox UI or every port to any address; a privileged container or a host with pending
+  security updates behind a forward ranks higher; the routers' own findings are listed apart), `network.json`
+  (risky services nmap saw on devices the playbook doesn't reach) and `updates.json` (pending security updates and
+  reboots). `--report` records the findings, so the next report lists what is new and what is gone since.
+  Proxmox, forward and scan findings are accepted per site with the new `security_audit.accept` key in homelab.yaml;
+  a node or container also takes the `security_audit_accept` host var. OVERVIEW.md counts them all. Only PBS and
+  the repo are left to check by hand. `init_repo.py --sync-managed` suggests the first run as an upgrade note.
+- `proxmox_inventory.py --details` records each LXC container's `unprivileged` and `features`.
+- `ip=dhcp` and `ip6=auto` in a guest's config were read as the addresses `d` and `a`; they are no addresses now.
+
 ## 0.49.0 — 2026-11-21
 - Security audit of Linux hosts and this Mac with a playbook and a script instead of a hand-run checklist
   (#139, first part: the issue stays open for Proxmox and the joined report).
