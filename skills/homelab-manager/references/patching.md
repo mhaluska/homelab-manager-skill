@@ -105,6 +105,20 @@ QNAP NAS entries carry `firmware` and `apps` instead of package counts (referenc
    `--no-start` leaves it stopped). LXD/Incus hosts: the same with
    `lxd_snapshot.py list|delete|restore`.
 
+### SSSD socket conflict
+
+On Debian IPA clients `ipa-client-install` writes `services = nss, pam, ssh, sudo` into `/etc/sssd/sssd.conf`
+while the sssd package enables the `sssd-*.socket` units. A responder on that line (and `pac`, which an IPA
+domain implies) refuses to start socket-activated: its socket fails on every boot ("configured to be
+socket-activated but it's still mentioned in the services' line"), and the host is `degraded`. SSSD itself works.
+patch-linux.yml names such units as a known SSSD conflict when they show up as new failed units. They usually
+failed before the run as well, so they aren't counted. Fix it one way only, with the user's yes, then
+`systemctl reset-failed`:
+- for IPA clients, disable the conflicting sockets (`systemctl disable --now sssd-<responder>.socket` for each
+  failed one) and keep the `sssd.conf` that `ipa-client-install` wrote; or
+- remove the `services` line and keep the sockets (socket activation), then restart `sssd`.
+Doing both leaves no responder running: NSS/PAM lookups and IPA logins, sudo included, stop working.
+
 Snapshots by hand ("snapshot web01 before I change it"): `pve_snapshot.py create <guest…> [--name …]`
 (`lxd_snapshot.py create <host…>` for LXD/Incus instances); `list` and `check` are read-only.
 

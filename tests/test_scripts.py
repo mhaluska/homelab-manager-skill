@@ -3358,6 +3358,23 @@ class DiscoveryLayoutTests(unittest.TestCase):  # GitHub issue #73
         self.assertIn("hm_autoremove_skip: \"{{ hm_skip_why | default('', true) }}\"", pb)
         self.assertNotIn("hm_autoremove_skip | default('') |", pb)
 
+    def test_patch_linux_names_sssd_socket_conflict(self):  # GitHub issue #142
+        pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/patch-linux.yml").read_text()
+        task = pb.split("- name: New failed SSSD units with the socket-activation conflict")[1].split("- name:")[0]
+        self.assertIn("grep -q socket-activated", task)            # both SSSD 2.8 and 2.10 wordings say it
+        self.assertIn("failed_when: false", task)
+        pattern = re.search(r"select\('match', '([^']+)'\)", task).group(1)
+        units = ["sssd-nss.socket", "sssd-pam-priv.socket", "sssd-pac.service", "sssd.service", "sssd-kcm.socket.d",
+                 "chrony.service"]
+        self.assertEqual([u for u in units if re.match(pattern, u)],
+                         ["sssd-nss.socket", "sssd-pam-priv.socket", "sssd-pac.service"])
+        check = pb.split("- name: No new failed units")[1].split("\n    - name:")[0]
+        self.assertIn("Known SSSD socket conflict, not caused by the update", check)
+        self.assertIn("selectattr('rc', 'eq', 0)", check)
+        self.assertIn('"SSSD socket conflict"', check)
+        self.assertLess(pb.index("New failed SSSD units"), pb.index("- name: No new failed units"))
+        self.assertIn("### SSSD socket conflict", (SCRIPTS.parent / "references/patching.md").read_text())
+
     def test_check_updates_covers_qnap_read_only(self):  # GitHub issue #81
         pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/check-updates.yml").read_text()
         play = pb.split("- name: Firmware and app versions on QNAP NAS")[1].split("\n- name:")[0]

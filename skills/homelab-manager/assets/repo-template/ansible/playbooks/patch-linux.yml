@@ -47,6 +47,7 @@
 # -e or group_vars). A slow service such as FreeIPA's ipa.service needs 1-2 minutes.
 # After each host: no unit may fail that didn't before, except failed_units_ignore (group_vars) and, in LXC
 # guests, lxc_failed_units_ignore (kernel-module units that fail on every boot in a container).
+# The failure names SSSD sockets that fail because sssd.conf still lists their responder (GitHub issue #142).
 # Containers (Docker, Podman) that ran before must run again; Docker containers that are down get one
 # restart of containerd and then Docker (an upgraded containerd needs it), else the host fails.
 # Packages listed in `patch_exclude` (set it in the group's group_vars, e.g. kubelet/kubeadm/kubectl
@@ -638,6 +639,17 @@
       register: hm_new_failed_type
       changed_when: false
 
+    # An SSSD responder still on sssd.conf's `services` line (pac: implied by an IPA domain) refuses to start
+    # socket-activated: its sssd-<responder>.socket fails on every boot, whatever the update did (GitHub issue #142)
+    - name: New failed SSSD units with the socket-activation conflict
+      ansible.builtin.shell: >-
+        journalctl -b --no-pager -o cat -u {{ item | quote }}
+        -u {{ item | regex_replace('[.]socket$', '.service') | quote }} | grep -q socket-activated
+      loop: "{{ hm_new_failed | select('match', '^sssd-[a-z-]+[.](socket|service)$') | list }}"
+      register: hm_sssd_conflict
+      changed_when: false
+      failed_when: false
+
     - name: No new failed units
       ansible.builtin.assert:
         that: hm_new_failed | length == 0
@@ -645,8 +657,15 @@
           New failed units: {{ hm_new_failed | join(', ') }}{{
           ('. Oneshot (may fail on every boot, e.g. after a long uptime reset its state): ' ~ oneshots | join(', ')
            ~ '. Check `journalctl -b -u <unit>`; if the update did not cause it, list it in failed_units_ignore'
-           ~ ' (group_vars) and rerun the rest') if oneshots | length > 0 else '' }}
+           ~ ' (group_vars) and rerun the rest') if oneshots | length > 0 else '' }}{{
+          ('. Known SSSD socket conflict, not caused by the update: ' ~ sssd | join(', ')
+           ~ ' (the responders are still on the services line of /etc/sssd/sssd.conf, so their sockets refuse to'
+           ~ ' start); fix it one way only, after the user agrees (references/patching.md, "SSSD socket conflict")'
+           ~ ' and rerun the rest') if sssd | length > 0 else '' }}
       vars:
+        sssd: >-
+          {{ hm_sssd_conflict.results | default([]) | selectattr('rc', 'defined') | selectattr('rc', 'eq', 0)
+             | map(attribute='item') | list }}
         oneshots: >-
           {{ hm_new_failed_type.results | default([]) | selectattr('stdout', 'defined')
              | selectattr('stdout', 'eq', 'oneshot') | map(attribute='item') | list }}
