@@ -1099,6 +1099,8 @@ class GuestNetworkMappingTests(unittest.TestCase):
         self.assertNotIn("lock", out)
         self.assertNotIn("args", out)
         self.assertEqual(out["description"], "[untrusted] hi")
+        lxc = inv.guest_config({"unprivileged": 1, "features": "nesting=1,keyctl=1", "hostname": "ct"})
+        self.assertEqual(lxc, {"unprivileged": "1", "features": "nesting=1,keyctl=1"})   # GitHub issue #139
 
     def test_no_guests_hint_names_narrow_acl(self):  # GitHub issue #14
         sys.path.insert(0, str(SCRIPTS))

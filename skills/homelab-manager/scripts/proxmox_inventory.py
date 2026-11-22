@@ -18,7 +18,7 @@ site's Proxmox with its own token; --all-sites reads each in turn and carries on
 (exit 1 then).
 Each node's subscription (status, level, next due date), web UI certificate and each network storage's server
 are read too.
---details also reads every guest's config and addresses, and its newest successful backup and a newer failure
+--details also reads every guest's config (with LXC `unprivileged` and `features`) and addresses, and its newest successful backup and a newer failure
 from the nodes' vzdump task logs (last_backup, backup_error: GitHub issue #89; the read-only token can't list
 backup volumes, which need VM.Backup, but reads task logs with Sys.Audit).
 """
@@ -205,7 +205,8 @@ def no_guests_hint(pve: "PVE") -> str | None:
 CONFIG_PREFIXES = ("net", "scsi", "virtio", "sata", "ide", "rootfs", "mp", "ipconfig",  # network, disks
                    "efidisk", "tpmstate", "unused", "hostpci", "usb", "dev")       # + what pins a guest to its node
 CONFIG_KEYS = {"agent", "ostype", "ciuser", "sshkeys", "boot", "machine", "bios", "cores", "sockets", "memory",
-               "onboot", "startup", "description"}
+               "onboot", "startup", "description",
+               "unprivileged", "features"}   # LXC: a privileged container with nesting is a security finding (#139)
 
 
 def guest_config(conf: dict) -> dict:
