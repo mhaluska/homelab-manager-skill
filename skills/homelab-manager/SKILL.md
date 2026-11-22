@@ -232,7 +232,7 @@ Scripts (all in `$HM/scripts/`):
 | `guest_map.py [--site N]` | per-NIC guest map: VLAN, IPs, subnet/ansible_host/VMID checks | `discovery/guest-map.md` |
 | `ssh_probe.py [targets] [--user U] [--draft] [--site N]` | read-only SSH probe of discovered hosts: hostname, OS, usable Python, OS group | `discovery/network.json` |
 | `routeros_audit.py <hosts> [--group G] [--user U]` | read-only MikroTik RouterOS inspection + audit findings (Markdown report) | `discovery/routeros.json` |
-| `security_audit.py [--site N] [--report]` | findings from `security-audit.yml`'s data plus this Mac's checks; report draft (references/security.md) | `discovery/security.json`, `docs/` |
+| `security_audit.py [--site N] [--report]` | findings from `security-audit.yml`'s data, Proxmox (ro token), port forwards, scan, updates and this Mac; report draft (references/security.md) | `discovery/security.json`, `docs/` |
 | `upgrade_notes.py [--all] [--json]` / `--decline ID…` / `--done ID…` | opt-in changes newer releases suggest for this repo (shown by `--sync-managed`); record the user's no / a manual step done | — |
 | `config_set.py 'path=value' 'list+=item' [--delete path] [--dry-run]` | edit homelab.yaml keeping comments and layout; `sites[name].…`, `network.vlans[id].…` pick a list entry | `homelab.yaml` |
 | `issues.py add\|list\|show\|report\|resolve\|fixed\|compact` | note problems with / ideas for this skill; report them (sanitised) to the plugin repo | `skill_issues.md` |

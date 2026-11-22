@@ -32,23 +32,30 @@ Read-only by default; report findings with severity and a proposed fix, change n
 1. **Linux hosts**: `ansible-playbook playbooks/security-audit.yml [-e target=site_<name>]` (reads only, also in
    `--check`) writes `discovery/security.json`: `sshd -T`, accounts with a password or none (names only), NOPASSWD
    sudo, host firewall, automatic updates, listeners, Samba shares, NFS exports, containers, tunnel clients.
-2. **Findings and this Mac**: `python3 $HM/scripts/security_audit.py [--site <name>] [--report]` contacts no host.
-   It judges that data, checks this Mac (FileVault, firewall, SIP, Gatekeeper, agent keys; `--mac-updates` adds
-   `softwareupdate -l`), writes the findings into security.json (OVERVIEW.md counts them) and prints the report.
-   `--report` saves it as `docs/security-audit-<date>[-<site>].md` and never replaces an existing one (`--force`).
-   FileVault off with auto-login is the known trade-off: tell the user, don't change it.
-3. **By hand** (the report's "Still to check by hand"), adding evidence to the draft:
-   - **Proxmox**: users and TFA (`/access/tfa` via the ro token), tokens (privilege separation, none on
-     `root@pam`), ACL (`/access/acl`), datacenter/node firewall, TLS verification on; privileged LXC with
-     `nesting`/`mount` features, worst behind a port forward (OVERVIEW.md lists the forwards); PBS rights and encryption.
-   - **Network**: `routeros_audit.py --group routeros`, devices not in the inventory (drift_report.py), services
-     that shouldn't be exposed (telnet, SMBv1, plain HTTP admin UIs) from `nmap_scan.py --profile services`.
-   - **Repo**: no secrets in Git history (`git log -p | grep -E 'PRIVATE KEY|PVEAPIToken|ghp_|github_pat_|AKIA'`),
-     `.gitignore` covers state/keys, pre-commit hook active (`git config core.hooksPath`).
+2. **Fresh joins** (optional, they make the report complete): `routeros_audit.py --group routeros` (port forwards,
+   the routers' findings), `check-updates.yml` (pending security updates), `nmap_scan.py --site <name> --profile
+   services` (services on devices the playbook doesn't reach).
+3. **Findings**: `python3 $HM/scripts/security_audit.py [--site <name>] [--report]`. It judges the hosts' data, reads
+   each site's Proxmox with the read-only token (GET only: administrators without a second factor, API tokens on
+   `root@pam` or not privilege-separated, the datacenter and node firewall, privileged LXC and what weakens them;
+   `--no-proxmox` re-judges the last read), joins the files of step 2 (forwards that open a risky service or every
+   port to any address, or reach a privileged container; risky services nmap saw; pending security updates, worse
+   behind a forward; the routers' findings, listed apart) and checks this Mac (FileVault, firewall, SIP, Gatekeeper,
+   agent keys; `--mac-updates` adds `softwareupdate -l`). It writes the findings into security.json (OVERVIEW.md
+   counts them) and prints the report. `--report` saves it as `docs/security-audit-<date>[-<site>].md`, never
+   replacing an existing one (`--force`), and records the findings: the next report lists what is new and what is
+   gone since. FileVault off with auto-login is the known trade-off: tell the user, don't change it.
+4. **By hand** (the report's "Still to check by hand"), adding evidence to the draft: PBS users and ACL
+   (`DatastoreBackup`, not `DatastoreAdmin`) and client-side encryption; the repo: no secrets in Git history
+   (`git log -p | grep -E 'PRIVATE KEY|PVEAPIToken|ghp_|github_pat_|AKIA'`), `.gitignore` covers state/keys,
+   pre-commit hook active (`git config core.hooksPath`).
 
-Every finding has a stable key (shown after it). Only on the user's decision, a host or group var
-`security_audit_accept: [keys]` (Mac: `security_audit.mac_accept` in homelab.yaml) marks findings as accepted: the
-report lists them apart, OVERVIEW.md doesn't count them, new ones still show; then run the script again.
+Every finding has a stable key (shown after it). Only on the user's decision, mark findings as accepted: a host or
+group var `security_audit_accept: [keys]` for a Linux host, a Proxmox node or a container (by its inventory name);
+`security_audit.accept` in homelab.yaml for a site's Proxmox, forward and scan findings (`{<site>: [keys]}`, or a list
+for every site; an unnamed default site is `default`); `security_audit.mac_accept` for this Mac. The report lists
+them apart, OVERVIEW.md doesn't count them, new ones still show; then run the script again. Typical accepts:
+Proxmox Datacenter Manager's `pve-root-token-pdm-admin`, a privileged container that serves NFS.
 Summarise the high-severity findings in your reply, offer to fix them, and commit the report. The report is the
 record: findings are not tracked anywhere else, and never sent to GitHub — if the homelab repo is public
 (`overview.redact`), ask before committing the report or security.json (exploitable detail: IPs, versions,

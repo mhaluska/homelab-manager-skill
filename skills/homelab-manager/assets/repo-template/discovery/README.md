@@ -22,8 +22,8 @@ Keyed by inventory host, each with its `site`:
 - `<name>-containers.json` — the same layout recorded by hand, e.g. for a NAS
 - `bmc.json` — health and firmware of every BMC over Redfish (`bmc-info.yml`)
 - `routeros.json` — RouterOS devices (`routeros_audit.py`)
-- `security.json` — security data per Linux host (`security-audit.yml`), its findings and this Mac's checks
-  (`security_audit.py`)
+- `security.json` — security data per Linux host (`security-audit.yml`); each site's Proxmox security data, the
+  findings, this Mac's checks and the last audit's findings (`security_audit.py`)
 
 Reports over all sites:
 - `drift.md` — latest drift report (`drift_report.py`)
