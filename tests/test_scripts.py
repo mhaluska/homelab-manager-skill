@@ -2049,6 +2049,35 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         self.assertNotIn("…", row)
         self.assertIn(", ".join(p.replace(">", "&gt;") for p in ports) + " |", md)
 
+    def test_containers_at_their_memory_limit(self):  # GitHub issue #143
+        mem = lambda hits, refaults, oom=0, since="2026-01-01T00:00:00.123456789Z": {   # noqa: E731
+            "limit": 32 * 2**20, "current": 33 * 10**6, "max_events": hits, "oom_kills": oom,
+            "refault_file": refaults, "since": since}
+        Path(self.d, "discovery/containers.json").write_text(json.dumps({"hosts": {"docker1": {
+            "collected_at": "2026-01-04T00:00:00.000001", "containers": [               # 72 h after `since`
+                {"name": "watchtower", "compose_working_dir": "/srv/watchtower", "memory": mem(970000, 53000000)},
+                {"name": "cache", "memory": mem(5000, 100)},                  # at its limit, cache not re-read
+                {"name": "db", "memory": mem(0, 0, oom=2)},
+                {"name": "fresh", "memory": mem(2000, 20000, since="2026-01-03T23:30:00Z")},   # half an hour old
+                {"name": "plain"}]}}}))
+        md = run("overview.py", "--no-ansible", "--out", "-", cwd=self.d).stdout
+        self.assertIn("3 containers at their memory limit", md.split("\n## ")[1])          # At a glance
+        health = md.split("\n## Health")[1]
+        self.assertIn("- docker1: container watchtower at its 32 MiB memory limit (hit 13472/h, 736111 pages re-read/h "
+                      "since 2026-01-01): raise mem\\_limit in /srv/watchtower", health)
+        self.assertIn("- docker1: container db at its 32 MiB memory limit (2 OOM kills since 2026-01-01)", health)
+        self.assertIn("container fresh at its 32 MiB memory limit (hit 2000/h, 20000 pages", health)   # per first hour
+        self.assertNotIn("container cache", md)
+        self.assertNotIn("container plain", md)
+        pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/docker-containers.yml").read_text()
+        task = pb.split("- name: Memory counters of running containers with a memory limit")[1].split("\n        - name:")[0]
+        self.assertIn("/proc/$p/cgroup", task)                       # any cgroup driver, Docker and Podman
+        self.assertIn("failed_when: false", task)
+        self.assertNotRegex(task, r"\b(echo [^\"]*>|tee|rm|kill|docker (stop|update|restart))\b")   # read-only
+        self.assertIn("(c.HostConfig.Memory | default(0, true) | int) > 0", task)
+        self.assertIn("'since': c.State.StartedAt", pb)
+        self.assertIn("`memory`", (SCRIPTS.parent / "references/discovery.md").read_text())
+
     def test_contents_and_folding(self):  # GitHub issue #113
         sys.path.insert(0, str(SCRIPTS))
         import overview

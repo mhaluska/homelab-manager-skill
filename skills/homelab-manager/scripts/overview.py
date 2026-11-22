@@ -1290,6 +1290,52 @@ def compose(c: dict) -> str:
     return str(c.get("compose_working_dir") or c.get("compose_project") or "")
 
 
+MEM_HITS_PER_HOUR = 1000       # times a container hit its memory limit per hour since its start
+MEM_REFAULTS_PER_HOUR = 10000  # evicted file pages it read again per hour (about 40 MiB at 4 KiB pages)
+
+
+def utc_time(s) -> dt.datetime | None:
+    """An ISO time from Docker (nanoseconds, Z) or Ansible (naive UTC), as aware UTC; None when unreadable."""
+    try:
+        t = dt.datetime.fromisoformat(re.sub(r"(\.\d{6})\d+", r"\1", str(s or "")).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)
+
+
+def mib(n) -> str:
+    return f"{round(n / 2**20)} MiB" if isinstance(n, int) else "no"
+
+
+def memory_pressure(docs: dict) -> list[str]:
+    """Containers that keep hitting their cgroup memory limit (docker-containers.yml `memory`, GitHub issue #143):
+    an OOM kill since their start, or the limit hit MEM_HITS_PER_HOUR times and MEM_REFAULTS_PER_HOUR evicted file
+    pages read again per hour, judged at the host's collected_at. The second is a thrashing page cache: CPU spent
+    for no work, no OOM kill. Usage near the limit alone is normal (page cache counts in it) and is not flagged."""
+    out = []
+    hosts = (docs.get("containers.json") or {}).get("hosts")
+    for host, d in sorted(hosts.items() if isinstance(hosts, dict) else []):
+        for c in sorted((d or {}).get("containers") or [], key=lambda c: str(c.get("name"))):
+            m = c.get("memory")
+            if not isinstance(m, dict):
+                continue
+            since, at = utc_time(m.get("since")), utc_time(d.get("collected_at"))
+            hours = (at - since).total_seconds() / 3600 if since and at and at > since else None
+            oom, hits, refaults = (m.get(k) if isinstance(m.get(k), int) else 0
+                                   for k in ("oom_kills", "max_events", "refault_file"))
+            rate = lambda n: n / max(hours, 1)   # noqa: E731 - a container younger than an hour: per first hour
+            thrash = hours is not None and rate(hits) >= MEM_HITS_PER_HOUR and rate(refaults) >= MEM_REFAULTS_PER_HOUR
+            if not (oom or thrash):
+                continue
+            what = ([f"{oom} OOM kill{'' if oom == 1 else 's'}"] if oom else []) + (
+                [f"hit {round(rate(hits))}/h, {round(rate(refaults))} pages re-read/h"] if thrash else [])
+            where = compose(c)
+            out.append(f"{host}: container {c.get('name')} at its {mib(m.get('limit'))} memory limit "
+                       f"({', '.join(what)} since {stamp(m.get('since'))}): raise mem_limit"
+                       + (f" in {where}" if where else ""))
+    return out
+
+
 def containers(cfg: dict, docs: dict, managed: dict) -> list[str]:
     rows = []
     for host, d in sorted((docs["containers.json"].get("hosts") or {}).items()):
@@ -1489,7 +1535,7 @@ def health(cfg: dict, root: Path, docs: dict, managed: dict, warnings: list[str]
             f"{cell(known_name(devs, h))} {cell(u.get('installed-version'))} → {cell(u.get('latest-version'))}"
             for h, u in newer) + ".", ""]
     if warnings:
-        out += ["Capacity and coverage:", ""] + [f"- {cell(w)}" for w in sorted(warnings)] + [""]
+        out += ["Capacity and coverage:", ""] + [f"- {cell(w, 300)}" for w in sorted(warnings)] + [""]
     drift = drift_summary(root)
     if drift:
         out += [drift, ""]
@@ -1543,7 +1589,7 @@ HEALTH_RANK = {"Critical": 0, "Warning": 1}
 def glance_warnings(docs: dict, managed: dict, counts: dict) -> list[str]:
     """Every warning Health shows, by category, most severe first (GitHub issue #108): BMCs not OK (an accepted
     cause, #103, doesn't count), RouterOS and security audit findings of medium severity and above, failed update checks, hosts with
-    security updates, guests in no backup job, full storage, node memory."""
+    security updates, guests in no backup job, full storage, node memory, containers at their memory limit (#143)."""
     out = []
     bad: dict = {}
     for h, d in (docs["bmc.json"].get("hosts") or {}).items():
@@ -1583,6 +1629,9 @@ def glance_warnings(docs: dict, managed: dict, counts: dict) -> list[str]:
         out.append(f"{plural(counts['storage'], 'storage')} {STORAGE_WARN_PCT} % full or more")
     if counts.get("memory"):
         out.append(f"{plural(counts['memory'], 'node')} at {MEM_WARN_PCT} % memory or more")
+    pressure = memory_pressure(docs)
+    if pressure:
+        out.append(f"{plural(len(pressure), 'container')} at {'its' if len(pressure) == 1 else 'their'} memory limit")
     return out
 
 
@@ -1616,6 +1665,7 @@ def render(cfg: dict, managed: dict, note: str) -> str:
         warnings += stats["warnings"]
         for k in ("nodes", "guests", "memory", "storage", "backup", "backup_old"):
             totals[k] += stats[k]
+    warnings += memory_pressure(docs)
     exp = expirations(cfg, root, docs, managed, known, totals)
     glance = [plural(len(st_list), "site")]
     if hmlib.get(cfg, "components.proxmox", True) or totals["nodes"]:   # GitHub issue #123
