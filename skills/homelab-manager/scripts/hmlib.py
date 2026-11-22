@@ -743,6 +743,28 @@ def routeros_addresses(cfg: dict, managed: dict | None = None) -> list[dict]:
     return out
 
 
+def dst_nat_rules(device: dict) -> list[dict]:
+    """The enabled dst-nat (port forward) rules of a routeros.json device (overview.py, security_audit.py)."""
+    return [r for r in device.get("nat") or [] if isinstance(r, dict) and r.get("chain") == "dstnat"
+            and r.get("action") in ("dst-nat", "netmap") and "X" not in str(r.get("_flags") or "")
+            and r.get("disabled") not in ("yes", "true")]
+
+
+def nat_ports(value, limit: int = 1024) -> set[int] | None:
+    """The ports of a RouterOS port list ("80,443,8000-8010"), None when it is empty (every port). A range is cut at
+    limit ports; a negated list ("!22") is every port."""
+    text = str(value or "").replace(" ", "")
+    if not text or text.startswith("!"):
+        return None
+    out: set[int] = set()
+    for part in text.split(","):
+        a, _, b = part.partition("-")
+        if a.isdigit() and (b.isdigit() or not b):
+            lo, hi = int(a), int(b or a)
+            out.update(range(lo, min(hi, lo + limit - 1) + 1))
+    return out
+
+
 def scan_scope(cfg: dict, site_name: str | None = None) -> tuple[list, list]:
     """(authorized ranges, excluded networks) for a scan at site_name; None: every site's exclusions."""
     allowed = _networks(get(cfg, "network.authorized_ranges", []))

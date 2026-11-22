@@ -902,11 +902,6 @@ NAT_NOT_MATCH = {"chain", "action", "to-addresses", "to-ports", "comment", "log"
                  "protocol", "dst-port", "src-address", "src-address-list", "bytes", "packets"}
 
 
-def nat_rules(d: dict) -> list[dict]:
-    return [r for r in d.get("nat") or [] if r.get("chain") == "dstnat" and r.get("action") in ("dst-nat", "netmap")
-            and "X" not in str(r.get("_flags") or "") and r.get("disabled") not in ("yes", "true")]
-
-
 def port_forwards(cfg: dict, st: dict, docs: dict, known: Known) -> list[str]:
     """Port forwards (GitHub issue #89): enabled RouterOS dst-nat rules and the routers' public addresses."""
     rows, public, unread = [], [], []
@@ -917,7 +912,7 @@ def port_forwards(cfg: dict, st: dict, docs: dict, known: Known) -> list[str]:
         name = (d.get("identity") or {}).get("name") or host
         if "nat" not in d:
             unread.append(name)
-        for r in nat_rules(d):
+        for r in hmlib.dst_nat_rules(d):
             to = str(r.get("to-addresses") or "")
             match = [f"{k} {v}" for k, v in sorted(r.items()) if k not in NAT_NOT_MATCH and v not in (None, "")]
             src = [f"{k.replace('src-', '')} {r[k]}" for k in ("src-address", "src-address-list") if r.get(k)]

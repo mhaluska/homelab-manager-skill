@@ -4491,6 +4491,18 @@ class OverviewCollectorTests(unittest.TestCase):  # GitHub issue #89: data for t
         self.assertEqual([(r.get("chain"), r.get("to-addresses"), r["_flags"]) for r in dev["nat"]],
                          [("dstnat", "10.0.20.5", ""), ("srcnat", None, "X")])
 
+    def test_dst_nat_rules_and_ports(self):
+        import hmlib
+        dev = {"nat": [{"chain": "dstnat", "action": "dst-nat", "_flags": ""},
+                       {"chain": "dstnat", "action": "dst-nat", "_flags": "X"},
+                       {"chain": "dstnat", "action": "netmap", "disabled": "yes"},
+                       {"chain": "srcnat", "action": "masquerade"}, "junk"]}
+        self.assertEqual(len(hmlib.dst_nat_rules(dev)), 1)
+        self.assertEqual(hmlib.nat_ports("80,443,8000-8002"), {80, 443, 8000, 8001, 8002})
+        self.assertIsNone(hmlib.nat_ports(""))
+        self.assertIsNone(hmlib.nat_ports("!22"))
+        self.assertEqual(len(hmlib.nat_ports("1-65535", limit=10)), 10)
+
 
 class GitUpstreamTests(unittest.TestCase):  # issue 27
     def setUp(self):
