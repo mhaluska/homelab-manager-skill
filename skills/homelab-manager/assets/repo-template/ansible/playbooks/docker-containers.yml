@@ -6,6 +6,9 @@
 # state, restart policy, network mode, networks with addresses (macvlan/ipvlan ones are on the LAN and
 # match scanned IPs in the drift report), published ports, compose project and auto-update labels
 # (Watchtower, Podman auto-update). Root's containers only: rootless Podman per user is not listed.
+# A running container with a memory limit also gets `memory` from its cgroup (v2 only): limit and current
+# bytes, and since its start (`since`) how often it hit the limit, OOM kills and evicted file pages read
+# again; overview.py warns about one that keeps hitting its limit (GitHub issue #143).
 # Nothing here changes a container. A QNAP NAS: qnap-containers.yml. Containers hosted elsewhere (another NAS)
 # can be recorded by hand in discovery/<name>-containers.json with the same layout (references/discovery.md).
 - name: Containers on Linux hosts
@@ -51,12 +54,47 @@
           changed_when: false
           check_mode: false
 
+        # pid limit current max_events oom_kills refault_file, from the container's cgroup as /proc/<pid>/cgroup
+        # names it (any cgroup driver, Docker and Podman); cgroup v1 has no memory.events: nothing is reported
+        - name: Memory counters of running containers with a memory limit
+          ansible.builtin.shell: |
+            for p in {{ hm_limited_pids | join(' ') }}; do
+              d="/sys/fs/cgroup$(sed -n 's/^0:://p' "/proc/$p/cgroup" 2>/dev/null)"
+              [ -f "$d/memory.max" ] && [ -f "$d/memory.events" ] || continue
+              echo "$p $(cat "$d/memory.max") $(cat "$d/memory.current")" \
+                "$(awk '$1 == "max" {m = $2} $1 == "oom_kill" {k = $2} END {print m + 0, k + 0}' "$d/memory.events")" \
+                "$(awk '$1 == "workingset_refault_file" {r = $2} END {print r + 0}' "$d/memory.stat" 2>/dev/null)"
+            done
+            true
+          vars:
+            hm_limited_pids: >-
+              {%- set out = [] -%}
+              {%- for r in hm_inspect.results | default([]) -%}
+                {%- for c in r.stdout | from_json
+                      if (c.State.Pid | default(0, true) | int) > 0 and (c.HostConfig.Memory | default(0, true) | int) > 0 -%}
+                  {%- set _ = out.append(c.State.Pid | int) -%}
+                {%- endfor -%}
+              {%- endfor -%}
+              {{ out }}
+          when: hm_limited_pids | length > 0
+          register: hm_cgmem
+          changed_when: false
+          check_mode: false
+          failed_when: false
+
         - name: Summarise
           ansible.builtin.set_fact:
             container_summary:
               runtimes: "{{ hm_rt.stdout_lines | select('match', '^runtime ') | map('split', ' ') | map('last') | list }}"
               kubernetes: "{{ hm_rt.stdout_lines | select('match', '^kubernetes ') | map('split', ' ') | map('last') | list }}"
               containers: >-
+                {%- set mem = {} -%}
+                {%- for l in hm_cgmem.stdout_lines | default([]) if l.split() | length == 6 -%}
+                  {%- set f = l.split() -%}
+                  {%- set _ = mem.update({f[0] | int: {'limit': (f[1] | int) if f[1] != 'max' else none,
+                        'current': f[2] | int, 'max_events': f[3] | int, 'oom_kills': f[4] | int,
+                        'refault_file': f[5] | int}}) -%}
+                {%- endfor -%}
                 {%- set out = [] -%}
                 {%- for r in hm_inspect.results | default([]) -%}
                   {%- for c in r.stdout | from_json -%}
@@ -69,7 +107,7 @@
                                                  ~ b.HostPort ~ '->' ~ p) -%}
                       {%- endfor -%}
                     {%- endfor -%}
-                    {%- set _ = out.append({
+                    {%- set e = {
                           'name': c.Name | default('') | regex_replace('^/', ''),
                           'runtime': r.item,
                           'image': c.Config.Image | default(c.ImageName | default('')),
@@ -87,7 +125,12 @@
                                                   if labels['com.docker.compose.project.config_files'] is defined
                                                   else none,
                           'auto_update': labels['com.centurylinklabs.watchtower.enable']
-                                         | default(labels['io.containers.autoupdate'] | default(none))}) -%}
+                                         | default(labels['io.containers.autoupdate'] | default(none))} -%}
+                    {%- set pid = c.State.Pid | default(0, true) | int -%}
+                    {%- if pid in mem -%}
+                      {%- set _ = e.update({'memory': mem[pid] | combine({'since': c.State.StartedAt | default(none)})}) -%}
+                    {%- endif -%}
+                    {%- set _ = out.append(e) -%}
                   {%- endfor -%}
                 {%- endfor -%}
                 {{ out | sort(attribute='name') }}
