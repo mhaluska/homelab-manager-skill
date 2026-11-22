@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 import unittest
 import unittest.mock
@@ -3018,6 +3019,45 @@ class PveNodePlanTests(unittest.TestCase):  # issue 23
         for k in ("migrated", "ha", "stopped_and_restored"):
             self.assertRegex(result, rf"\b{k}={{{{ \S+ if did_reboot \| bool else \[\] }}}}")
         self.assertIn("planned_stop={{ plan.stop_order }}", result)
+
+    def test_reboot_waits_for_every_unit_and_start_tolerates_a_race(self):  # GitHub issue #141
+        pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/patch-proxmox-node.yml").read_text()
+        wait = pb.split("- name: Wait for Proxmox services and onboot guests")[1].split("- name:")[0]
+        self.assertNotIn("pve_services.rc", wait)                      # rc 0 when ANY unit is active
+        self.assertIn("pve_services.stdout_lines[:4] | reject('equalto', 'active')", wait)
+        self.assertIn("pve_services.stdout_lines[4] in ['active', 'failed']", wait)
+        self.assertIn("pve_guests_timeout | default(1800)", wait)
+        self.assertEqual(pb.count('ansible.builtin.shell: "{{ hm_start_guest }}"'), 2)   # rescue and after the reboot
+        self.assertNotIn("grep -q running ||", pb)
+        snippet = re.search(r"\n    hm_start_guest: \|\n((?:      .*\n)+)", pb).group(1)
+        script = re.sub(r"^      ", "", snippet, flags=re.M).replace("{{ hm_guest_cmd }}", "pct").replace(
+            "{{ hm_guest_id }}", "101")
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        (d / "sleep").write_text("#!/bin/sh\nexit 0\n")
+        (d / "pct").write_text(textwrap.dedent("""\
+            #!/bin/sh
+            s="$(dirname "$0")/state"
+            case "$1" in
+              status) if [ -f "$s.up" ]; then echo "status: running"; else echo "status: stopped"; fi ;;
+              start) echo start >> "$s.log"
+                     if [ -f "$s.race" ]; then touch "$s.up"; echo "CT $2 already running" >&2; exit 255; fi
+                     [ -f "$s.broken" ] && exit 1
+                     touch "$s.up" ;;
+            esac
+            """))
+        for f in ("sleep", "pct"):
+            (d / f).chmod(0o755)
+        sh = lambda: subprocess.run(["sh", "-c", script], env={**os.environ, "PATH": f"{d}:{os.environ['PATH']}"},
+                                    capture_output=True, text=True)
+        (d / "state.race").touch()                 # onboot start brings it up between status and start
+        self.assertEqual(sh().returncode, 0)
+        self.assertEqual(sh().returncode, 0)       # running already: no second start
+        self.assertEqual((d / "state.log").read_text().count("start"), 1)
+        for f in ("state.race", "state.up"):
+            (d / f).unlink()
+        (d / "state.broken").touch()               # a real failure still fails
+        self.assertEqual(sh().returncode, 1)
 
     def test_cli_writes_plan_only_without_blockers(self):
         d = Path(tempfile.mkdtemp())

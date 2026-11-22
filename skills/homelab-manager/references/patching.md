@@ -205,7 +205,8 @@ site (`site_<name>` group): add `--site <name>` to both scripts; the playbook ta
    `ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=<host>`
 4. Reboot run, a separate approval: add `-e allow_reboot=true`. The playbook checks the plan against
    the live cluster (stale → refresh steps 1–2), records the guests in the node's plan (`state_before` in
-   `discovery/pve-patch.json`), moves them off, reboots, waits for quorum and Proxmox services, restores them,
+   `discovery/pve-patch.json`), moves them off, reboots, waits for quorum, Proxmox services and Proxmox's own
+   onboot start (`pve-guests`, with its startup delays; up to `pve_guests_timeout` seconds, default 1800), restores them,
    migrates them back (`-e migrate_back=false` leaves them where they are) and asserts every guest that ran runs again.
    A guest that won't shut down cleanly, or a node that still runs guests ~2 minutes later, aborts the run before
    the reboot, with the stopped ones started again and HA maintenance off.

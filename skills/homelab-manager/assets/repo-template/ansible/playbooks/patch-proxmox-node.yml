@@ -16,6 +16,8 @@
 # Before anything stops: every LVM-thin pool on the node must be healthy with metadata room; -e thin_check=true
 # also runs thin_check on a metadata snapshot of each (GitHub issue #91, references/patching.md "LVM-thin pools").
 # Finally every guest that ran before must run again (on this node, unless -e migrate_back=false).
+# After the reboot it waits for Proxmox's own onboot start (pve-guests) to finish, up to pve_guests_timeout
+# seconds (default 1800), before it starts the stopped guests that did not come up by themselves.
 # The Proxmox node name defaults to the inventory short name; set proxmox_node_name if it differs.
 - name: Patch one Proxmox VE node
   hosts: "{{ proxmox_patch_node | default('__no_node__') }}"
@@ -42,6 +44,16 @@
     plan_ids: "{{ plan.guests | map(attribute='vmid') | list }}"
     plan_running: "{{ plan.guests | selectattr('status', 'equalto', 'running') | map(attribute='vmid') | list }}"
     by_action: "{{ plan.guests | groupby('action') | items2dict(key_name=0, value_name=1) }}"
+    # start one guest unless it runs; a guest that another start (onboot, HA) brought up meanwhile makes
+    # `start` fail with "already running": a guest that runs within 30 s counts as started (GitHub issue #141)
+    hm_start_guest: |
+      {{ hm_guest_cmd }} status {{ hm_guest_id }} | grep -q running && exit 0
+      {{ hm_guest_cmd }} start {{ hm_guest_id }} && exit 0
+      for i in 1 2 3 4 5 6; do
+        sleep 5
+        {{ hm_guest_cmd }} status {{ hm_guest_id }} | grep -q running && exit 0
+      done
+      exit 1
 
   pre_tasks:
     - name: Exactly one approved hypervisor
@@ -250,10 +262,11 @@
               delay: 10
           rescue:
             - name: Start again what was stopped (startup order)
-              ansible.builtin.shell: >-
-                {{ 'qm' if (plan.guests | selectattr('vmid', 'equalto', item) | first).type == 'vm' else 'pct' }}
-                status {{ item }} | grep -q running || {{ 'qm' if (plan.guests | selectattr('vmid', 'equalto', item) | first).type == 'vm' else 'pct' }} start {{ item }}
+              ansible.builtin.shell: "{{ hm_start_guest }}"
               loop: "{{ plan.stop_order | reverse | list }}"
+              vars:
+                hm_guest_cmd: "{{ 'qm' if (plan.guests | selectattr('vmid', 'equalto', item) | first).type == 'vm' else 'pct' }}"
+                hm_guest_id: "{{ item }}"
             - name: HA node maintenance off (HA brings its guests back)
               ansible.builtin.command: ha-manager crm-command node-maintenance disable {{ pve_node }}
               when: by_action.ha | default([]) | length > 0
@@ -280,21 +293,29 @@
           delay: 10
           when: pve_corosync.stat.exists
 
+        # One line per unit: `systemctl is-active a b` exits 0 when ANY of them is active, so each line is
+        # checked (GitHub issue #141). pve-guests (oneshot) stays `activating` until startall has started every
+        # onboot guest with its startup delays; `failed` ends the wait too, the next task starts what is down.
         - name: Wait for Proxmox services and onboot guests (pve-guests)
           ansible.builtin.command: systemctl is-active pve-cluster pvedaemon pveproxy pvestatd pve-guests
           register: pve_services
           changed_when: false
-          until: pve_services.rc == 0
-          retries: 60
+          failed_when: false
+          until: >-
+            pve_services.stdout_lines | length == 5
+            and pve_services.stdout_lines[:4] | reject('equalto', 'active') | list | length == 0
+            and pve_services.stdout_lines[4] in ['active', 'failed']
+          retries: "{{ ((pve_guests_timeout | default(1800) | int) / 10) | round(0, 'ceil') | int }}"
           delay: 10
 
         - name: Start pinned guests that did not start by themselves (startup order)
-          ansible.builtin.shell: >-
-            {{ 'qm' if item.type == 'vm' else 'pct' }} status {{ item.vmid }} | grep -q running ||
-            {{ 'qm' if item.type == 'vm' else 'pct' }} start {{ item.vmid }}
+          ansible.builtin.shell: "{{ hm_start_guest }}"
           loop: "{{ by_action.stop | default([]) | sort(attribute='startup_order') }}"
           loop_control:
             label: "{{ item.vmid }}"
+          vars:
+            hm_guest_cmd: "{{ 'qm' if item.type == 'vm' else 'pct' }}"
+            hm_guest_id: "{{ item.vmid }}"
 
         - name: HA node maintenance off (HA brings its guests back)
           ansible.builtin.command: ha-manager crm-command node-maintenance disable {{ pve_node }}
