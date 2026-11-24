@@ -507,6 +507,34 @@ class ProtectedFilesTests(unittest.TestCase):
                 self.assertEqual(decision(c, r), "ask", c)
 
 
+class ScannerAndApiTests(unittest.TestCase):
+    def test_other_scanners(self):
+        with Repo() as r:
+            for c in ["masscan 8.8.8.0/24 -p80", "rustscan -a 10.0.10.5", "sudo arp-scan --localnet", "fping -g 10.0.10.0/24",
+                      "for i in 1 2; do nc -z 8.8.8.$i 22; done", "nc -z 10.0.10.5 1-1024", "nc -zv 8.8.8.8 22",
+                      "nmap -sI 10.0.10.9 10.0.10.5", "nmap -b 10.0.10.7 10.0.10.5"]:
+                self.assertEqual(decision(c, r), "ask", c)
+            self.assertEqual(decision("nmap -b ftp.example 10.0.10.5", r), "deny")   # the relay is scope-checked too
+            for c in ["nc -z 10.0.10.5 22", "nc -zv -w 2 pve1.home.arpa 8006", "fping 10.0.10.5", "nc -l 9000"]:
+                self.assertIsNone(decision(c, r), c)
+
+    def test_api_write_forms(self):
+        for c in ["curl --json '{}' https://pve:8006/api2/json/nodes/n/qemu/100/status/stop",
+                  "curl -F x=1 https://pve:8006/api2/json/nodes/n/storage/s/upload",
+                  "curl -T f.iso https://pve:8006/api2/json/x", "curl -d@body.json https://pve:8006/api2/json/x",
+                  "curl --request=DELETE https://pve:8006/api2/json/x",
+                  "curl --json '{}' https://unifi/proxy/network/integration/v1/sites/x/devices"]:
+            self.assertEqual(decision(c, "/"), "ask", c)
+        self.assertIsNone(decision("curl -s https://pve:8006/api2/json/version", "/"))
+
+    def test_git_hooks_not_skipped(self):
+        for c in ["git commit --no-verify -m x", "git commit -n -m x", "git -c core.hooksPath=/dev/null commit -m x",
+                  "git config core.hooksPath .nohooks", "git config --unset core.hooksPath"]:
+            self.assertEqual(decision(c, "/"), "ask", c)
+        for c in ["git commit -m x", "git config core.hooksPath", "git config --get core.hooksPath"]:
+            self.assertIsNone(decision(c, "/"), c)
+
+
 class TofuPlanTests(unittest.TestCase):
     def setUp(self):
         self.d = Path(tempfile.mkdtemp())

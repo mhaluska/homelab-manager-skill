@@ -109,8 +109,8 @@ RULES: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"\bha-manager\s+(add|remove|set|migrate|relocate|crm-command)\b"), ASK, "Changes Proxmox HA configuration."),
     (re.compile(r"\bpvesm\s+(add|remove|set|free|alloc)\b"), ASK, "Changes Proxmox storage."),
     (re.compile(r"\b(zfs\s+(destroy|rollback)|zpool\s+(destroy|remove|detach|offline|labelclear))\b"), ASK, "Destructive ZFS operation."),
-    (re.compile(r"\b(curl|wget|http|xh)\b[^\n;&|]*api2[^\n;&|]*(-X\s*(POST|PUT|DELETE)|--request\s+(POST|PUT|DELETE)|\s-d\s|--data)"
-                r"|\b(curl|wget|http|xh)\b[^\n;&|]*(-X\s*(POST|PUT|DELETE)|--request\s+(POST|PUT|DELETE)|\s-d\s|--data)[^\n;&|]*api2"), ASK,
+    (re.compile(r"\b(curl|wget|http|xh)\b[^\n;&|]*api2[^\n;&|]*(-X\s*(POST|PUT|PATCH|DELETE)|--request[\s=]+(POST|PUT|PATCH|DELETE)|\s-d|--data|\s(-F|--form|-T|--upload-file|--json)\b)"
+                r"|\b(curl|wget|http|xh)\b[^\n;&|]*(-X\s*(POST|PUT|PATCH|DELETE)|--request[\s=]+(POST|PUT|PATCH|DELETE)|\s-d|--data|\s(-F|--form|-T|--upload-file|--json)\b)[^\n;&|]*api2"), ASK,
      "Writes to the Proxmox API directly."),
     # --- reboots / patching -----------------------------------------------------------
     (re.compile(r"\b(ssh|ansible)(?![\w-])[^\n]*\b(reboot|shutdown|poweroff|halt|init\s+[06])\b"), ASK, "Reboots or shuts down remote systems."),
@@ -123,8 +123,8 @@ RULES: list[tuple[re.Pattern, str, str]] = [
                 # write requests to the Integration API or to the classic API's command/configuration paths
                 # (/api/s/<site>/cmd|rest|set|upd|group, GitHub #77); /api/login and the stat/ reads pass
                 r"|\b(curl|wget|http|xh)\b[^\n;&|]*(integration/v1|/api/s/[^/\s]+/(cmd|rest|set|upd|group)\b)[^\n;&|]*"
-                r"(-X\s*(POST|PUT|PATCH|DELETE)|--request\s+(POST|PUT|PATCH|DELETE)|\s-d\s|--data)"
-                r"|\b(curl|wget|http|xh)\b[^\n;&|]*(-X\s*(POST|PUT|PATCH|DELETE)|--request\s+(POST|PUT|PATCH|DELETE)|\s-d\s|--data)"
+                r"(-X\s*(POST|PUT|PATCH|DELETE)|--request[\s=]+(POST|PUT|PATCH|DELETE)|\s-d|--data|\s(-F|--form|-T|--upload-file|--json)\b)"
+                r"|\b(curl|wget|http|xh)\b[^\n;&|]*(-X\s*(POST|PUT|PATCH|DELETE)|--request[\s=]+(POST|PUT|PATCH|DELETE)|\s-d|--data|\s(-F|--form|-T|--upload-file|--json)\b)"
                 r"[^\n;&|]*(integration/v1|/api/s/[^/\s]+/(cmd|rest|set|upd|group)\b)"), ASK,
      "Changes a UniFi device or the UniFi controller (adoption, reset, firmware, configuration)."),
     # --- GitHub (gh) / issue tracker --------------------------------------------------
@@ -149,6 +149,8 @@ RULES: list[tuple[re.Pattern, str, str]] = [
      "Pipes downloaded or decoded content into a shell."),
     (re.compile(r"\bsudo\s+nmap\b"), ASK, "Runs nmap as root (OS detection). Root nmap can do anything on this Mac."),
     (re.compile(r"\bnmap\b[^\n;&|]*\s(--script(?=[\s=]|$)|-sC\b|-A\b)"), ASK, "NSE scripts are intrusive."),
+    (re.compile(r"\bnmap\b[^\n;&|]*\s(-sI|-b)(?=\s|$)"), ASK,
+     "Idle (-sI) and FTP bounce (-b) scans go through a third host and are aimed at others' networks."),
     (re.compile(r"nmap_scan\.py\b[^\n;&|]*--profile[ =]os\b"), ASK, "OS detection needs `sudo nmap -O`."),
     (re.compile(r"(config_set\.py|\byq\b[^\n;&|]*\s-i\b)[^\n;&|]*authorized_ranges\s*\+?=(?!=)"), ASK,
      "Widens the scan scope (network.authorized_ranges): only for ranges the user owns, with their yes."),
@@ -156,6 +158,11 @@ RULES: list[tuple[re.Pattern, str, str]] = [
                 r"|[\w.\[\]-]*verify_tls\s*=\s*['\"]?(false|no|off|0)\b)"), ASK,
      "Narrows the scan exclusions, replaces the network settings or turns off TLS certificate checks: only with the "
      "user's yes."),
+    (re.compile(r"\bgit\b[^\n;&|]*\scommit\b[^\n;&|]*\s(--no-verify|-n)(?=\s|$)"), ASK,
+     "Skips the repository's pre-commit hook, which blocks committing secrets."),
+    (re.compile(r"(?i)\bgit\b[^\n;&|]*(\s-c\s*core\.hookspath=|\sconfig\b[^\n;&|]*\s(--unset(-all)?\s+core\.hookspath\b"
+                r"|core\.hookspath\s+\S))"), ASK,
+     "Changes or turns off the repository's Git hooks (the pre-commit check that blocks committing secrets)."),
 ]
 
 # ansible-playbook runs that change systems in high-impact ways
@@ -1167,6 +1174,42 @@ def check_protected_writes(tok: list[str], cwd: str) -> list[tuple[str, str]]:
     return [(ASK, r) for r in sorted(reasons - {None})]
 
 
+# --- other scanners ---------------------------------------------------------------------
+OTHER_SCANNERS = {"masscan", "zmap", "rustscan", "naabu", "arp-scan", "unicornscan", "hping3", "nping", "zgrab2"}
+NC_VALUE_OPTS = {"-w", "-s", "-p", "-x", "-X", "-i", "-I", "-O", "-T", "-V", "-G", "-M", "-m", "-q", "--wait",
+                 "--source", "--source-port", "--proxy", "--proxy-type"}
+IP_RE = re.compile(r"^[0-9.]+$|^[0-9a-fA-F:]+:[0-9a-fA-F:.]*$")
+
+
+def check_port_scan(tok: list[str], cwd: str) -> list[tuple[str, str]]:
+    """nc -z checks ports: one port on a named host is a connectivity test; a port range, several ports, a host
+    computed at run time or an address outside the authorized ranges asks."""
+    ops, i = [], 1
+    while i < len(tok):
+        t = tok[i]
+        if t in NC_VALUE_OPTS:
+            i += 2
+            continue
+        if not t.startswith("-") and not REDIRECT_RE.match(t):
+            ops.append(t)
+        i += 1
+    if not ops:
+        return []
+    host, ports = ops[0], ops[1:]
+    if computed(host) or len(ports) > 1 or any(computed(p) or "-" in p or "," in p for p in ports):
+        return [(ASK, f"{Path(tok[0]).name} -z over several ports or hosts is a port scan; this hook checks scan "
+                      f"scope for nmap only.")]
+    if IP_RE.match(host):
+        root = hmlib.find_repo_root(cwd)
+        try:
+            problems = hmlib.check_targets([host], load_config(root)) if root else ["no homelab.yaml"]
+        except hmlib.ConfigError as e:
+            problems = [str(e)]
+        if problems:
+            return [(ASK, f"{Path(tok[0]).name} -z to {host}: {problems[0]}")]
+    return []
+
+
 def runner_nmap_at(tok: list[str]) -> int | None:
     """Index of nmap run by a command runner: the program after find -exec/-execdir/-ok, else nmap anywhere."""
     for i, t in enumerate(tok[1:], 1):
@@ -1273,6 +1316,12 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
             findings += check_gh_language(tok, here)
         elif name == "security":
             findings += check_security(tok)
+        elif name in OTHER_SCANNERS or (name == "fping" and ("-g" in tok or "--generate" in tok)):
+            findings.append((ASK, f"{name} scans the network; this hook checks scan scope for nmap only. Use nmap or "
+                                  f"nmap_scan.py inside network.authorized_ranges."))
+        elif name in ("nc", "ncat", "netcat") and any(t == "-z" or re.fullmatch(r"-[a-zA-Z]*z[a-zA-Z]*", t)
+                                                      for t in tok[1:]):
+            findings += check_port_scan(tok, here)
         state, script = script_target(tok, cur, assigned)
         script_name = Path(str(script)).name if script else ""
         if script_name in SCAN_SCRIPTS:
