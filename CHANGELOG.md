@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.54.0 — 2026-11-24
+- Proxmox endpoints over plain `http://` are refused unless that site sets `allow_http: true` (the API token would
+  cross the network in clear text). `check_env.py` warns while it is set, and while `bmc_validate_certs` or
+  `unifi_validate_certs` is false. Both guards ask before `allow_http` is turned on.
+- `issues.py report` looks for host names with a domain and key-like strings left after redaction. The dry run
+  lists them; a send refuses (exit 6) until they are edited out, kept with `--keep`, or sent with `--force` after
+  the user checked them. The guard asks for `--force` even with `issues.auto_send`.
+- `site.language` reaches the session context only as a language code or name; `config_set.py` refuses other values.
+- SSH from the scripts (`ssh_probe.py`, `lxd_snapshot.py`, `routeros_audit.py`) forwards nothing (agent, X11, ports),
+  never falls back to passwords, and takes the host after `--`; a host starting with `-` or holding spaces is refused.
+  The update check accepts only https, ssh or local plugin remotes and passes the URL after `--`.
+- `check_env.py` cleans certificate names from the server before showing them and shell-quotes them in the
+  suggested `security find-certificate` command. `hmlib.clean()` also drops invisible and text-reordering Unicode
+  characters from network-sourced text.
+- Templates: `cloud-image-base` refuses a base image without a checksum unless `allow_unverified_image = true`.
+  The pre-commit hook reads names NUL-separated and refuses the names `.gitignore` keeps out and temporary AWS keys.
+  `.claude/settings.json` denies reading SSH keys, AWS, gh and kube credentials; `--sync-managed` adds the
+  template's permission rules an existing settings.json lacks. The BMC and UniFi group_vars say what turning
+  certificate checks off exposes.
+- CI pins `actions/checkout` to a commit.
+
 ## 0.53.0 — 2026-11-24
 - `with_secrets.py` gives keychain secrets without asking only to `tofu`, `terraform`, `packer`, `ansible*` and this
   plugin's scripts. Any other program under it, or a command line that names a secret's environment variable
