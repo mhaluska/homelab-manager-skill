@@ -27,7 +27,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hmlib  # noqa: E402
-from drift_report import load_ansible  # noqa: E402
 from proxmox_to_inventory import host_name  # noqa: E402
 
 MAC_RE = re.compile(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}")
@@ -230,7 +229,7 @@ def main() -> int:
     except hmlib.ConfigError as e:
         print(f"guest_map: {e}", file=sys.stderr)
         return 3
-    ansible = {} if a.no_ansible else load_ansible(root)[0]
+    ansible = {} if a.no_ansible else hmlib.load_ansible(root)[0]
     text = build(cfg, snaps, net_hosts, ansible, routeros_by_mac(root))
     if a.out == "-":
         sys.stdout.write(text)

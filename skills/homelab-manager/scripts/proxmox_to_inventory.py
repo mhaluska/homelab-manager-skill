@@ -21,7 +21,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hmlib  # noqa: E402
-from drift_report import load_ansible  # noqa: E402
 
 LINUX_VM_OSTYPES = {"l26", "l24"}
 # LXC ostypes are all Linux; "unmanaged" too (Proxmox just doesn't set it up)
@@ -145,7 +144,7 @@ def main():
         print(f"proxmox_to_inventory: {rel} has no guest config — refresh it with "
               "proxmox_inventory.py --details.", file=sys.stderr)
         return 4
-    managed, _ = load_ansible(root)
+    managed, _ = hmlib.load_ansible(root)
     preferred = site["ranges"] + hmlib.scan_scope(cfg)[0]
     hosts, skipped = plan(guests, managed, a, ranges, preferred)
     text = to_yaml(hosts, skipped, a.group, f"{rel} ({inv.get('collected_at', '?')})",

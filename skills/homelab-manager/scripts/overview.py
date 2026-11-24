@@ -37,7 +37,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hmlib  # noqa: E402
 import pve_node_plan as plan  # noqa: E402
-from drift_report import load_ansible  # noqa: E402
 
 STORAGE_WARN_PCT = 80
 MEM_WARN_PCT = 85
@@ -1700,7 +1699,7 @@ def main():
         print(f"overview: {e}", file=sys.stderr)
         return 3
     root = Path(cfg["_root"])
-    managed, note = ({}, "--no-ansible") if a.no_ansible else load_ansible(root)
+    managed, note = ({}, "--no-ansible") if a.no_ansible else hmlib.load_ansible(root)
     text = render(cfg, managed, note)
     target = Path(a.out) if a.out and a.out != "-" else root / "OVERVIEW.md"
     if a.check:

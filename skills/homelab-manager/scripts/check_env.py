@@ -384,18 +384,13 @@ def site_group_problems(inventory: dict, cfg: dict) -> list[str]:
     return problems
 
 
-_INVENTORY: dict = {}
-
 
 def managed_inventory(cfg) -> dict | None:
     """`ansible-inventory --list` of the managed inventory (once per run); None without Ansible or inventory."""
     root = Path(cfg["_root"]) if cfg else None
     if not root or not shutil.which("ansible") or not (root / "ansible" / "inventory" / "managed").exists():
         return None
-    if root not in _INVENTORY:
-        rc, so, _ = run(["ansible-inventory", "-i", "inventory/managed", "--list"], timeout=60, cwd=root / "ansible")
-        _INVENTORY[root] = json.loads(so or "{}") if rc == 0 else None
-    return _INVENTORY[root]
+    return hmlib.ansible_inventory(root)[0]
 
 
 def check_site_ambiguity(cfg, inventory: dict | None = None):

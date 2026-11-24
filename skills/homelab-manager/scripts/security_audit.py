@@ -1074,8 +1074,7 @@ def report(cfg: dict, hosts: dict, mac: dict | None, accepts: dict, mac_accepted
 # --------------------------------------------------------------------------- main
 
 def load_inventory(root: Path) -> dict:
-    from drift_report import load_ansible
-    return load_ansible(root)[0]
+    return hmlib.load_ansible(root)[0]
 
 
 def read_json(f: Path) -> dict:

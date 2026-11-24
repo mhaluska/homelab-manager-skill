@@ -294,8 +294,7 @@ class DefaultSiteTests(unittest.TestCase):  # issue 65
         self.assertEqual([v["site"] for v in cfg["network"]["vlans"]], ["home", "home"])
         self.assertIn("# optional, for more than one location", Path(self.d, "homelab.yaml").read_text())  # comment kept
         self.assertTrue(Path(self.d, "ansible/inventory/managed/group_vars/site_home.yml").is_file())
-        import drift_report
-        ans, _ = drift_report.load_ansible(Path(self.d))
+        ans, _ = h.load_ansible(Path(self.d))
         self.assertIn("site_home", ans["web01"]["_groups_all"])
         self.assertEqual(h.default_site_gaps(cfg, self.d), [])
         r = run("init_repo.py", self.d, "--name-default-site", "home", cwd=self.d)                # again: nothing to do

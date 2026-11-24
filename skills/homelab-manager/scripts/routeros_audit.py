@@ -797,9 +797,8 @@ def proposal_report(rows: list[dict], unknown: int, read: bool, unread: list[str
 # --------------------------------------------------------------------------- main
 
 def load_inventory(root: Path) -> dict:
-    """The managed inventory's hosts with their variables (drift_report.load_ansible), read once per run."""
-    from drift_report import load_ansible
-    return load_ansible(root)[0]
+    """The managed inventory's hosts with their variables (hmlib.load_ansible), read once per run."""
+    return hmlib.load_ansible(root)[0]
 
 
 def inventory_target(name: str, v: dict) -> tuple[str, str | None, int | None, str | None]:

@@ -438,8 +438,7 @@ def main():
     if problems:
         print("Probe refused:\n  " + "\n  ".join(problems), file=sys.stderr)
         return 4
-    from drift_report import load_ansible
-    managed, _ = load_ansible(Path(cfg["_root"]))
+    managed, _ = hmlib.load_ansible(Path(cfg["_root"]))
     if st or not a.targets:
         # --site, or every known host of one site's part: the default site's without --site (its exclusions:
         # every site's, as the site is not known)

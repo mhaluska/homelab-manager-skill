@@ -247,8 +247,7 @@ def main(argv=None, run=ssh_run) -> int:
     except hmlib.ConfigError as e:
         print(f"lxd_snapshot: {e}", file=sys.stderr)
         return 3
-    from drift_report import load_ansible
-    hosts, src = load_ansible(Path(cfg["_root"]))
+    hosts, src = hmlib.load_ansible(Path(cfg["_root"]))
     if not hosts:
         print(f"lxd_snapshot: no inventory ({src})", file=sys.stderr)
         return 3

@@ -614,12 +614,10 @@ def _loose_hosts(target: Path) -> tuple[list[str], list[str], str | None]:
     """(hosts in no site_<name> group, of them the ones only in generated tofu_hosts*.yml, error)."""
     import hmlib
     ansible = target / "ansible"
-    r = subprocess.run(["ansible-inventory", "-i", "inventory/managed", "--list"], cwd=ansible,
-                       capture_output=True, text=True, timeout=120) if shutil.which("ansible-inventory") else None
-    if not r or r.returncode != 0:
-        return [], [], "ansible-inventory is not available or failed: " + (
-            (r.stderr.strip().splitlines() or ["?"])[-1] if r else "not installed")
-    groups = hmlib.inventory_groups(json.loads(r.stdout or "{}"))
+    data, note = hmlib.ansible_inventory(target)
+    if data is None:
+        return [], [], "ansible-inventory is not available or failed: " + note
+    groups = hmlib.inventory_groups(data)
     loose = sorted(h for h, gs in groups.items() if not hmlib.host_sites(gs))
     managed, generated = set(), set()
     for f in sorted((ansible / "inventory" / "managed").glob("*.y*ml")):

@@ -259,28 +259,6 @@ def storage_findings(px: dict, snap: dict) -> list[str] | None:
     return found
 
 
-def load_ansible(root: Path):
-    inv = root / "ansible" / "inventory" / "managed"
-    if not inv.exists():
-        return {}, "no ansible/inventory/managed"
-    r = subprocess.run(["ansible-inventory", "-i", str(inv), "--list"], cwd=root / "ansible",
-                       capture_output=True, text=True, timeout=120)
-    if r.returncode != 0:
-        return {}, "ansible-inventory failed: " + (r.stderr.strip().splitlines() or ["?"])[-1]
-    data = json.loads(r.stdout)
-    hv = (data.get("_meta") or {}).get("hostvars") or {}
-    hosts = {}
-    for group, g in data.items():
-        if group == "_meta" or not isinstance(g, dict):
-            continue
-        for h in g.get("hosts", []):
-            hosts.setdefault(h, {"groups": [], **(hv.get(h) or {})})["groups"].append(group)
-    for h, gs in hmlib.inventory_groups(data).items():   # parent groups too (site_<name>: {children: …})
-        if h in hosts:
-            hosts[h]["_groups_all"] = sorted(gs)
-    return hosts, f"ansible-inventory ({inv.relative_to(root)})"
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--env")
@@ -307,7 +285,7 @@ def main():
         overview_stale = False
         if (root / "OVERVIEW.md").is_file():   # GitHub issue #89: the overview page too, when the repo has one
             import overview
-            managed, note = load_ansible(root)
+            managed, note = hmlib.load_ansible(root)
             overview_stale = (root / "OVERVIEW.md").read_text() != overview.render(cfg, managed, note)
             if overview_stale:
                 print("stale: OVERVIEW.md differs from the repository data — run overview.py (after drift_report.py)")
@@ -346,7 +324,7 @@ def main():
                                            hmlib.tofu_env(cfg, st["name"]))
             if not (root / "tofu" / "environments" / hmlib.tofu_env(cfg, st["name"])).is_dir() and not a.no_tofu:
                 states[st["name"]] = (None, f"no OpenTofu environment (init_repo.py --add-site {st['name']})")
-    ans, ans_src = load_ansible(root)
+    ans, ans_src = hmlib.load_ansible(root)
 
     L = [f"# Drift report — {dt.datetime.now().strftime('%Y-%m-%d %H:%M')}", "",
          "| Source | Status |", "|---|---|",

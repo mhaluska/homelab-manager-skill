@@ -666,8 +666,63 @@ def accept_keys(raw) -> set[str]:
             if literal(k) is not None and str(k).strip()}
 
 
+_ANSIBLE: dict = {}
+
+
+def _inventory_signature(inv: Path) -> tuple:
+    return tuple(sorted((str(f), f.stat().st_mtime_ns, f.stat().st_size) for f in inv.rglob("*") if f.is_file()))
+
+
+def ansible_inventory(root, timeout: int = 120) -> tuple[dict | None, str]:
+    """(`ansible-inventory --list` JSON of ansible/inventory/managed, source note); (None, why) when it can't be read
+    (no inventory, Ansible not installed, an error, a timeout, broken JSON). Read once per run while the inventory
+    files stay the same."""
+    root = Path(root)
+    inv = root / "ansible" / "inventory" / "managed"
+    if not inv.exists():
+        return None, "no ansible/inventory/managed"
+    key = (str(root.resolve()), _inventory_signature(inv))
+    if key in _ANSIBLE:
+        return _ANSIBLE[key]
+    note = f"ansible-inventory ({inv.relative_to(root)})"
+    try:
+        r = subprocess.run(["ansible-inventory", "-i", str(inv), "--list"], cwd=root / "ansible",
+                           capture_output=True, text=True, timeout=timeout)
+        if r.returncode != 0:
+            out = (None, "ansible-inventory failed: " + clean((r.stderr.strip().splitlines() or ["?"])[-1], 200))
+        else:
+            out = (json.loads(r.stdout or "{}"), note)
+    except FileNotFoundError:
+        out = (None, "ansible-inventory is not installed")
+    except subprocess.TimeoutExpired:
+        out = (None, f"ansible-inventory did not finish in {timeout} s")
+    except ValueError:
+        out = (None, "ansible-inventory printed no valid JSON")
+    _ANSIBLE[key] = out
+    return out
+
+
+def load_ansible(root) -> tuple[dict, str]:
+    """({host: vars with "groups" and "_groups_all"}, source note) of the managed inventory; ({}, why) when it can't
+    be read (see ansible_inventory)."""
+    data, note = ansible_inventory(root)
+    if data is None:
+        return {}, note
+    hv = (data.get("_meta") or {}).get("hostvars") or {}
+    hosts: dict = {}
+    for group, g in data.items():
+        if group == "_meta" or not isinstance(g, dict):
+            continue
+        for h in g.get("hosts", []):
+            hosts.setdefault(h, {"groups": [], **(hv.get(h) or {})})["groups"].append(group)
+    for h, gs in inventory_groups(data).items():   # parent groups too (site_<name>: {children: …})
+        if h in hosts:
+            hosts[h]["_groups_all"] = sorted(gs)
+    return hosts, note
+
+
 def inventory_host(managed: dict, key: str) -> tuple[str, dict] | None:
-    """(name, vars) of the managed-inventory host whose name or ansible_host is key (drift_report.load_ansible)."""
+    """(name, vars) of the managed-inventory host whose name or ansible_host is key (load_ansible)."""
     if key in managed:
         return key, managed[key]
     return next(((n, v) for n, v in managed.items() if str(v.get("ansible_host") or "") == key), None)

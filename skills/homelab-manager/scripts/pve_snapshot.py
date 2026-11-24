@@ -125,8 +125,7 @@ def infer_site(cfg: dict, guests: list[str], managed: dict | None = None) -> str
     if len(hmlib.sites(cfg)) < 2 or not names:
         return None
     if managed is None:
-        from drift_report import load_ansible
-        managed, _ = load_ansible(Path(cfg["_root"]))
+        managed, _ = hmlib.load_ansible(Path(cfg["_root"]))
     found = {g: st for g in names if (st := hmlib.target_site(cfg, managed, g))}
     by_site = sorted({st["name"] for st in found.values()})
     if len(by_site) > 1:
