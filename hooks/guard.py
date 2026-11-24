@@ -82,6 +82,8 @@ RULES: list[tuple[re.Pattern, str, str]] = [
      "Private SSH keys must not be read, copied or printed. Use the SSH agent (ssh-add -L lists public keys)."),
     (re.compile(r"\bnmap\b[^\n;&|]*\s-iR\b"), DENY, "Random-target scanning (-iR) is never allowed."),
     (re.compile(r"\bnmap\b[^\n;&|]*\s-D\s"), DENY, "Decoy scanning (-D) is not allowed."),
+    (re.compile(r"\bgit\b[^\n;&|]*\scredential(-[\w-]+)?\s+(fill|get)\b|\bgit-credential-[\w-]+\s+get\b"
+                r"|\bgh\s+auth\s+git-credential\b"), DENY, "This would print a stored Git or GitHub credential."),
     # --- OpenTofu state / destructive -----------------------------------------------
     (re.compile(r"\b(tofu|terraform)\b[^\n;&|]*\s(destroy|taint|untaint|force-unlock)\b"), ASK,
      "Destroys resources or overrides state/locks."),
@@ -422,11 +424,11 @@ STDIN_ARG_WRAPPERS = {"xargs", "parallel"}           # add arguments read from s
 ROOT_WRAPPERS = {"sudo", "doas"}
 
 
-def unwrap(tok: list[str]) -> tuple[list[str], set[str]]:
+def unwrap(tok: list[str]) -> tuple[list[str], dict]:
     """The command a segment runs: drop shell keywords, env assignments, wrappers with their options (sudo, env,
     timeout, xargs, …) and with_secrets.py. Flags: "stdin_args" (xargs/parallel add arguments from stdin), "root"
-    (sudo/doas), "secrets" (run by with_secrets.py)."""
-    out, flags = list(tok), set()
+    (sudo/doas), "secrets" (the argv each with_secrets.py starts, outermost first)."""
+    out, flags = list(tok), {}
     while out:
         t = out[0]
         name = Path(t).name
@@ -448,13 +450,15 @@ def unwrap(tok: list[str]) -> tuple[list[str], set[str]]:
                     break
                 out = out[2:] if opt in values and len(out) > 1 else out[1:]
             out = out[WRAPPER_POSITIONAL.get(name, 0):]
-            flags |= {"stdin_args"} if name in STDIN_ARG_WRAPPERS else set()
-            flags |= {"root"} if name in ROOT_WRAPPERS else set()
+            if name in STDIN_ARG_WRAPPERS:
+                flags["stdin_args"] = True
+            if name in ROOT_WRAPPERS:
+                flags["root"] = True
             continue
         if t.endswith("with_secrets.py") or (PYTHON_RE.match(name) and len(out) > 1 and out[1].endswith("with_secrets.py")):
             idx = out.index("--") if "--" in out else len(out)
             out = out[idx + 1:]
-            flags.add("secrets")
+            flags.setdefault("secrets", []).append(list(out))
             continue
         break
     return out, flags
@@ -903,6 +907,8 @@ def py_call_name(node: ast.Call) -> str:
     return f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else ""
 
 
+PY_FILE_CALLS = {"open", "Path", "PurePath", "expanduser", "read_text", "read_bytes", "copy", "copyfile", "copy2",
+                 "copytree", "make_archive"}
 SCAN_SCRIPT_RE = re.compile(r"(^|/)(nmap_scan|ssh_probe)\.py$")
 
 
@@ -923,6 +929,10 @@ def evaluate_python(content: str, cwd: str, depth: int) -> list[tuple[str, str]]
     commands: list[tuple[int, list[str], bool]] = []  # (line, argv or ["__shell__", cmd], started by a call)
     in_calls: set[int] = set()
     for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and node.args and py_call_name(node) in PY_FILE_CALLS:
+            w = py_words(node.args[0])
+            if w and any(private_ssh_path(m.group(1)) for m in SSH_PATH_RE.finditer(w[0])):
+                findings.append((DENY, f"line {node.lineno}: {SSH_KEY_REASON}"))
         if isinstance(node, ast.Import) or isinstance(node, ast.ImportFrom):
             names = [a.name for a in node.names] + ([node.module] if isinstance(node, ast.ImportFrom) else [])
             if any((n or "").split(".")[0] == "nmap" for n in names):
@@ -969,6 +979,148 @@ SCAN_SCRIPTS = ("nmap_scan.py", "ssh_probe.py")
 # unless something earlier in the same command writes a file of that name
 PLUGIN_SCRIPT_NAMES = {f.name for d in (PLUGIN_ROOT / "skills" / "homelab-manager" / "scripts", PLUGIN_ROOT / "hooks")
                        if d.is_dir() for f in d.iterdir() if f.suffix == ".py"}
+
+
+# --- with_secrets.py -------------------------------------------------------------------
+# programs that get keychain secrets in their environment without asking (and this plugin's scripts)
+SECRET_PROGRAMS = {"tofu", "terraform", "packer", "ansible", "ansible-playbook", "ansible-inventory"}
+SECRET_VARS_RE = re.compile(r"\b(PROXMOX_(VE_API_TOKEN|TOKEN|PASSWORD)|AWS_SECRET_ACCESS_KEY"
+                            r"|[A-Z][A-Z0-9_]*_(PASSWORD|API_KEY|SECRET|TOKEN))\b")
+# the plugin itself, and its other installed versions (…/plugins/cache/<marketplace>/homelab-manager/<version>)
+PLUGIN_HOMES = [PLUGIN_ROOT] + ([PLUGIN_ROOT.parent] if PLUGIN_ROOT.parent.name == "homelab-manager" else [])
+
+
+def in_plugin(p: Path) -> bool:
+    try:
+        r = Path(os.path.abspath(p)).resolve()
+    except OSError:
+        return False
+    return any(r.is_relative_to(h) for h in PLUGIN_HOMES)
+
+
+def secret_env_names(cwd: str) -> set[str]:
+    """Environment variables with_secrets.py fills from the keychain, by homelab.yaml `secrets:` (kind env and
+    user_password; the proxmox_token and s3_credentials names are in SECRET_VARS_RE)."""
+    try:
+        root = hmlib.find_repo_root(cwd)
+        secrets = (load_config(root).get("secrets") or {}) if root else {}
+    except OutOfTime:
+        raise
+    except Exception:   # noqa: BLE001 — no names known: the generic pattern still applies
+        return set()
+    names = set()
+    for spec in secrets.values() if isinstance(secrets, dict) else []:
+        env = spec.get("env") if isinstance(spec, dict) else None
+        if isinstance(env, str) and env:
+            names |= {env, f"{env}_PASSWORD"} if spec.get("kind") == "user_password" else {env}
+    return names
+
+
+def check_secrets(wrapped: list[list[str]], segment: str, cwd: str, assigned: dict[str, str]) -> list[tuple[str, str]]:
+    """with_secrets.py puts keychain secrets into the environment of the command it starts. Only the tools that need
+    them (OpenTofu, Packer, Ansible) and this plugin's scripts get them without asking; naming a secret's variable
+    on the command line asks too (its value could be printed, encoded or sent somewhere)."""
+    findings = []
+    for argv in wrapped:
+        if not argv:
+            continue
+        first = Path(argv[0]).name
+        if argv[0].endswith("with_secrets.py") or (PYTHON_RE.match(first) and len(argv) > 1
+                                                   and argv[1].endswith("with_secrets.py")):
+            continue   # nested: the inner with_secrets.py's command is checked
+        ok = first in SECRET_PROGRAMS
+        if not ok and runner_kind(first) == "python":
+            state, script = script_target([expand(t, assigned) for t in argv], cwd, assigned)
+            ok = (state == "file" and in_plugin(script)) or (state == "missing" and script.name in PLUGIN_SCRIPT_NAMES)
+        if not ok:
+            findings.append((ASK, f"runs `{shlex.join(argv)[:80]}` with keychain secrets in its environment: only "
+                                  "OpenTofu, Packer, Ansible and this plugin's scripts get them without asking."))
+    names = secret_env_names(cwd)
+    if SECRET_VARS_RE.search(segment) or any(re.search(rf"\b{re.escape(n)}\b", segment) for n in names):
+        findings.append((ASK, "names a secret's environment variable in a command run by with_secrets.py: its "
+                              "value could be printed or sent somewhere."))
+    return findings
+
+
+# --- credentials: SSH keys, keychain, Git, state ----------------------------------------
+SSH_PATH_RE = re.compile(r"\.ssh/([^\s'\"(),;|&<>]*)")
+SSH_PUBLIC_NAMES = ("config", "known_hosts", "authorized_keys", "environment", "rc")
+SSH_METADATA_PROGRAMS = {"ls", "stat", "test", "[", "[[", "chmod", "chown", "mkdir", "file"}
+SSH_KEY_USERS = {"ssh", "scp", "sftp", "rsync", "ssh-add", "ssh-keygen", "ssh-copy-id", "autossh", "mosh", "sshpass",
+                 "ansible", "ansible-playbook", "ansible-inventory", "git"}
+SSH_KEY_OPTION_RE = re.compile(r"(^|\s)(-i|-oIdentityFile=|IdentityFile=|--private-key=)\s*\S*$")
+ARCHIVERS = {"tar", "zip", "cp", "rsync", "scp", "ditto", "cpio", "7z", "pax"}
+SSH_KEY_REASON = "Private SSH keys must not be read, copied or printed. Use the SSH agent (ssh-add -L lists public keys)."
+
+
+def private_ssh_path(rest: str) -> bool:
+    """rest = what follows `.ssh/` in a path: a private key (or a glob that may match one)?"""
+    first = rest.split("/")[0]
+    if not first:
+        return False
+    if any(c in first for c in "*?[") and not first.endswith(".pub"):
+        return True
+    return not (first.endswith(".pub") or first.startswith(SSH_PUBLIC_NAMES))
+
+
+def check_ssh_keys(tok: list[str]) -> list[tuple[str, str]]:
+    """Any program naming a private key under .ssh/ is denied, except listing it and SSH tools taking it as their
+    identity (`ssh -i ~/.ssh/key`, `ssh-add ~/.ssh/key`); archivers of the whole .ssh directory too."""
+    prog = Path(tok[0]).name
+    if prog in SSH_METADATA_PROGRAMS or prog in ("echo", "printf", "gh") or (prog == "git" and len(tok) > 1
+                                                                          and tok[1] in ("commit", "tag")):
+        return []   # these only show or record a path as text
+    for i, t in enumerate(tok):
+        if prog in ARCHIVERS and re.search(r"(^|/)\.ssh/?$", t):
+            return [(DENY, SSH_KEY_REASON)]
+        for m in SSH_PATH_RE.finditer(t):
+            if not private_ssh_path(m.group(1)):
+                continue
+            if prog in SSH_KEY_USERS and (prog == "ssh-add" or (i and tok[i - 1] in ("-i", "-f", "--private-key", "--key-file"))
+                                          or SSH_KEY_OPTION_RE.search(t[:m.start()])):
+                continue
+            return [(DENY, SSH_KEY_REASON)]
+    return []
+
+
+SECURITY_SECRET_SUBCOMMANDS = {"find-generic-password", "find-internet-password"}
+
+
+def check_security(tok: list[str]) -> list[tuple[str, str]]:
+    """macOS `security`: printing a keychain secret (-w, -g, also in a cluster such as -gw), dumping or exporting the
+    keychain, and the interactive mode (-i, -p) that reads such commands from stdin are denied."""
+    i = 1
+    while i < len(tok) and tok[i].startswith("-"):
+        if tok[i] in ("-i", "-p") or (not tok[i].startswith("--") and "i" in tok[i][1:]):
+            return [(DENY, "`security -i` runs keychain commands from input this hook cannot see.")]
+        i += 1
+    if i >= len(tok):
+        return []
+    sub, args = tok[i], tok[i + 1:]
+    if sub in ("dump-keychain", "export", "export-items"):
+        return [(DENY, "Dumping or exporting the keychain is not allowed.")]
+    if sub in SECURITY_SECRET_SUBCOMMANDS and any(
+            a.startswith("-") and not a.startswith("--") and set(a[1:]) <= set("acCDGjlsgw") and set(a[1:]) & set("wg")
+            for a in args):
+        return [(DENY, "This would print a keychain secret. Use scripts/with_secrets.py, which injects it into the "
+                       "command's environment without printing it.")]
+    return []
+
+
+TFSTATE_RE = re.compile(r"\.tfstate(\.|$)")
+TFSTATE_OK = {"ls", "stat", "test", "[", "rm", "tofu", "terraform", "git", "find", "du", "mkdir", "touch", "chmod", "file"}
+
+
+def check_state_read(tok: list[str]) -> list[tuple[str, str]]:
+    name = Path(tok[0]).name
+    if name in ("tofu", "terraform"):
+        rest = [t for t in tok[1:] if not t.startswith("-")]
+        if rest[:2] == ["state", "pull"] or (rest[:1] == ["show"] and len(rest) == 1 and "-json" in tok):
+            return [(ASK, "Prints the whole OpenTofu state, which can hold secrets (passwords, keys, tokens) in clear.")]
+        return []
+    if name not in TFSTATE_OK and any(TFSTATE_RE.search(t) for t in tok[1:]):
+        return [(ASK, "Reads OpenTofu state, which can hold secrets (passwords, keys, tokens) in clear.")]
+    return []
 
 
 def runner_nmap_at(tok: list[str]) -> int | None:
@@ -1031,10 +1183,12 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
                 assigned[k] = expand(v, assigned)
             continue
         tok, flags = unwrap(raw)
+        here = cur or cwd
+        if "secrets" in flags:   # before an empty command is skipped: `with_secrets.py x -- env` prints them all
+            findings += check_secrets(flags["secrets"], seg, here, assigned)
         if not tok:
             continue
         tok = [expand(t, assigned) for t in tok]
-        here = cur or cwd
         if tok[0] in ("cd", "pushd", "popd"):
             dest = next((t for t in tok[1:] if not t.startswith("-")), os.path.expanduser("~"))
             unknown = computed(dest) or cur is None or tok[0] == "popd" or "-" in tok[1:]
@@ -1045,6 +1199,7 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
             findings.append((ASK, f"the program to run is computed at run time ({tok[0][:60]}); this hook cannot "
                                   f"check what it does."))
         findings += check_text(" ".join(tok))   # the command as the shell sees it: no quotes or backslashes
+        findings += check_ssh_keys(tok) + check_state_read(tok)
         inner = inner_command(tok)
         if inner and depth < 3:
             findings += evaluate(inner, here, depth + 1)
@@ -1072,6 +1227,8 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
             findings += check_ansible_playbook(tok)
         elif name == "gh":
             findings += check_gh_language(tok, here)
+        elif name == "security":
+            findings += check_security(tok)
         state, script = script_target(tok, cur, assigned)
         script_name = Path(str(script)).name if script else ""
         if script_name in SCAN_SCRIPTS:
