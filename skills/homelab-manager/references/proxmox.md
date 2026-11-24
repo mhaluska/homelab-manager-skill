@@ -126,6 +126,20 @@ changing anything, show the user the jobs (`jq .backup_jobs discovery/proxmox.js
   in `docs/proxmox-tokens.md` ("Backup jobs") — the user runs it on a node — or the GUI instead:
   Datacenter → Backup → the job → Edit → add the guests. Re-run `proxmox_inventory.py` and drift afterwards.
 
+## Secure Boot certificates (Microsoft 2023 CA)
+
+The Microsoft UEFI certificates of 2011 expired in June 2026; new shim, Windows boot manager and DBX updates are
+signed only with the 2023 CA. A VM whose EFI disk has `pre-enrolled-keys=1` but not `ms-cert=2023k` (no marker:
+2011 only; `2023` or `2023w`: partly enrolled) can stop booting after such an update. Proxmox VE 9.2 warns at start;
+`security_audit.py` lists them as `pve-efi-ms-cert-<vmid>`. Disks without pre-enrolled keys (Secure Boot off, legacy
+2 MB `efitype`) are not affected. The fix, per VM, with the user's yes (a write and a restart):
+1. Windows with BitLocker: suspend it in the guest first (`manage-bde -protectors -disable C: -RebootCount 1`), or
+   the changed keys make it ask for the recovery key.
+2. Shut the VM down, `qm enroll-efi-keys <vmid>` on its node (Proxmox VE 9 with current qemu-server; PVE 8 lacks
+   it), start it. The config then shows `ms-cert=2023k`.
+
+A template: clones inherit its EFI disk, so enroll each clone before its first start.
+
 ## API endpoints
 
 Any node of a cluster serves the whole cluster's API. `proxmox.endpoint` (and `sites[].proxmox.endpoint`) takes

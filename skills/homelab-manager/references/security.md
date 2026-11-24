@@ -40,7 +40,9 @@ Read-only by default; report findings with severity and a proposed fix, change n
    services` (services on devices the playbook doesn't reach).
 3. **Findings**: `python3 $HM/scripts/security_audit.py [--site <name>] [--report]`. It judges the hosts' data, reads
    each site's Proxmox with the read-only token (GET only: administrators without a second factor, API tokens on
-   `root@pam` or not privilege-separated, the datacenter and node firewall, privileged LXC and what weakens them;
+   `root@pam` or not privilege-separated, the datacenter and node firewall, privileged LXC and what weakens them,
+   Secure Boot VMs without the Microsoft 2023 certificates (fix: references/proxmox.md, "Secure Boot
+   certificates");
    `--no-proxmox` re-judges the last read), joins the files of step 2 (forwards that open a risky service or every
    port to any address, or reach a privileged container; risky services nmap saw; pending security updates, worse
    behind a forward; the routers' findings, listed apart) and checks this Mac (FileVault, firewall, SIP, Gatekeeper,

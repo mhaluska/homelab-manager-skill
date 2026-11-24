@@ -10,7 +10,8 @@ discovery/security.json (sshd -T, accounts with a password, NOPASSWD sudo, host 
 listening sockets, Samba shares, NFS exports, containers, tunnel clients). This script judges that data and:
 - reads each site's Proxmox with its read-only token (GET only, PVEAuditor; --no-proxmox judges the data the last run
   kept): administrators without a second factor, API tokens on root@pam or without privilege separation, the
-  datacenter and node firewall, privileged LXC containers and what weakens them (nesting, mount, raw AppArmor/cgroup);
+  datacenter and node firewall, privileged LXC containers and what weakens them (nesting, mount, raw AppArmor/cgroup),
+  VMs whose Secure Boot EFI disk lacks the Microsoft 2023 certificates (`ms-cert=2023k`);
 - joins the other discovery files it finds: the routers' port forwards (routeros.json) that open a risky service or
   every port to any address, or reach a privileged container; risky services nmap found on devices the playbook
   doesn't audit (network.json); pending security updates and reboots (updates.json); the routers' own findings
@@ -510,9 +511,10 @@ def _epoch(value) -> int:
 
 
 def pve_collect(pve) -> dict:
-    """Users, second factors, tokens, who is an administrator, the firewall options and every LXC guest's config,
-    read with GET requests only (the read-only token, PVEAuditor). Never e-mail addresses, names or comments; every
-    string is untrusted and cleaned. A part the token may not read is listed in `unread`."""
+    """Users, second factors, tokens, who is an administrator, the firewall options, every LXC guest's config and
+    the EFI disk of every VM that has one, read with GET requests only (the read-only token, PVEAuditor). Never
+    e-mail addresses, names or comments; every string is untrusted and cleaned. A part the token may not read is
+    listed in `unread`."""
     unread: dict = {}
 
     def get(path, what, **params):
@@ -575,9 +577,22 @@ def pve_collect(pve) -> dict:
             if isinstance(o, dict):
                 nodes[clean(n["node"])] = {"firewall": _on(o.get("enable"))}
     data["nodes"] = nodes
-    lxc = []
+    lxc, efi = [], []
     for r in get("/cluster/resources", "guests", type="vm") or []:
-        if not isinstance(r, dict) or r.get("type") != "lxc" or r.get("template") or not isinstance(r.get("vmid"), int):
+        if not isinstance(r, dict) or not isinstance(r.get("vmid"), int):
+            continue
+        if r.get("type") == "qemu":
+            conf = get(f"/nodes/{urllib.parse.quote(str(r.get('node')), safe='')}/qemu/{r['vmid']}/config",
+                       "VM configs")
+            if isinstance(conf, dict) and conf.get("efidisk0"):
+                opts = dict(o.split("=", 1) for o in str(conf["efidisk0"]).split(",")[1:] if "=" in o)
+                efi.append({"vmid": r["vmid"], "name": clean(r.get("name")), "node": clean(r.get("node")),
+                            "status": clean(r.get("status")), "template": bool(r.get("template")),
+                            "windows": str(conf.get("ostype") or "").startswith("win"),
+                            "pre_enrolled": _on(opts.get("pre-enrolled-keys"), False),
+                            "ms_cert": clean(opts.get("ms-cert"), 20) or None})
+            continue
+        if r.get("type") != "lxc" or r.get("template"):
             continue
         conf = get(f"/nodes/{urllib.parse.quote(str(r.get('node')), safe='')}/lxc/{r['vmid']}/config", "LXC configs")
         if not isinstance(conf, dict):
@@ -590,6 +605,7 @@ def pve_collect(pve) -> dict:
                             if isinstance(p, (list, tuple)) and len(p) == 2],
                     "ips": [a["ip"] for a in hmlib.guest_nic_addresses({"config": net})]})
     data["lxc"] = lxc
+    data["efi"] = efi
     if unread:
         data["unread"] = unread
     return data
@@ -603,6 +619,9 @@ def lxc_weakening(c: dict) -> list[str]:
     return [f"`{f}`" for f in feats] + raw
 
 
+# the ms-cert marker of an EFI disk with the Microsoft 2023 certificates and KEK enrolled (`qm enroll-efi-keys`);
+# 2023 and 2023w are partial enrollments (GitHub issue #145)
+EFI_MS_CERT = "2023k"
 UP = {"info": "low", "low": "medium", "medium": "high", "high": "high"}
 
 
@@ -682,6 +701,24 @@ def pve_findings(data: dict, exposed: dict | None = None, verify_tls=True, now: 
                      + (f"; a port forward reaches it from any address ({'; '.join(fwd)})" if fwd else "")
                      + ": restore it as an unprivileged container (backup, then `pct restore --unprivileged 1`) "
                      "unless it needs the host's devices", c.get("name") or f"CT {c['vmid']}"))
+    pve8 = str(data.get("version") or "").startswith(("7.", "8."))
+    for v in data.get("efi") or []:
+        if not v.get("pre_enrolled") or v.get("ms_cert") == EFI_MS_CERT:
+            continue
+        vm = f"VM {v['vmid']} `{v.get('name')}` on `{v.get('node')}`"
+        has = (f"only partly enrolled (`ms-cert={v['ms_cert']}`)" if v.get("ms_cert")
+               else "only the Microsoft 2011 certificates, which expired in June 2026")
+        fix = ("clones inherit this EFI disk: run `qm enroll-efi-keys <vmid>` on each clone before its first start"
+               if v.get("template") else
+               ("shut it down, run `qm enroll-efi-keys " + str(v["vmid"]) + "` on its node and start it again"
+                + ("; Windows with BitLocker: suspend it first (`manage-bde -protectors -disable C: -RebootCount 1`), "
+                   "or it asks for the recovery key" if v.get("windows") else "")))
+        out.append((f"pve-efi-ms-cert-{v['vmid']}", "low" if v.get("template") or v.get("status") != "running"
+                    else "medium",
+                    f"{'template' if v.get('template') else 'Secure Boot'} {vm}: its EFI disk has {has}; boot-loader "
+                    "and DBX updates are signed only with the 2023 CA, so a later update can leave it unbootable: "
+                    + fix + (" (needs Proxmox VE 9: upgrade the cluster first)" if pve8 else ""),
+                    v.get("name") or f"VM {v['vmid']}"))
     return out
 
 

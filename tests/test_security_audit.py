@@ -263,7 +263,25 @@ PVE_ANSWERS = {
         {"type": "lxc", "vmid": 103, "name": "safe", "node": "pve2", "status": "running"},
         {"type": "lxc", "vmid": 104, "name": "spare", "node": "pve2", "status": "stopped"},
         {"type": "lxc", "vmid": 900, "name": "tpl", "node": "pve2", "template": 1},
-        {"type": "qemu", "vmid": 200, "name": "vm", "node": "pve1"}],
+        {"type": "qemu", "vmid": 200, "name": "vm", "node": "pve1"},
+        {"type": "qemu", "vmid": 201, "name": "win", "node": "pve1", "status": "running"},
+        {"type": "qemu", "vmid": 202, "name": "fixed", "node": "pve1", "status": "running"},
+        {"type": "qemu", "vmid": 203, "name": "partial", "node": "pve2", "status": "stopped"},
+        {"type": "qemu", "vmid": 204, "name": "nokeys", "node": "pve2", "status": "running"},
+        {"type": "qemu", "vmid": 205, "name": "legacy", "node": "pve2", "status": "running"},
+        {"type": "qemu", "vmid": 901, "name": "efi-tpl", "node": "pve2", "template": 1}],
+    "/nodes/pve1/qemu/200/config": {"ostype": "l26", "scsi0": "local-lvm:vm-200-disk-0"},
+    "/nodes/pve1/qemu/201/config": {"ostype": "win11", "efidisk0": "local-lvm:vm-201-disk-0,efitype=4m,"
+                                    "pre-enrolled-keys=1,size=4M"},
+    "/nodes/pve1/qemu/202/config": {"ostype": "l26", "efidisk0": "local-lvm:vm-202-disk-0,efitype=4m,"
+                                    "ms-cert=2023k,pre-enrolled-keys=1,size=4M"},
+    "/nodes/pve2/qemu/203/config": {"ostype": "l26", "efidisk0": "local-lvm:vm-203-disk-0,efitype=4m,"
+                                    "ms-cert=2023w,pre-enrolled-keys=1,size=4M"},
+    "/nodes/pve2/qemu/204/config": {"ostype": "l26", "efidisk0": "local-lvm:vm-204-disk-0,efitype=4m,"
+                                    "pre-enrolled-keys=0,size=4M"},
+    "/nodes/pve2/qemu/205/config": {"ostype": "l26", "efidisk0": "local-lvm:vm-205-disk-0,size=1M"},
+    "/nodes/pve2/qemu/901/config": {"ostype": "l26", "efidisk0": "local-lvm:base-901-disk-0,efitype=4m,"
+                                    "pre-enrolled-keys=1,size=4M"},
     "/nodes/pve1/lxc/101/config": {"features": "nesting=1,mount=nfs;cifs", "net0": "name=eth0,ip=192.0.2.21/24",
                                    "lxc": [["lxc.apparmor.profile", "unconfined"], ["lxc.cap.drop", ""],
                                            ["lxc.mount.entry", "/dev/x dev/x none bind"]]},
@@ -298,6 +316,13 @@ class ProxmoxTests(unittest.TestCase):
         self.assertEqual(lxc[101]["ips"], ["192.0.2.21"])
         self.assertEqual(lxc[102]["ips"], [])                                # dhcp
         self.assertTrue(lxc[103]["unprivileged"])
+        efi = {v["vmid"]: v for v in d["efi"]}
+        self.assertEqual(sorted(efi), [201, 202, 203, 204, 205, 901])        # 200 has no EFI disk
+        self.assertEqual((efi[201]["pre_enrolled"], efi[201]["ms_cert"], efi[201]["windows"]), (True, None, True))
+        self.assertEqual((efi[203]["ms_cert"], efi[203]["windows"]), ("2023w", False))
+        self.assertFalse(efi[204]["pre_enrolled"])
+        self.assertTrue(efi[901]["template"])
+        self.assertNotIn("vm-201-disk-0", text)                              # volume names are not kept
         self.assertNotIn("unread", d)
         no_audit = self.collect(**{"/access/permissions": {"/vms": {"VM.Audit": 1}}})
         self.assertIsNone(no_audit["tfa"])                                   # [] would mean "nobody", not "unknown"
@@ -330,6 +355,22 @@ class ProxmoxTests(unittest.TestCase):
         self.assertIn("`nesting=1`, `mount=nfs;cifs`, `lxc.apparmor.profile: unconfined`, `lxc.cap.drop: (empty)`",
                       text["lxc-privileged-101"])
         self.assertNotIn("lxc.mount.entry", text["lxc-privileged-101"])
+        # Secure Boot EFI disks without the Microsoft 2023 certificates (GitHub issue #145)
+        self.assertEqual(f["pve-efi-ms-cert-201"], ("medium", "win"))
+        self.assertEqual(f["pve-efi-ms-cert-203"], ("low", "partial"))      # stopped
+        self.assertEqual(f["pve-efi-ms-cert-901"], ("low", "efi-tpl"))      # template
+        for vmid in (200, 202, 204, 205):                                    # none, 2023k, no keys, legacy 2 MB
+            self.assertNotIn(f"pve-efi-ms-cert-{vmid}", f)
+        self.assertIn("qm enroll-efi-keys 201", text["pve-efi-ms-cert-201"])
+        self.assertIn("BitLocker", text["pve-efi-ms-cert-201"])
+        self.assertIn("2011", text["pve-efi-ms-cert-201"])
+        self.assertIn("partly enrolled (`ms-cert=2023w`)", text["pve-efi-ms-cert-203"])
+        self.assertNotIn("BitLocker", text["pve-efi-ms-cert-203"])
+        self.assertIn("each clone", text["pve-efi-ms-cert-901"])
+        self.assertNotIn("Proxmox VE 9", text["pve-efi-ms-cert-201"])
+        old = {k: t for k, _, t, _ in sa.pve_findings(dict(d, version="8.4.1"), now=2000)}
+        self.assertIn("needs Proxmox VE 9", old["pve-efi-ms-cert-201"])
+        self.assertFalse(any(k.startswith("pve-efi") for k, *_ in sa.pve_findings(dict(d, efi=None), now=2000)))
         exposed = {"192.0.2.21": ["r1 tcp 443"]}
         f = {k: s for k, s, _, _ in sa.pve_findings(d, exposed, verify_tls=False, now=2000)}
         self.assertEqual(f["lxc-privileged-101"], "high")                    # weakened and forwarded
