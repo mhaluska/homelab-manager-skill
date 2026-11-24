@@ -6,6 +6,13 @@
     pve_snapshot.py create <guest…> [--name prepatch-YYYYMMDD] [--description TEXT]
     pve_snapshot.py delete <guest…> --name NAME                    # needs the user's yes (the guard asks)
     pve_snapshot.py rollback <guest> --name NAME [--no-start]      # needs the user's yes (the guard asks)
+    pve_snapshot.py prune <guest…> --older-than DAYS [--prefix prepatch-]   # the user's yes (the guard asks)
+    … --dry-run                                                    # create/delete/rollback/prune: only show it
+
+`restore` is accepted for `rollback` (lxd_snapshot.py's word). A multi-guest create, delete or prune goes on
+after a guest fails and ends with a list of what was done and what failed (exit 1 when anything failed).
+prune deletes the snapshots whose name starts with --prefix (default prepatch-) and that are older than DAYS;
+--dry-run lists them (and what create/delete/rollback would do) with the read-only token, changing nothing.
 
 <guest> is a VMID or a guest name from the cluster. create/delete/rollback use the provisioning token
 (proxmox.tokens.provisioning, role HomelabProvisioner: VM.Snapshot; rollback also VM.Snapshot.Rollback
@@ -35,10 +42,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hmlib  # noqa: E402
-from proxmox_inventory import PVE  # noqa: E402
+from proxmox_inventory import PVE, PveError  # noqa: E402
 
 NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,39}$")  # Proxmox snapshot name rules
 TASK_TIMEOUT = 1800
+STATUS_RETRIES = 5   # consecutive failed task-status reads (a node busy with the snapshot) before giving up
+ACTION_ALIASES = {"restore": "rollback"}
 
 
 def default_name() -> str:
@@ -97,20 +106,37 @@ def base(g: dict) -> str:
     return f"/nodes/{g['node']}/{g['type']}/{g['vmid']}"
 
 
-def wait(pve: PVE, node: str, upid: str, what: str) -> None:
+def wait(pve: PVE, node: str, upid: str, what: str, sleep=time.sleep) -> None:
     deadline = time.monotonic() + TASK_TIMEOUT
+    failures = 0
     while time.monotonic() < deadline:
-        st = pve.get(f"/nodes/{node}/tasks/{upid}/status") or {}
+        try:
+            st = pve.get(f"/nodes/{node}/tasks/{upid}/status") or {}
+            failures = 0
+        except PveError as e:   # a transient API error while the task runs: try again before giving up
+            failures += 1
+            if failures >= STATUS_RETRIES:
+                raise SystemExit(f"{what}: cannot read the task status ({e}); check task {upid} in Proxmox.")
+            sleep(2 * failures)
+            continue
         if st.get("status") == "stopped":
             if st.get("exitstatus") != "OK":
                 raise SystemExit(f"{what} failed: {st.get('exitstatus')}")
             return
-        time.sleep(2)
+        sleep(2)
     raise SystemExit(f"{what}: task {upid} still running after {TASK_TIMEOUT // 60} min — check it in Proxmox.")
 
 
 def snapshots(pve: PVE, g: dict) -> list[dict]:
     return [s for s in (pve.get(base(g) + "/snapshot") or []) if s.get("name") != "current"]
+
+
+def prunable(snaps: list[dict], prefix: str, days: float, now: float | None = None) -> list[str]:
+    """Names of the snapshots starting with prefix that are older than days (oldest first)."""
+    cutoff = (time.time() if now is None else now) - days * 86400
+    old = [s for s in snaps if str(s.get("name") or "").startswith(prefix) and isinstance(s.get("snaptime"), int)
+           and s["snaptime"] < cutoff]
+    return [s["name"] for s in sorted(old, key=lambda s: s["snaptime"])]
 
 
 def label(g: dict) -> str:
@@ -139,8 +165,11 @@ def infer_site(cfg: dict, guests: list[str], managed: dict | None = None) -> str
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("action", choices=["list", "check", "create", "delete", "rollback"])
+    ap.add_argument("action", choices=["list", "check", "create", "delete", "rollback", "restore", "prune"])
     ap.add_argument("guests", nargs="+")
+    ap.add_argument("--older-than", type=float, metavar="DAYS", help="prune: snapshots older than DAYS")
+    ap.add_argument("--prefix", default="prepatch-", help="prune: only snapshots whose name starts with this")
+    ap.add_argument("--dry-run", action="store_true", help="create/delete/rollback/prune: show it, change nothing")
     ap.add_argument("--name")
     ap.add_argument("--description", default="")
     ap.add_argument("--json", action="store_true", help="check: print the result as JSON")
@@ -148,6 +177,9 @@ def main() -> int:
     ap.add_argument("--site", help="the site whose Proxmox holds the guests (default: the guests' inventory "
                                    "site, else the default site)")
     a = ap.parse_args()
+    a.action = ACTION_ALIASES.get(a.action, a.action)
+    if a.action == "prune" and a.older_than is None:
+        ap.error("prune needs --older-than DAYS")
     name = a.name or (default_name() if a.action == "create" else None)
     if a.action in ("delete", "rollback") and not name:
         ap.error(f"{a.action} needs --name (see `pve_snapshot.py list`)")
@@ -159,7 +191,8 @@ def main() -> int:
         cfg = hmlib.load_config()
         site = a.site if a.site else infer_site(cfg, a.guests)
         px = hmlib.proxmox_site(cfg, site)
-        secret = hmlib.proxmox_token_name(px, "read_only" if a.action in ("list", "check") else "provisioning")
+        secret = hmlib.proxmox_token_name(px, "read_only" if a.action in ("list", "check") or a.dry_run
+                                          else "provisioning")
         pve = PVE(hmlib.pick_endpoint(px), hmlib.read_secret(cfg, secret), hmlib.proxmox_ssl_context(cfg, px))
     except hmlib.ConfigError as e:
         print(f"pve_snapshot: {e}", file=sys.stderr)
@@ -187,44 +220,109 @@ def main() -> int:
                 print(f"  {s['name']:<40} {when}  {hmlib.clean(s.get('description') or '', 80)}")
         return 0
 
+    if a.action == "prune":
+        return 1 if prune(pve, guests, a.prefix, a.older_than, a.dry_run) else 0
+    if a.dry_run:
+        return dry_run(pve, a.action, guests, name)
     return 1 if apply(pve, a.action, guests, name, a.description, start=not a.no_start) else 0
 
 
-def apply(pve: PVE, action: str, guests: list[dict], name: str, description: str = "", start: bool = True) -> list[str]:
-    """create / delete / rollback snapshot `name` on each guest, waiting for every Proxmox task. Returns the
-    guests a rollback should have started but that are not running."""
-    import pve_guest  # imports this module
-    down = []
+def dry_run(pve: PVE, action: str, guests: list[dict], name: str) -> int:
+    """What create/delete/rollback would do, from the snapshot lists (read-only)."""
+    bad = 0
     for g in guests:
-        what = f"{action} snapshot {name!r} of {label(g)}"
         existing = {s["name"] for s in snapshots(pve, g)}
         if action == "create":
-            if name in existing:
-                print(f"{label(g)}: snapshot {name!r} already exists — kept (pass another --name for a new one)")
-                continue
-            params = {"snapname": name, "description": description or f"homelab-manager {name}"}
-            if g["type"] == "qemu":
-                params["vmstate"] = 0
-            upid = pve.write("POST", base(g) + "/snapshot", **params)
+            print(f"{label(g)}: would " + (f"keep the existing snapshot {name!r}" if name in existing
+                                           else f"create snapshot {name!r}"))
         elif name not in existing:
-            raise SystemExit(f"{label(g)} has no snapshot {name!r} (existing: {', '.join(sorted(existing)) or 'none'}).")
-        elif action == "delete":
-            upid = pve.write("DELETE", base(g) + f"/snapshot/{name}")
+            bad += 1
+            print(f"{label(g)}: has no snapshot {name!r} (existing: {', '.join(sorted(existing)) or 'none'})")
         else:
-            was_running = pve_guest.status(pve, g) == "running"
-            upid = pve.write("POST", base(g) + f"/snapshot/{name}/rollback",
-                             **({"start": 1} if start and was_running else {}))
-        if upid:
-            wait(pve, g["node"], upid, what)
-        if action != "rollback":
-            print(f"{label(g)}: {action} {name!r} done")
+            print(f"{label(g)}: would {action} snapshot {name!r}")
+    print("Dry run: nothing was changed.")
+    return 1 if bad else 0
+
+
+def prune(pve: PVE, guests: list[dict], prefix: str, days: float, dry_run: bool = False) -> list[str]:
+    """Delete each guest's snapshots named prefix* older than days. Returns the failures."""
+    failed = []
+    for g in guests:
+        try:
+            names = prunable(snapshots(pve, g), prefix, days)
+        except SystemExit as e:
+            failed.append(f"{label(g)}: {e}")
             continue
-        final = pve_guest.start(pve, g) if start and was_running else pve_guest.status(pve, g)
-        print(f"{label(g)}: rollback {name!r} done, now {final}"
-              + ("" if final == "running" or not (start and was_running) else " — it was running before: start it"))
-        if start and was_running and final != "running":
-            down.append(label(g))
-    return down
+        if not names:
+            print(f"{label(g)}: no {prefix}* snapshot older than {days:g} days")
+            continue
+        if dry_run:
+            print(f"{label(g)}: would delete {', '.join(names)}")
+            continue
+        failed += apply(pve, "delete", [g], names, summary=False)
+    if dry_run:
+        print("Dry run: nothing was changed.")
+    elif failed:
+        print("Failed:\n" + "\n".join(f"  - {f}" for f in failed))
+    return failed
+
+
+def apply(pve: PVE, action: str, guests: list[dict], name, description: str = "", start: bool = True,
+          summary: bool = True) -> list[str]:
+    """create / delete / rollback snapshot `name` (or each of a list of names, delete only) on each guest,
+    waiting for every Proxmox task. A guest that fails does not stop the others (a rollback is one guest).
+    Returns the problems: failed guests, and guests a rollback should have started but that are not running."""
+    import pve_guest  # imports this module
+    down, done, failed = [], [], []
+    names = name if isinstance(name, list) else [name]
+    for g in guests:
+        try:
+            for n in names:
+                if apply_one(pve, pve_guest, action, g, n, description, start, down):
+                    done.append(f"{label(g)} {n}")
+        except SystemExit as e:
+            if action == "rollback":
+                raise
+            failed.append(f"{label(g)}: {e}")
+            print(f"{label(g)}: {action} failed — {e}", file=sys.stderr)
+    if summary and len(guests) > 1 and failed:
+        print(f"\n{action}: done for {len(done)}, failed for {len(failed)}:")
+        print("\n".join(f"  - {f}" for f in failed))
+    return failed + down
+
+
+def apply_one(pve: PVE, pve_guest, action: str, g: dict, name: str, description: str, start: bool,
+              down: list[str]) -> bool:
+    """One guest, one snapshot. True when something was done (False: an existing snapshot kept)."""
+    what = f"{action} snapshot {name!r} of {label(g)}"
+    existing = {s["name"] for s in snapshots(pve, g)}
+    if action == "create":
+        if name in existing:
+            print(f"{label(g)}: snapshot {name!r} already exists — kept (pass another --name for a new one)")
+            return False
+        params = {"snapname": name, "description": description or f"homelab-manager {name}"}
+        if g["type"] == "qemu":
+            params["vmstate"] = 0
+        upid = pve.write("POST", base(g) + "/snapshot", **params)
+    elif name not in existing:
+        raise SystemExit(f"{label(g)} has no snapshot {name!r} (existing: {', '.join(sorted(existing)) or 'none'}).")
+    elif action == "delete":
+        upid = pve.write("DELETE", base(g) + f"/snapshot/{name}")
+    else:
+        was_running = pve_guest.status(pve, g) == "running"
+        upid = pve.write("POST", base(g) + f"/snapshot/{name}/rollback",
+                         **({"start": 1} if start and was_running else {}))
+    if upid:
+        wait(pve, g["node"], upid, what)
+    if action != "rollback":
+        print(f"{label(g)}: {action} {name!r} done")
+        return True
+    final = pve_guest.start(pve, g) if start and was_running else pve_guest.status(pve, g)
+    print(f"{label(g)}: rollback {name!r} done, now {final}"
+          + ("" if final == "running" or not (start and was_running) else " — it was running before: start it"))
+    if start and was_running and final != "running":
+        down.append(label(g))
+    return True
 
 
 if __name__ == "__main__":
