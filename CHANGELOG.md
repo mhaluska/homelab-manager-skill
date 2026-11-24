@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.52.0 — 2026-11-24
+- The guard fails closed: any error of the hook itself (a plugin install that cannot load its library, unreadable
+  input, a bug), and a used-up time budget (45 s shared by everything one check runs), asks instead of letting the
+  command run unchecked.
+- The guard checks commands the way the shell runs them. Quotes, backslashes and variables set earlier in the same
+  command no longer change what the rules see, and a program name only known at run time asks. Wrappers are
+  unwrapped with their options (`sudo -u USER`, `timeout DURATION`, `nice -n`, `env -S`, `xargs`, …); nmap behind
+  `xargs`, `find -exec`, `watch` or `docker exec` asks. `python3 -c`, `bash -lc` and `perl`/`ruby`/`node -e` code is
+  checked, and interpreter options (`bash -x`, `python3 -u`) no longer hide the script they run. `cd` is followed and
+  `$HM` resolves to the skill's directory, so `nmap_scan.py` and `ssh_probe.py` are scope-checked however they are
+  called.
+- Scripts: one that does not exist yet when the guard runs asks, unless the same command writes it from a heredoc
+  (then that text is checked). A script found on PATH outside the system directories is scanned too. `$(…)` and
+  backticks inside a heredoc with an unquoted delimiter are checked as the commands they are.
+- OpenTofu: applying a plan file that the same command writes asks (the guard would otherwise read the previous
+  plan); so do `plan -destroy`, `apply -destroy` and `apply -refresh-only` (`plan -refresh-only` does not). The guard
+  reads plans with the installed `tofu`/`terraform` only, never a `./tofu` the command names.
+- `references/security.md`: make a plan and apply it, or write a script and run it, in separate commands.
+
 ## 0.51.0 — 2026-11-22
 - `patch-proxmox-node.yml` waits for Proxmox's own onboot start after the reboot
   ([#141](https://github.com/mhaluska/homelab-manager-skill/issues/141)). `systemctl is-active` with several units exits
