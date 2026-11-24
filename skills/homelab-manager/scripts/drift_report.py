@@ -272,7 +272,7 @@ def main():
     ap.add_argument("--env")
     ap.add_argument("--tofu-json")
     ap.add_argument("--no-tofu", action="store_true")
-    ap.add_argument("--out")
+    ap.add_argument("--out", help="write here instead of discovery/drift.md; - only prints it")
     ap.add_argument("--stale", action="store_true", help="only check whether drift.md is older than its inputs")
     a = ap.parse_args()
     try:
@@ -571,9 +571,10 @@ def main():
               + ("" if (root / "discovery" / "guest-map.md").exists() else " — run guest_map.py"), ""]
     L.append(f"**Total findings: {issues}** (unmanaged network devices listed separately)")
     text = "\n".join(L) + "\n"
-    out = Path(a.out) if a.out else root / "discovery" / "drift.md"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    hmlib.atomic_write(out, text)
+    if a.out != "-":   # `--out -` only prints it, like overview.py and guest_map.py
+        out = Path(a.out) if a.out else root / "discovery" / "drift.md"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        hmlib.atomic_write(out, text)
     print(text)
     return 0
 
