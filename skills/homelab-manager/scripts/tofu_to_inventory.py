@@ -53,12 +53,27 @@ def main():
         return 3
     root = Path(cfg["_root"])
     default = env == hmlib.default_env(cfg)
-    r = subprocess.run(["tofu", "output", "-json", "ansible_hosts"], cwd=root / "tofu" / "environments" / env,
-                       capture_output=True, text=True)
+    try:
+        r = subprocess.run(["tofu", "output", "-json", "ansible_hosts"], cwd=root / "tofu" / "environments" / env,
+                           capture_output=True, text=True, timeout=180)
+    except FileNotFoundError:
+        print("tofu_to_inventory: tofu is not installed", file=sys.stderr)
+        return 3
+    except subprocess.TimeoutExpired:
+        print("tofu_to_inventory: `tofu output` did not finish in 180 s (state backend reachable? run it through "
+              "with_secrets.py)", file=sys.stderr)
+        return 1
     if r.returncode != 0:
         print(r.stderr.strip(), file=sys.stderr)
         return r.returncode
-    hosts = json.loads(r.stdout or "{}")
+    try:
+        hosts = json.loads(r.stdout or "{}")
+    except ValueError:
+        print("tofu_to_inventory: `tofu output -json ansible_hosts` printed no valid JSON", file=sys.stderr)
+        return 1
+    if not isinstance(hosts, dict):
+        print("tofu_to_inventory: the ansible_hosts output is not a map of hosts", file=sys.stderr)
+        return 1
     groups: dict[str, dict] = {}
     for name, h in hosts.items():
         hv = {"ansible_host": h.get("ansible_host"), "proxmox_vmid": h.get("vm_id"), "proxmox_node": h.get("node"),

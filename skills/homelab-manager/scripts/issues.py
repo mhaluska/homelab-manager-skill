@@ -884,8 +884,17 @@ def update_note(i, cfg) -> str:
             + sanitize(i["body"] or "_No new details._", cfg))
 
 
+GH_TIMEOUT = 60
+
+
 def gh(args, cfg, **kw):
-    return subprocess.run([GH, *args], cwd=cfg["_root"], capture_output=True, text=True, **kw)
+    """Run gh; a call that hangs (network, an auth prompt) ends after GH_TIMEOUT s as a failed call (exit 124)."""
+    kw.setdefault("timeout", GH_TIMEOUT)
+    try:
+        return subprocess.run([GH, *args], cwd=cfg["_root"], capture_output=True, text=True, **kw)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess([GH, *args], 124, "", f"gh {' '.join(args[:2])} did not answer in "
+                                                                 f"{kw['timeout']} s (network or GitHub down?)")
 
 
 def labels_to_use(i, repo, cfg) -> list[str]:

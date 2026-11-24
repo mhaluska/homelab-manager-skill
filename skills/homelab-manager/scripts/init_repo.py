@@ -219,7 +219,8 @@ def upgrades(target: Path) -> list[tuple[str, callable]]:
                         "nothing is removed", lambda: merge_settings(TEMPLATE / ".claude" / "settings.json", settings)))
     cfg = target / "homelab.yaml"
     if cfg.exists():
-        r = subprocess.run([hmlib.yq_bin(), "-o=json", ".issues // {} | keys", str(cfg)], capture_output=True, text=True)
+        r = subprocess.run([hmlib.yq_bin(), "-o=json", ".issues // {} | keys", str(cfg)], capture_output=True,
+                           text=True, timeout=hmlib.YQ_TIMEOUT)
         try:
             stale = [k for k in json.loads(r.stdout or "[]") if k in OLD_ISSUES_KEYS]
         except ValueError:
@@ -227,7 +228,8 @@ def upgrades(target: Path) -> list[tuple[str, callable]]:
         if stale:
             def fix_yaml(cfg=cfg):
                 f = subprocess.run([hmlib.yq_bin(), '.issues.file // "skill_issues.md"', str(cfg)],
-                                   capture_output=True, text=True).stdout.strip() or "skill_issues.md"
+                                   capture_output=True, text=True,
+                                   timeout=hmlib.YQ_TIMEOUT).stdout.strip() or "skill_issues.md"
                 config_set.edit_file(cfg, [("delete", f"issues.{k}") for k in OLD_ISSUES_KEYS] + [
                     ("set", "issues.file", f, "problems with / ideas for the homelab-manager skill itself (not the homelab)"),
                     ("set", "issues.report", True,
@@ -406,7 +408,8 @@ def rename_issues_file(target: Path):
     cfg = target / "homelab.yaml"
     if not old.is_file() or new.exists() or not cfg.exists():
         return None
-    configured = subprocess.run([hmlib.yq_bin(), ".issues.file // \"\"", str(cfg)], capture_output=True, text=True).stdout.strip()
+    configured = subprocess.run([hmlib.yq_bin(), ".issues.file // \"\"", str(cfg)], capture_output=True, text=True,
+                                timeout=hmlib.YQ_TIMEOUT).stdout.strip()
     if configured not in ("", LEGACY_ISSUES):
         return None                       # the user chose their own file name: leave it
     def apply():
@@ -798,7 +801,8 @@ def current_components(target: Path) -> list[str]:
     cfg = target / "homelab.yaml"
     if not cfg.exists():
         return []
-    r = subprocess.run([hmlib.yq_bin(), "-o=json", ".components // {}", str(cfg)], capture_output=True, text=True)
+    r = subprocess.run([hmlib.yq_bin(), "-o=json", ".components // {}", str(cfg)], capture_output=True, text=True,
+                       timeout=hmlib.YQ_TIMEOUT)
     try:
         return [k for k, v in json.loads(r.stdout or "{}").items() if v is True]
     except json.JSONDecodeError:
@@ -903,4 +907,9 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except subprocess.TimeoutExpired as e:   # yq or another tool hung: a clear line, not a traceback
+        print(f"init_repo: {Path(str(e.cmd[0])).name} did not finish in {e.timeout:g} s; nothing after it was done.",
+              file=sys.stderr)
+        sys.exit(2)

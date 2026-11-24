@@ -39,6 +39,9 @@ def find_repo_root(start: str | os.PathLike | None = None) -> Path | None:
     return None
 
 
+YQ_TIMEOUT = 20   # seconds for one yq call (the SessionStart hook has 20 s in all)
+
+
 def yq_bin() -> str:
     """Path of yq: PATH first, then Homebrew's (a shell without /opt/homebrew/bin on PATH) (GitHub issue #119)."""
     yq = shutil.which("yq") or "/opt/homebrew/bin/yq"
@@ -53,7 +56,7 @@ def load_config(root: str | os.PathLike | None = None) -> dict:
         raise ConfigError(f"No {CONFIG_NAME} found in this directory or its parents. "
                           "Initialise the repository first (init_repo.py).")
     res = subprocess.run([yq_bin(), "-o=json", ".", str(root / CONFIG_NAME)],
-                         capture_output=True, text=True, timeout=20)
+                         capture_output=True, text=True, timeout=YQ_TIMEOUT)
     if res.returncode != 0:
         raise ConfigError(f"{CONFIG_NAME} is not valid YAML: {res.stderr.strip()}")
     cfg = json.loads(res.stdout or "{}") or {}

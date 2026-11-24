@@ -121,12 +121,20 @@ def load_tofu(args, root: Path, env: str):
     d = root / "tofu" / "environments" / env
     if not d.is_dir():
         return None, f"{d.relative_to(root)} does not exist"
-    r = subprocess.run(["tofu", "show", "-json", "-no-color"], cwd=d, capture_output=True, text=True, timeout=300)
+    try:
+        r = subprocess.run(["tofu", "show", "-json", "-no-color"], cwd=d, capture_output=True, text=True, timeout=300)
+    except FileNotFoundError:
+        return None, "tofu is not installed"
+    except subprocess.TimeoutExpired:
+        return None, "`tofu show -json` did not finish in 300 s"
     if r.returncode != 0:
         lines = [l.strip(" ╷│╵") for l in r.stderr.splitlines() if l.strip(" ╷│╵")]
         return None, ("`tofu show -json` failed — run via with_secrets.py so the state backend is reachable"
                       + (f" ({hmlib.clean(lines[0], 160)})" if lines else ""))
-    return json.loads(r.stdout or "{}"), f"tofu show -json ({d.relative_to(root)})"
+    try:
+        return json.loads(r.stdout or "{}"), f"tofu show -json ({d.relative_to(root)})"
+    except ValueError:
+        return None, "`tofu show -json` printed no valid JSON"
 
 
 def compare_state(px: dict, state: dict, prefix: str = "") -> tuple[list[str], int]:
