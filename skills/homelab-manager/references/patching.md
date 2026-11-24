@@ -224,7 +224,9 @@ site (`site_<name>` group): add `--site <name>` to both scripts; the playbook ta
    migrates them back (`-e migrate_back=false` leaves them where they are) and asserts every guest that ran runs again.
    A guest that won't shut down cleanly, or a node that still runs guests ~2 minutes later, aborts the run before
    the reboot, with the stopped ones started again and HA maintenance off.
-5. Report: migrated, stopped/restored, still pending. Commit `discovery/pve-patch.json`.
+5. Re-check the node: `ansible-playbook playbooks/check-updates.yml -e target=<host>` (the playbook doesn't update
+   `discovery/updates.json`). Not `ssh_probe.py`: it is for onboarding unknown hosts and skips managed ones.
+6. Report: migrated, stopped/restored, still pending. Commit `discovery/pve-patch.json` and `discovery/updates.json`.
 
 ### LVM-thin pools
 
