@@ -621,6 +621,28 @@ class IssueTemplateTests(unittest.TestCase):
         self.assertIn("Up to date", run("init_repo.py", self.d, "--sync-managed", "--dry-run", cwd=self.d).stdout)
 
 
+class SettingsUpgradeTests(unittest.TestCase):
+    def test_sync_managed_adds_new_permission_rules_and_keeps_the_users(self):
+        d = Path(tempfile.mkdtemp())
+        try:
+            run("init_repo.py", str(d), "--components", "ansible", cwd=d)
+            p = d / ".claude" / "settings.json"
+            p.write_text(json.dumps({"permissions": {"deny": ["Read(~/.ssh/id_*)", "Read(~/secret)"]},
+                                     "model": "x"}))
+            dry = run("init_repo.py", str(d), "--sync-managed", "--dry-run", cwd=d).stdout
+            self.assertIn("deny: Read(~/.aws/credentials)", dry)
+            run("init_repo.py", str(d), "--sync-managed", cwd=d)
+            have = json.loads(p.read_text())
+            self.assertIn("Read(~/secret)", have["permissions"]["deny"])
+            self.assertIn("Read(~/.kube/config)", have["permissions"]["deny"])
+            self.assertIn("Bash(packer build:*)", have["permissions"]["ask"])
+            self.assertEqual(have["model"], "x")
+            p.write_text("{oops")                                       # the user's broken file: left alone
+            self.assertNotIn("settings.json", run("init_repo.py", str(d), "--sync-managed", "--dry-run", cwd=d).stdout)
+        finally:
+            shutil.rmtree(d)
+
+
 class UpgradeTests(unittest.TestCase):
     """Repos set up before 0.6.0 tracked homelab problems in ISSUES.md; --sync-managed migrates them."""
 

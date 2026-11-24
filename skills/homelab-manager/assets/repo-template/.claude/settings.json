@@ -2,6 +2,10 @@
   "permissions": {
     "deny": [
       "Read(~/.ssh/id_*)",
+      "Read(~/.ssh/*key*)",
+      "Read(~/.aws/credentials)",
+      "Read(~/.config/gh/hosts.yml)",
+      "Read(~/.kube/config)",
       "Read(**/*.tfstate)",
       "Read(**/*.tfstate.*)",
       "Read(**/.vault_pass*)"

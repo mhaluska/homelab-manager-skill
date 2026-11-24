@@ -123,6 +123,16 @@ def merge_settings(src: Path, dst: Path) -> list[str]:
     return added
 
 
+def missing_settings(src: Path, dst: Path) -> list[str]:
+    """Template permission rules an existing settings.json lacks (unreadable JSON: none, it is the user's file)."""
+    try:
+        have = (json.loads(dst.read_text() or "{}").get("permissions") or {})
+        want = json.loads(src.read_text()).get("permissions") or {}
+        return [f"{kind}: {r}" for kind, rules in want.items() for r in rules if r not in (have.get(kind) or [])]
+    except (ValueError, OSError, AttributeError):
+        return []
+
+
 def _template_line(rel: str, rx: re.Pattern) -> str:
     return rx.search((TEMPLATE / rel).read_text()).group(0)
 
@@ -201,6 +211,12 @@ def upgrades(target: Path) -> list[tuple[str, callable]]:
                 dst.unlink()
                 _prune(dst.parent, target)
             out.append((f"remove {rel} (no longer used: homelab problems aren't tracked as issues)", remove))
+    settings = target / ".claude" / "settings.json"
+    if settings.is_file() and (target / "homelab.yaml").exists():
+        missing = missing_settings(TEMPLATE / ".claude" / "settings.json", settings)
+        if missing:
+            out.append((f"add the template's permission rules to .claude/settings.json ({', '.join(missing)}); "
+                        "nothing is removed", lambda: merge_settings(TEMPLATE / ".claude" / "settings.json", settings)))
     cfg = target / "homelab.yaml"
     if cfg.exists():
         r = subprocess.run([hmlib.yq_bin(), "-o=json", ".issues // {} | keys", str(cfg)], capture_output=True, text=True)
