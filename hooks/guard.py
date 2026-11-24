@@ -112,7 +112,23 @@ RULES: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"\b(curl|wget|http|xh)\b[^\n;&|]*api2[^\n;&|]*(-X\s*(POST|PUT|PATCH|DELETE)|--request[\s=]+(POST|PUT|PATCH|DELETE)|\s-d|--data|\s(-F|--form|-T|--upload-file|--json)\b)"
                 r"|\b(curl|wget|http|xh)\b[^\n;&|]*(-X\s*(POST|PUT|PATCH|DELETE)|--request[\s=]+(POST|PUT|PATCH|DELETE)|\s-d|--data|\s(-F|--form|-T|--upload-file|--json)\b)[^\n;&|]*api2"), ASK,
      "Writes to the Proxmox API directly."),
+    (re.compile(r"\bpveum\b[^\n;&|]*\s(add|create|delete|del|modify|set|remove|passwd|unlock|useradd|userdel|usermod"
+                r"|groupadd|groupdel|groupmod|roleadd|roledel|rolemod|aclmod|acldel)\b"), ASK,
+     "Changes Proxmox users, groups, roles, tokens or permissions."),
+    (re.compile(r"\b(qmrestore|pct\s+restore)\b"), ASK, "Restores a guest from a backup (overwrites it with --force)."),
+    (re.compile(r"\b(lvremove|vgremove|pvremove|lvreduce|wipefs|mkfs(\.\w+)?|blkdiscard)\b|\bsgdisk\b[^\n;&|]*\s(-Z|--zap(-all)?)\b"
+                r"|\bdd\b[^\n;&|]*\bof=/dev/|\bdiskutil\s+(erase\w*|partitionDisk|zeroDisk|secureErase)\b"), ASK,
+     "Destroys a volume, a file system or a disk's contents."),
+    (re.compile(r"(\b|/)reset-configuration\b|/system\s+(backup\s+load|package\s+downgrade)\b"), ASK,
+     "Resets a RouterOS device or replaces its configuration or packages."),
+    (re.compile(r"\b(ssh|pct\s+(exec|enter)|qm\s+guest\s+exec|lxc\s+exec|incus\s+exec|docker\s+exec|podman\s+exec|ansible)"
+                r"(?![\w-])[^\n]*\brm\s+(-[a-zA-Z]*[rR]|--recursive\b)"), ASK,
+     "Deletes files recursively on a remote system or in a guest."),
     # --- reboots / patching -----------------------------------------------------------
+    (re.compile(r"\bapt(-get)?\s+(-\S+\s+)*(upgrade|dist-upgrade|full-upgrade|remove|purge|autoremove)\b"
+                r"|\b(dnf|yum)\s+(-\S+\s+)*(upgrade|update|distro-sync|remove|autoremove|erase)\b"
+                r"|\bzypper\s+(-\S+\s+)*(up|update|dup|dist-upgrade|rm|remove)\b|\bpveupgrade\b"), ASK,
+     "Upgrades or removes packages directly. Patching goes through the patch playbooks (health checks, batches)."),
     (re.compile(r"\b(ssh|ansible)(?![\w-])[^\n]*\b(reboot|shutdown|poweroff|halt|init\s+[06])\b"), ASK, "Reboots or shuts down remote systems."),
     (re.compile(r"\bsystemctl\s+(reboot|poweroff|halt|kexec)\b"), ASK, "Reboots or shuts down a system."),
     (re.compile(r"\bansible\b[^\n]*-m\s+(ansible\.(builtin|windows)\.)?(win_)?reboot\b"), ASK, "Reboots remote systems."),
@@ -149,7 +165,8 @@ RULES: list[tuple[re.Pattern, str, str]] = [
      "only on the user's own request."),
     # --- templates / git / misc -------------------------------------------------------
     (re.compile(r"\bpacker\s+build\b[^\n;&|]*\s-force\b"), ASK, "packer build -force overwrites an existing template."),
-    (re.compile(r"\bgit\s+push\b[^\n;&|]*\s(--force|--force-with-lease|-f)\b"), ASK, "Force-push rewrites Git history."),
+    (re.compile(r"\bgit\b[^\n;&|]*\spush\b[^\n;&|]*\s(--force(-with-lease|-if-includes)?|-f|--mirror|--delete|-d|--prune|\+\S+|:\S+)(?=\s|$)"),
+     ASK, "Force-push or deleting a remote branch rewrites Git history (also `+branch`, `:branch`, --mirror, --prune)."),
     (re.compile(r"\brm\b[^\n;&|]*(\.tfstate|\.terraform\b)"), ASK, "Deletes OpenTofu state or the provider directory."),
     (re.compile(r"(\bcurl\b|\bwget\b|base64\s+(-d|--decode|-D))[^\n;&]*\|\s*(sudo\s+)?(ba|z|da|k)?sh\b"), ASK,
      "Pipes downloaded or decoded content into a shell."),

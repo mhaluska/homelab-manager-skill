@@ -627,6 +627,34 @@ class ScannerAndApiTests(unittest.TestCase):
             self.assertIsNone(decision(c, "/"), c)
 
 
+class DestructiveCommandTests(unittest.TestCase):
+    def test_remote_destructive_commands_ask(self):
+        for c in ["ssh host sudo apt-get -y dist-upgrade", "ssh host apt full-upgrade -y", "ssh host dnf -y upgrade",
+                  "ssh host yum update", "ssh host apt-get autoremove --purge", "ansible all -m shell -a 'apt-get upgrade -y'",
+                  "ssh pve pveupgrade", "ssh pve pveum user token add root@pam t", "ssh pve pveum acl modify / -user x",
+                  "ssh pve pveum passwd x@pve", "ssh pve qmrestore /var/lib/vz/dump/x.vma.zst 100 --force",
+                  "ssh pve pct restore 101 x.tar.zst", "ssh pve pct exec 101 -- rm -rf /data", "ssh pve rm -rf /etc/pve",
+                  "ssh pve lvremove -y pve/data", "ssh pve vgremove pve", "ssh pve wipefs -a /dev/sdb",
+                  "ssh pve mkfs.ext4 /dev/sdb1", "ssh pve sgdisk --zap-all /dev/sdb", "ssh pve dd if=/dev/zero of=/dev/sdb",
+                  "diskutil eraseDisk APFS X disk4", "ssh router '/system reset-configuration no-defaults=yes'",
+                  "ssh router /system backup load name=x", "docker exec c rm -r /data"]:
+            self.assertEqual(decision(c, "/"), "ask", c)
+        for c in ["ssh host apt list --upgradable", "ssh host dnf check-update", "ssh host apt-get update",
+                  "ssh pve pveum user list", "ssh pve pveum user permissions x@pve", "ssh pve lvs", "ssh pve pct exec 101 -- df -h",
+                  "ssh router /system resource print", "ansible-playbook playbooks/check-updates.yml --check",
+                  "rm -rf build", "ssh host ls -rt /var/log"]:
+            self.assertIsNone(decision(c, "/"), c)
+
+    def test_force_push_forms(self):
+        for c in ["git push -f", "git push --force-with-lease", "git push origin +main", "git push origin :old",
+                  "git push --delete origin x", "git push --mirror", "git -C /repo push -f origin main",
+                  "git -C /repo push --force"]:
+            self.assertEqual(decision(c, "/"), "ask", c)
+        for c in ["git push", "git push -u origin main", "git -C /repo push origin main v1.0.0",
+                  "git push origin HEAD:refs/heads/x"]:
+            self.assertIsNone(decision(c, "/"), c)
+
+
 class TofuPlanTests(unittest.TestCase):
     def setUp(self):
         self.d = Path(tempfile.mkdtemp())
