@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.53.0 — 2026-11-24
+- `with_secrets.py` gives keychain secrets without asking only to `tofu`, `terraform`, `packer`, `ansible*` and this
+  plugin's scripts. Any other program under it, or a command line that names a secret's environment variable
+  (including the `env` names under `secrets:` in homelab.yaml), asks. Its output filter also removes URL-encoded,
+  JSON-escaped, hex and base64 echoes of a secret; the docs now call it best effort.
+- Keychain: `security` is checked by its tokens, so printing a password (`-w`, `-g`, also as `-gw`), dumping or
+  exporting the keychain, and the interactive mode are denied whatever the global options.
+- Private SSH keys: any program naming a private key under `.ssh/` is denied, including globs, archiving the `.ssh`
+  directory and Python `open()`. Listing a key and SSH tools that use it as their identity (`ssh -i`, `ssh-add`,
+  `--private-key`) are still allowed. `git credential fill`/`get` and `gh auth git-credential` are denied. Reading
+  `*.tfstate`, `tofu state pull` and `tofu show -json` without a plan ask (state can hold secrets).
+- New hook `guard_files.py` for Claude's file tools (Edit, Write, MultiEdit, NotebookEdit). It asks when an edit
+  changes the scan scope (`network.authorized_ranges`, `network.excluded_hosts`), any `verify_tls` or
+  `issues.auto_send` in homelab.yaml, the installed plugin, or `.claude/settings*.json`. The Bash guard asks when a
+  command writes homelab.yaml outside `config_set.py`, or writes or removes the plugin's files or
+  `.claude/settings*.json`. `config_set.py` narrowing `network.excluded_hosts`, replacing `network` or setting
+  `verify_tls` to false asks.
+- Other scanners (`masscan`, `zmap`, `rustscan`, `naabu`, `arp-scan`, `fping -g`, …) ask; so does `nc -z` over
+  several ports, to a host computed at run time or to an address outside the authorized ranges. `nmap -sI` and
+  `-b` ask. `curl --json`, `-F`/`--form`, `-T`/`--upload-file`, `-d@file` and `--request=METHOD` count as writes
+  to the Proxmox and UniFi APIs.
+- `git commit --no-verify` and setting or unsetting `core.hooksPath` ask: they skip the pre-commit secret check.
+- `references/security.md` lists these rules and what the guard can't see: playbooks are judged by name, and
+  `make`/`just`/`npm run` targets aren't read.
+
 ## 0.52.0 — 2026-11-24
 - The guard fails closed: any error of the hook itself (a plugin install that cannot load its library, unreadable
   input, a bug), and a used-up time budget (45 s shared by everything one check runs), asks instead of letting the
