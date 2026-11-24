@@ -210,6 +210,7 @@ class Shell:
     data unless a command on their line runs them (bash <<EOF, cat <<EOF | sh, ssh host <<EOF).
 
     segments   — simple commands, in order
+    piped      — per segment: True when it reads the output of the segment before it (`a | b`)
     code       — (language, body) of heredocs that a shell/interpreter executes (checked like commands);
                  language is "python" for a Python interpreter reading its program from stdin, else "shell"
     rule_text  — the command without data heredoc bodies (for the RULES regexes)
@@ -222,6 +223,8 @@ class Shell:
     def __init__(self, command: str):
         self.s = command
         self.segments: list[str] = []
+        self.piped: list[bool] = []
+        self._pipe = False
         self.code: list[tuple[str, str]] = []
         self.data_spans: list[tuple[int, int]] = []
         self.writes: list[tuple[str, str]] = []
@@ -238,6 +241,8 @@ class Shell:
         t = "".join(buf).strip()
         if t:
             self.segments.append(t)
+            self.piped.append(self._pipe)
+            self._pipe = False
         buf.clear()
 
     def squote(self, i: int, buf: list[str]) -> int:
@@ -371,9 +376,14 @@ class Shell:
                 if pending:
                     i = self.heredoc_bodies(i, pending, line_start)
                 line_start = len(self.segments)
+            elif c == "|" and s[i + 1:i + 2] != "|":   # a pipe (`|` or `|&`), not `||`
+                self.flush(buf)
+                self._pipe = True
+                i += 1 + (s[i + 1:i + 2] == "&")
             elif c in ";|" or c == "&" and s[i - 1:i] not in (">", "<") and s[i + 1:i + 2] != ">":
                 self.flush(buf)
-                i += 1
+                self._pipe = False
+                i += 1 + (s[i:i + 2] == "||")
             elif c in "()":
                 depth += 1 if c == "(" else -1 if depth else 0
                 self.flush(buf)
@@ -542,6 +552,19 @@ def stdin_language(tok: list[str]) -> str | None:
 
 # --------------------------------------------------------------------------- checks
 
+READ_LIMIT = 1 << 20   # bytes the hook reads from any file a command names
+
+
+def read_regular(p: Path, limit: int = READ_LIMIT) -> str:
+    """The text of a regular file, at most `limit` bytes. Devices, FIFOs and sockets (`/dev/zero`, a named pipe)
+    would block or never end: OSError, so the caller refuses instead of hanging."""
+    real = Path(os.path.realpath(p))
+    if not real.is_file():
+        raise OSError(f"{p} is not a regular file")
+    with open(real, "rb") as f:
+        return f.read(limit).decode(errors="replace")
+
+
 def check_text(text: str) -> list[tuple[str, str]]:
     hits = []
     for rx, decision, reason in RULES:
@@ -558,11 +581,13 @@ def nmap_targets(args: list[str], cwd: str) -> tuple[list[str], list[str]]:
         a = args[i]
         if a in NMAP_VALUE_OPTS:
             if a == "-iL" and i + 1 < len(args):
-                p = Path(cwd, args[i + 1])
+                p = Path(cwd, os.path.expanduser(args[i + 1]))
                 try:
-                    targets += [x for x in p.read_text().split() if x and not x.startswith("#")]
+                    if p.is_file() and p.stat().st_size > READ_LIMIT:
+                        raise OSError("larger than 1 MiB")
+                    targets += [x for line in read_regular(p).splitlines() for x in line.split("#")[0].split()]
                 except OSError:
-                    problems.append(f"cannot read target list {args[i + 1]}")
+                    problems.append(f"cannot read target list {args[i + 1]} (only a regular file up to 1 MiB)")
             i += 2
             continue
         if a.startswith("-") or re.match(r"^\d*(>>?|<)", a):
@@ -729,7 +754,7 @@ def check_gh_language(tok: list[str], cwd: str) -> list[tuple[str, str]]:
             f = Path(os.path.expanduser(val))
             f = f if f.is_absolute() else Path(cwd) / f
             if val != "-" and f.is_file():
-                texts.append(f.read_text(errors="replace")[:200_000])
+                texts.append(read_regular(f, 200_000))
         elif t in GH_TEXT_OPTS:
             texts.append(val)
     if repo is None:
@@ -771,6 +796,15 @@ RUNNER_OPTS = {
     "node": ({"-r", "--require", "--import", "--loader", "--input-type"}, {"-e", "--eval", "-p", "--print"}, set()),
 }
 REDIRECT_RE = re.compile(r"^\d*(<<?|>>?|&>|<>)")
+
+
+def stdin_file(tok: list[str]) -> str | None:
+    """The file a `< file` / `<file` redirection feeds to the command's stdin, if any."""
+    for i, t in enumerate(tok[1:], 1):
+        m = re.fullmatch(r"0?<([^<>&].*)?", t)
+        if m:
+            return m.group(1) or (tok[i + 1] if i + 1 < len(tok) else None)
+    return None
 
 
 def runner_kind(name: str) -> str | None:
@@ -1082,6 +1116,18 @@ def private_ssh_path(rest: str) -> bool:
     return not (first.endswith(".pub") or first.startswith(SSH_PUBLIC_NAMES))
 
 
+def in_ssh_dir(tok: list[str], cur: str | None) -> list[str]:
+    """After `cd ~/.ssh`, bare key names (`id_ed25519`, `id_*`) and `.` are keys under .ssh/: name them so."""
+    if not cur or Path(cur).name != ".ssh":
+        return tok
+    out = [tok[0]]
+    for t in tok[1:]:
+        if t in (".", "./", "*") or (not t.startswith("-") and "/" not in t and (t.startswith("id_") or any(c in t for c in "*?["))):
+            t = ".ssh/" + ("*" if t in (".", "./") else t)
+        out.append(t)
+    return out
+
+
 def check_ssh_keys(tok: list[str]) -> list[tuple[str, str]]:
     """Any program naming a private key under .ssh/ is denied, except listing it and SSH tools taking it as their
     identity (`ssh -i ~/.ssh/key`, `ssh-add ~/.ssh/key`); archivers of the whole .ssh directory too."""
@@ -1267,7 +1313,7 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
     cur: str | None = cwd          # follows `cd` in this command; None once it goes somewhere only known at run time
     assigned: dict[str, str] = {}  # VAR=value set earlier in this command
     produced: set[str] = set()     # names of files written earlier in this command (tofu plan -out, >, cp, tee)
-    for seg in sh.segments:
+    for idx, seg in enumerate(sh.segments):
         raw = tokens(seg)
         if raw and raw[0] in ("export", "local", "declare", "readonly", "typeset"):
             raw = raw[1:]
@@ -1293,7 +1339,7 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
             findings.append((ASK, f"the program to run is computed at run time ({tok[0][:60]}); this hook cannot "
                                   f"check what it does."))
         findings += check_text(" ".join(tok))   # the command as the shell sees it: no quotes or backslashes
-        findings += check_ssh_keys(tok) + check_state_read(tok) + check_protected_writes(tok, here)
+        findings += check_ssh_keys(in_ssh_dir(tok, cur)) + check_state_read(tok) + check_protected_writes(tok, here)
         inner = inner_command(tok)
         if inner and depth < 3:
             findings += evaluate(inner, here, depth + 1)
@@ -1330,6 +1376,18 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
                                                       for t in tok[1:]):
             findings += check_port_scan(tok, here)
         state, script = script_target(tok, cur, assigned)
+        if state is None and runner_kind(name) and runner_parse(tok)[0] == "stdin":
+            fed = stdin_file(tok)
+            if fed is not None:   # `bash < x.sh`, `python3 <x.py`: that file is the program
+                word = expand(fed, assigned)
+                fp = Path(os.path.expanduser(word))
+                state, script = ("computed", word) if computed(word) or (cur is None and not fp.is_absolute()) else \
+                    ("file", fp if fp.is_absolute() else Path(cur) / fp)
+                if state == "file" and not script.is_file():
+                    state = "missing"
+            elif sh.piped[idx] and "<<" not in sh.segments[idx - 1]:   # a heredoc piped in is checked as code
+                findings.append((ASK, f"{name} runs a program it reads from a pipe; this hook cannot check it. "
+                                      f"Run the script file instead (`{name} script`), after writing it."))
         script_name = Path(str(script)).name if script else ""
         if script_name in SCAN_SCRIPTS:
             findings += check_scan_script(script_name, tok, here)
@@ -1353,7 +1411,7 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
                 plugin_owned = False
             if not plugin_owned:
                 try:
-                    content = script.read_text(errors="replace")[:500_000]
+                    content = read_regular(script, 500_000)
                 except OSError:
                     content = ""
                 findings += check_script_content(script, content, tok, depth)
