@@ -104,7 +104,10 @@ QNAP NAS entries carry `firmware` and `apps` instead of package counts (referenc
    (the user's yes; the guard asks). A failed update: `pve_snapshot.py rollback <guest> --name …` (the user's yes;
    the changes since are lost; a guest that was running is started again and its final status printed,
    `--no-start` leaves it stopped). LXD/Incus hosts: the same with
-   `lxd_snapshot.py list|delete|restore`.
+   `lxd_snapshot.py list|delete|restore`. Old snapshots left from earlier runs:
+   `pve_snapshot.py prune <guests> --older-than 30 --dry-run` lists the `prepatch-*` ones older than 30 days;
+   without `--dry-run` it deletes them (the user's yes). `--dry-run` also previews create, delete and rollback.
+   A create or delete over several guests goes on after one fails and lists the failures at the end.
 
 ### SSSD socket conflict
 

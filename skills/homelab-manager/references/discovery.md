@@ -27,7 +27,9 @@ python3 $HM/scripts/proxmox_inventory.py --details  # + per-guest config (disks,
                                                     # running guests report (QEMU guest agent, LXC interfaces)
 python3 $HM/scripts/proxmox_inventory.py --summary  # print only, write nothing
 ```
-Uses the read-only token. For "show VMs and their resource usage", run it and give the
+Uses the read-only token; nodes and guests are read in parallel (`--jobs`, default 8). A node or guest whose API
+call fails (HTTP 500/595, a timeout) is listed under "Not read" in the summary and in the snapshot's `errors`;
+the rest is still written. For "show VMs and their resource usage", run it and give the
 user the table (trimmed to what they asked: e.g. only running VMs, top 5 by memory).
 Every run also records each node's subscription (status, level, next due date) and web UI certificate, and the
 server of each network storage (NFS, CIFS, PBS); `--details` also records each guest's newest successful backup and a
@@ -53,6 +55,8 @@ python3 $HM/scripts/nmap_scan.py 10.0.10.5 --profile os           # + OS detecti
 python3 $HM/scripts/nmap_scan.py 10.0.10.0/24 --profile os --only-live  # OS-scan only hosts already seen up
 python3 $HM/scripts/nmap_scan.py --site home --profile services --only-live  # a site's authorized ranges
 ```
+- `services` and `os` give up on a host that takes longer than `--host-timeout` (default `15m`; `0`: never), so
+  one tarpit doesn't stall the scan; Ctrl-C stops nmap too.
 - Targets must be inside `network.authorized_ranges`; `excluded_hosts` are always skipped. `excluded_hosts` and
   `discovery.ignore_unmanaged` take IPs, CIDRs and last-octet ranges (`10.0.20.101-254`, e.g. a DHCP pool): keep
   a range as written, don't split it into CIDR blocks. A named `ignore_unmanaged` device is one address.
