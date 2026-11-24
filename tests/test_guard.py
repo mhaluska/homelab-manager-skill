@@ -424,6 +424,36 @@ class ShellFormTests(unittest.TestCase):
                 self.assertIsNone(decision(c, r), c)
 
 
+class TofuPlanTests(unittest.TestCase):
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        Path(self.d, "tfplan").write_text("stale plan")
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def test_plan_written_by_the_same_command_asks(self):
+        for c in ["tofu plan -out=tfplan && tofu apply tfplan", "tofu plan -out tfplan; tofu apply tfplan",
+                  "cp other.plan tfplan && tofu apply tfplan", "tofu -chdir=x plan -out=tfplan && tofu -chdir=x apply tfplan"]:
+            self.assertEqual(decision(c, str(self.d)), "ask", c)
+
+    def test_destroy_and_refresh_only(self):
+        for c in ["tofu plan -destroy -out=p", "terraform plan --destroy", "tofu apply -refresh-only",
+                  "tofu apply -destroy"]:
+            self.assertEqual(decision(c, str(self.d)), "ask", c)
+        self.assertIsNone(decision("tofu -chdir=tofu/environments/homelab plan -refresh-only -no-color", str(self.d)))
+        self.assertIsNone(decision("tofu plan -out=p", str(self.d)))
+
+    def test_command_own_tofu_binary_is_never_run(self):
+        marker = self.d / "ran"
+        stub = self.d / "tofu"
+        stub.write_text(f"#!/bin/sh\ntouch {marker}\necho '{{}}'\n")
+        stub.chmod(0o755)
+        self.assertEqual(decision("./tofu apply tfplan", str(self.d)), "ask")
+        self.assertEqual(decision(f"{stub} apply tfplan", str(self.d)), "ask")
+        self.assertFalse(marker.exists())
+
+
 class FailClosedTests(unittest.TestCase):
     """Any guard failure asks instead of letting the command run unchecked."""
 

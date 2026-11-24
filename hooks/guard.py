@@ -85,6 +85,8 @@ RULES: list[tuple[re.Pattern, str, str]] = [
     # --- OpenTofu state / destructive -----------------------------------------------
     (re.compile(r"\b(tofu|terraform)\b[^\n;&|]*\s(destroy|taint|untaint|force-unlock)\b"), ASK,
      "Destroys resources or overrides state/locks."),
+    (re.compile(r"\b(tofu|terraform)\b[^\n;&|]*\s(plan\b[^\n;&|]*\s--?destroy|apply\b[^\n;&|]*\s--?(destroy|refresh-only))\b"),
+     ASK, "Plans or applies destroying every resource (-destroy), or applies a refresh-only run that rewrites state."),
     (re.compile(r"\b(tofu|terraform)\b[^\n;&|]*\sstate\s+(rm|mv|push|replace-provider)\b"), ASK,
      "Edits OpenTofu state directly."),
     (re.compile(r"\b(tofu|terraform)\b[^\n;&|]*\simport\b"), ASK, "Imports an existing resource into OpenTofu state."),
@@ -593,8 +595,38 @@ def check_site_scan(site: str, cwd: str) -> list[tuple[str, str]]:
                                       " (or it is empty).")]
 
 
-def check_tofu_apply(tok: list[str], cwd: str) -> list[tuple[str, str]]:
-    """`tofu apply` is fine only with a saved plan that deletes/replaces nothing."""
+def plan_outputs(tok: list[str]) -> list[str]:
+    """Plan files `tofu|terraform … plan -out=FILE` writes."""
+    if not tok or Path(tok[0]).name not in ("tofu", "terraform") or "plan" not in tok:
+        return []
+    out = []
+    for i, t in enumerate(tok):
+        if t.startswith(("-out=", "--out=")):
+            out.append(t.split("=", 1)[1])
+        elif t in ("-out", "--out") and i + 1 < len(tok):
+            out.append(tok[i + 1])
+    return out
+
+
+def trusted_binary(word: str, cwd: str) -> str | None:
+    """The installed tofu/terraform this hook may run to read a plan: never the command's own `./tofu` (the hook
+    would run it before the user is asked). None when the command names another binary than the installed one."""
+    name = Path(word).name
+    found = shutil.which(name) or next((p for p in (f"/opt/homebrew/bin/{name}", f"/usr/local/bin/{name}")
+                                        if os.access(p, os.X_OK)), None)
+    if not found:
+        return None
+    if "/" in word:
+        try:
+            if Path(cwd, os.path.expanduser(word)).resolve() != Path(found).resolve():
+                return None
+        except OSError:
+            return None
+    return found
+
+
+def check_tofu_apply(tok: list[str], cwd: str, produced: set[str] = frozenset()) -> list[tuple[str, str]]:
+    """`tofu apply` is fine only with a saved plan, made before this command, that deletes/replaces nothing."""
     if "apply" not in tok:
         return []
     chdir = next((t.split("=", 1)[1] for t in tok if t.startswith("-chdir=")), None)
@@ -602,10 +634,20 @@ def check_tofu_apply(tok: list[str], cwd: str) -> list[tuple[str, str]]:
     plan = next((t for t in after if not t.startswith("-")), None)
     if not plan:
         return [(ASK, "`tofu apply` without a saved, reviewed plan file.")]
+    if Path(plan).name in produced:
+        return [(ASK, f"`tofu apply {plan}`: the plan file is written by this same command, so nobody has reviewed "
+                      f"it. Make the plan, show it to the user, then apply it in a separate command.")]
     workdir = Path(cwd, chdir) if chdir else Path(cwd)
+    binary = trusted_binary(tok[0], cwd)
+    if not binary:
+        return [(ASK, f"`{tok[0]}` is not the installed {Path(tok[0]).name}; this hook does not run it to read plan "
+                      f"{plan}. Approve only if you have reviewed the plan.")]
     try:
-        res = subprocess.run([tok[0], "show", "-json", plan], cwd=workdir, capture_output=True, text=True, timeout=time_left(60))
+        res = subprocess.run([binary, "show", "-json", plan], cwd=workdir, capture_output=True, text=True,
+                             timeout=time_left(60))
         data = json.loads(res.stdout)
+    except OutOfTime:
+        raise
     except Exception:
         return [(ASK, f"Could not inspect plan {plan} — approve only if you have reviewed it.")]
     risky = []
@@ -1025,7 +1067,7 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
                          if f[0] == DENY]
             findings.append((ASK, f"runs nmap through {name}; this hook cannot verify its targets."))
         elif name in ("tofu", "terraform"):
-            findings += check_tofu_apply(tok, here)
+            findings += check_tofu_apply(tok, here, produced)
         elif name == "ansible-playbook":
             findings += check_ansible_playbook(tok)
         elif name == "gh":
@@ -1058,7 +1100,7 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
                 except OSError:
                     content = ""
                 findings += check_script_content(script, content, tok, depth)
-        produced.update(Path(t).name for t in write_targets(tok))
+        produced.update(Path(t).name for t in write_targets(tok) + plan_outputs(tok))
     return findings
 
 
