@@ -6,6 +6,12 @@
     lxd_snapshot.py create <host…> [--name prepatch-YYYYMMDD]
     lxd_snapshot.py delete <host…> --name NAME                    # needs the user's yes (the guard asks)
     lxd_snapshot.py restore <host> --name NAME                    # needs the user's yes (the guard asks)
+    lxd_snapshot.py prune <host…> --older-than DAYS [--prefix prepatch-]   # the user's yes (the guard asks)
+    … --dry-run                                                   # create/delete/restore/prune: only show it
+
+`rollback` is accepted for `restore` (pve_snapshot.py's word). A multi-host create, delete or prune goes on after
+a host fails and ends with what failed (exit 1). prune deletes the snapshots whose name starts with --prefix
+(default prepatch-) and that are older than DAYS. --dry-run shows what would happen and changes nothing.
 
 <host> is the container's name in the managed Ansible inventory. Its host vars say where it runs:
   lxd_host       inventory name of the LXD/Incus host (the NAS) — required
@@ -27,7 +33,9 @@ Snapshots are disk-only (stateful: false).
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
+import re
 import shlex
 import shutil
 import subprocess
@@ -37,6 +45,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hmlib  # noqa: E402
 from pve_snapshot import NAME_RE, default_name  # noqa: E402
+
+ACTION_ALIASES = {"rollback": "restore"}
 
 SSH_TIMEOUT = 15
 OP_TIMEOUT = 1800  # a `dir` snapshot copies the whole root filesystem
@@ -205,6 +215,38 @@ def check(found: dict[str, dict], problems: dict[str, str], run=ssh_run) -> dict
     return out
 
 
+def prunable(snaps: list[dict], prefix: str, days: float, now: dt.datetime | None = None) -> list[str]:
+    """Names of the snapshots starting with prefix created more than days ago (oldest first)."""
+    cutoff = (now or dt.datetime.now(dt.timezone.utc)) - dt.timedelta(days=days)
+    out = []
+    for s in snaps:
+        try:
+            stamp = re.sub(r"\.\d+", "", str(s.get("created_at") or "")).replace("Z", "+00:00")   # LXD: nanoseconds
+            created = dt.datetime.fromisoformat(stamp)
+        except ValueError:
+            continue
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=dt.timezone.utc)
+        if str(s.get("name") or "").startswith(prefix) and created < cutoff:
+            out.append((created, s["name"]))
+    return [n for _, n in sorted(out)]
+
+
+def dry_run(api: Api, action: str, name: str) -> bool:
+    """What apply would do (read-only). False when it would fail (no such snapshot)."""
+    t = api.t
+    names = [s["name"] for s in api.snapshots()]
+    if action == "create":
+        print(f"{label(t)}: would " + (f"keep the existing snapshot {name!r}" if name in names
+                                       else f"create snapshot {name!r}"))
+        return True
+    if name not in names:
+        print(f"{label(t)}: has no snapshot {name!r} (existing: {', '.join(names) or 'none'})")
+        return False
+    print(f"{label(t)}: would {action} snapshot {name!r}")
+    return True
+
+
 def apply(api: Api, action: str, name: str) -> None:
     """create / delete / restore snapshot `name` of one instance, waiting for the LXD operation."""
     t = api.t
@@ -230,11 +272,17 @@ def apply(api: Api, action: str, name: str) -> None:
 
 def main(argv=None, run=ssh_run) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("action", choices=["list", "check", "create", "delete", "restore"])
+    ap.add_argument("action", choices=["list", "check", "create", "delete", "restore", "rollback", "prune"])
     ap.add_argument("hosts", nargs="+")
     ap.add_argument("--name")
+    ap.add_argument("--older-than", type=float, metavar="DAYS", help="prune: snapshots older than DAYS")
+    ap.add_argument("--prefix", default="prepatch-", help="prune: only snapshots whose name starts with this")
+    ap.add_argument("--dry-run", action="store_true", help="create/delete/restore/prune: show it, change nothing")
     ap.add_argument("--json", action="store_true", help="check: print the result as JSON")
     a = ap.parse_args(argv)
+    a.action = ACTION_ALIASES.get(a.action, a.action)
+    if a.action == "prune" and a.older_than is None:
+        ap.error("prune needs --older-than DAYS")
     name = a.name or (default_name() if a.action == "create" else None)
     if a.action in ("delete", "restore") and not name:
         ap.error(f"{a.action} needs --name (see `lxd_snapshot.py list`)")
@@ -269,23 +317,40 @@ def main(argv=None, run=ssh_run) -> int:
     for w in a.hosts:
         if w in problems:
             raise SystemExit(problems[w])
-    try:
-        for w in a.hosts:
-            t = found[w]
-            api = Api(t, run)
+    failed = []
+    for w in a.hosts:
+        t = found[w]
+        api = Api(t, run)
+        try:
             if a.action == "list":
                 snaps = api.snapshots()
                 print(f"{label(t)}: " + ("no snapshots" if not snaps else ""))
                 for s in snaps:
                     print(f"  {s['name']:<40} {(s.get('created_at') or '?')[:16].replace('T', ' ')}")
                 continue
-            if not t["opted_in"]:
+            if not t["opted_in"] and not a.dry_run:
                 raise LxdError(f"{label(t)}: snapshots are not enabled on {t['nas']}: set lxd_snapshots: true in its "
                                "host vars with the user's yes")
-            apply(api, a.action, name)
-    except LxdError as e:
-        raise SystemExit(str(e)) from None
-    return 0
+            names = prunable(api.snapshots(), a.prefix, a.older_than) if a.action == "prune" else [name]
+            if a.action == "prune" and not names:
+                print(f"{label(t)}: no {a.prefix}* snapshot older than {a.older_than:g} days")
+            for n in names:
+                act = "delete" if a.action == "prune" else a.action
+                if a.dry_run:
+                    if not dry_run(api, act, n):
+                        failed.append(f"{label(t)}: no snapshot {n!r}")
+                else:
+                    apply(api, act, n)
+        except LxdError as e:
+            if a.action == "restore" or len(a.hosts) == 1 and a.action != "prune":
+                raise SystemExit(str(e)) from None
+            failed.append(str(e))
+            print(f"{label(t)}: {a.action} failed — {e}", file=sys.stderr)
+    if a.dry_run:
+        print("Dry run: nothing was changed.")
+    if failed and len(a.hosts) > 1:
+        print(f"\n{a.action}: failed for {len(failed)} of {len(a.hosts)}:\n" + "\n".join(f"  - {f}" for f in failed))
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
