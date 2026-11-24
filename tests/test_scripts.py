@@ -3657,9 +3657,20 @@ class ProxmoxTlsAndPermissionTests(unittest.TestCase):
             r = ce.check_proxmox_tls(cfg)[0]
         self.assertFalse(r["ok"])
         self.assertIn("trusted in the macOS keychain", r["detail"])
-        self.assertIn('security find-certificate -a -c "Home Root CA" -p /Library/Keychains/System.keychain '
+        self.assertIn("security find-certificate -a -c 'Home Root CA' -p /Library/Keychains/System.keychain "
                       "> ~/.config/homelab/home-root-ca.pem", r["detail"])
         self.assertIn("proxmox.ca_cert=~/.config/homelab/home-root-ca.pem", r["detail"])
+        evil = 'Evil" $(touch /tmp/hm-x) "\u202e'   # a name from the server's certificate: quoted, cleaned for display
+        with mock.patch.object(ce, "_handshake", return_value=err), \
+                mock.patch.object(ce, "_chain_names", return_value=[evil]), \
+                mock.patch.object(ce, "_keychain_ca_fix", return_value=(evil, "/Library/Keychains/System.keychain")):
+            r = ce.check_proxmox_tls(cfg)[0]
+        cmd = r["detail"].split("security find-certificate", 1)[1].split(" -p ", 1)[0]
+        self.assertEqual(shlex.split(cmd), ["-a", "-c", evil])
+        with mock.patch.object(ce, "_handshake", return_value=err), \
+                mock.patch.object(ce, "_chain_names", return_value=["x" * 500]), \
+                mock.patch.object(ce, "_keychain_ca_fix", return_value=None):
+            self.assertLess(len(ce.check_proxmox_tls(cfg)[0]["detail"]), 400)
         with mock.patch.object(ce, "_handshake", return_value=err), \
                 mock.patch.object(ce, "_chain_names", return_value=["Proxmox Virtual Environment"]), \
                 mock.patch.object(ce, "_keychain_ca_fix", return_value=None):

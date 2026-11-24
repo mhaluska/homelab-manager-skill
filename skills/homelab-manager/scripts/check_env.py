@@ -16,6 +16,7 @@ import json
 import os
 import re
 import secrets as pysecrets
+import shlex
 import shutil
 import socket
 import ssl
@@ -267,14 +268,14 @@ def _check_tls(cfg, px):
     names = _chain_names(host, port)
     found = _keychain_ca_fix(host, port, names)
     if found:
-        name, kc = found
-        slug = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-").lower() or "ca"
+        name, kc = found   # names come from the server's (not yet trusted) certificate: cleaned and shell-quoted
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-").lower()[:40] or "ca"
         return [{"check": check, "ok": False,
-                 "detail": f"CA {name!r} is trusted in the macOS keychain ({kc}), but Python does not read the "
-                           f"keychain. Export it and point ca_cert at it: mkdir -p ~/.config/homelab && "
-                           f"security find-certificate -a -c \"{name}\" -p {kc} > ~/.config/homelab/{slug}.pem && "
+                 "detail": f"CA {hmlib.clean(name, 80)!r} is trusted in the macOS keychain ({kc}), but Python does not "
+                           f"read the keychain. Export it and point ca_cert at it: mkdir -p ~/.config/homelab && "
+                           f"security find-certificate -a -c {shlex.quote(name)} -p {kc} > ~/.config/homelab/{slug}.pem && "
                            f"python3 $HM/scripts/config_set.py '{where}.ca_cert=~/.config/homelab/{slug}.pem'"}]
-    issuer = f" (issuer {names[0]!r})" if names else ""
+    issuer = f" (issuer {hmlib.clean(names[0], 80)!r})" if names else ""
     return [{"check": check, "ok": False,
              "detail": f"certificate not trusted{issuer}: {err.verify_message}. Set {where}.ca_cert to the CA's PEM "
                        "(Proxmox's own CA: /etc/pve/pve-root-ca.pem on a node) rather than verify_tls: false: "
