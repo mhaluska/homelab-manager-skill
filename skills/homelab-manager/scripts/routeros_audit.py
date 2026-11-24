@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Read-only inspection and audit of MikroTik RouterOS devices (routers, CRS switches, CHR) over SSH.
 
-    routeros_audit.py <host> [<host> ...] [--group G] [--user U] [--port 22] [--timeout 10] [--no-write] [--leases]
+    routeros_audit.py <host> [<host> ...] [--group G] [--user U] [--port 22] [--timeout 10] [--jobs 8] [--no-write] [--leases]
     routeros_audit.py --group G --leases-only [--range CIDR] [--vlan ID|NAME]   # MACs and names only, no audit
     routeros_audit.py --recompute [--no-write]     # findings again from discovery/routeros.json, no SSH
 
@@ -874,10 +874,22 @@ def in_scope(ip: str, nets: list) -> bool:
     return any(a.version == n.version and a in n for n in nets)
 
 
+def read_db(f: Path) -> dict:
+    """discovery/routeros.json ({} when missing); ConfigError when it is unreadable, so a run never replaces it."""
+    try:
+        db = json.loads(f.read_text()) if f.exists() else {}
+    except (OSError, ValueError) as e:
+        raise hmlib.ConfigError(f"{f.name} is not valid JSON ({str(e)[:80]}): fix it or move it away, then run "
+                                "routeros_audit.py again.") from None
+    if not isinstance(db, dict):
+        raise hmlib.ConfigError(f"{f.name} is not a JSON object: fix it or move it away.")
+    return db
+
+
 def recompute(root: Path, min_free: float, no_write: bool) -> int:
     """--recompute: findings of every device in routeros.json from its stored data; nothing is collected."""
     f = root / "discovery" / "routeros.json"
-    db = json.loads(f.read_text()) if f.exists() else {}
+    db = read_db(f)
     devs = db.get("devices") or {}
     if not devs:
         print("routeros_audit: no devices in discovery/routeros.json — audit them first.", file=sys.stderr)
@@ -902,6 +914,7 @@ def main():
     ap.add_argument("--user")
     ap.add_argument("--port", type=int, default=22)
     ap.add_argument("--timeout", type=int, default=10, help="SSH connect timeout in seconds")
+    ap.add_argument("--jobs", type=int, default=8, help="devices read in parallel (default 8)")
     ap.add_argument("--no-write", action="store_true", help="don't merge into discovery/routeros.json")
     ap.add_argument("--leases", action="store_true",
                     help="also read DHCP leases and ARP, and propose names for unknown scanned addresses")
@@ -926,7 +939,11 @@ def main():
         return 3
     root = Path(cfg["_root"])
     if a.recompute:
-        return recompute(root, min_free, a.no_write)
+        try:
+            return recompute(root, min_free, a.no_write)
+        except hmlib.ConfigError as e:
+            print(f"routeros_audit: {e}", file=sys.stderr)
+            return 3
     inventory = load_inventory(root)
     accepts = accept_lists(inventory)
     targets = [resolve_host(cfg, inventory, h) for h in a.hosts]
@@ -949,7 +966,13 @@ def main():
     site_of = {h: st for h, _, _, st in targets}   # each device's site (GitHub issue #75)
     sections = LEASES_ONLY if a.leases_only else None
     print(f"Inspecting {len(jobs)} device(s), read-only…", file=sys.stderr)
-    with cf.ThreadPoolExecutor(max_workers=8) as ex:
+    if not a.no_write and not a.leases_only:
+        try:   # before connecting: an unreadable routeros.json would otherwise only fail after the audit
+            read_db(root / "discovery" / "routeros.json")
+        except hmlib.ConfigError as e:
+            print(f"routeros_audit: {e}", file=sys.stderr)
+            return 3
+    with cf.ThreadPoolExecutor(max_workers=max(1, a.jobs)) as ex:
         devs = list(ex.map(lambda j: collect(j[0], j[1], j[2], a.timeout, leases=a.leases, sections=sections), jobs))
 
     now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
@@ -957,7 +980,7 @@ def main():
         f = root / "discovery" / "routeros.json"
         f.parent.mkdir(parents=True, exist_ok=True)
         with hmlib.file_lock(f):   # another site's run may merge its devices at the same time
-            db = json.loads(f.read_text()) if f.exists() else {}
+            db = read_db(f)
             db.setdefault("devices", {})
             for d in devs:
                 kept = {k: v for k, v in d.items() if k not in LEASE_COMMANDS}   # volatile, only for --leases

@@ -305,6 +305,20 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         self.assertEqual(json.loads((self.d / "discovery/routeros.json").read_text())["devices"]["10.0.0.7"]["findings"], [])
         self.assertFalse(self.log.exists() and self.log.read_text().strip())   # nothing collected
 
+    def test_broken_routeros_json_is_kept(self):
+        (self.d / "discovery").mkdir(exist_ok=True)
+        f = self.d / "discovery/routeros.json"
+        f.write_text('{"devices": {')
+        r = self.audit("--recompute")
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("routeros.json is not valid JSON", r.stderr)
+        r = self.audit("--group", "routeros")                                  # checked before connecting
+        self.assertEqual(r.returncode, 3)
+        self.assertFalse(self.log.exists() and self.log.read_text().strip())
+        self.assertEqual(f.read_text(), '{"devices": {')
+        r = self.audit("--group", "routeros", "--no-write", "--jobs", "1")     # nothing to write: it runs
+        self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_parsers(self):
         rows = self.ra.parse_terse(' 0 X name=ftp port=21 address=""\n 1   name=ssh comment="a b=c"\nFlags: X\n')
         self.assertEqual(rows, [{"name": "ftp", "port": "21", "address": "", "_flags": "X"},
