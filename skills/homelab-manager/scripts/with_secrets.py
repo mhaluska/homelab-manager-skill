@@ -3,9 +3,11 @@
 
     with_secrets.py <secret-name> [<secret-name> ...] -- <command> [args...]
 
-Secret names are the keys under `secrets:` in homelab.yaml. Values never touch the
-command line, a file or the conversation; the command's output is filtered so a
-secret that gets echoed is replaced by ***REDACTED***.
+Secret names are the keys under `secrets:` in homelab.yaml. Values never go on the
+command line or into a file. The command's output is filtered: a secret that gets echoed
+(also URL-encoded, JSON-escaped, hex or base64) is replaced by ***REDACTED***. That filter
+is best effort, since the command could transform a secret another way; so the guard hook
+lets only OpenTofu, Packer, Ansible and this plugin's scripts run under it without asking.
 
 Secret kinds (secrets.<name>.kind):
   proxmox_token  value "user@realm!tokenid=uuid" → PROXMOX_VE_ENDPOINT, PROXMOX_VE_API_TOKEN (OpenTofu bpg),

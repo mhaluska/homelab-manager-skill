@@ -5405,3 +5405,25 @@ class CheckEnvComponentToolsTests(unittest.TestCase):  # GitHub issue #120
         for cfg in (None, {}):   # before scaffolding; an older repo without components: has them all
             r = self.tools(cfg)
             self.assertTrue(all(x["ok"] is False for x in r.values()), r)
+
+
+class SecretRedactionTests(unittest.TestCase):
+    """with_secrets.py output filter: a secret echoed in a common encoding is removed too (best effort)."""
+
+    def test_encoded_forms_redacted(self):
+        import base64
+        import hmlib
+        import urllib.parse
+        secret = "s3cr3t/p@ss+word=1"
+        for shown in (secret, urllib.parse.quote(secret, safe=""), urllib.parse.quote_plus(secret),
+                      json.dumps(secret), secret.encode().hex(), base64.b64encode(secret.encode()).decode(),
+                      base64.b64encode((secret + "\n").encode()).decode(),
+                      base64.urlsafe_b64encode(secret.encode()).decode().rstrip("=")):
+            out = hmlib.redact(f"token: {shown}\n", [secret])
+            self.assertIn("***REDACTED***", out, shown)
+            self.assertNotIn(shown.strip('"'), out, shown)
+
+    def test_short_values_and_other_text_kept(self):
+        import hmlib
+        self.assertEqual(hmlib.redact("abc and more", ["abc"]), "abc and more")
+        self.assertEqual(hmlib.redact("nothing secret here", ["s3cr3t-value"]), "nothing secret here")

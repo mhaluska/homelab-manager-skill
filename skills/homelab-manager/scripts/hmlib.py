@@ -897,10 +897,29 @@ def read_secret(cfg: dict, name: str) -> str:
     return keychain_read(e["service"], e.get("account") or os.environ.get("USER"))
 
 
+def secret_forms(secret: str) -> list[str]:
+    """A secret as it may appear in output: itself, URL-encoded, JSON-escaped, hex and base64 (whole, and the
+    prefix that stays the same whatever follows it, e.g. `echo "$T" | base64`). Longest first."""
+    import base64
+    raw = secret.encode()
+    forms = {secret, urllib.parse.quote(secret, safe=""), urllib.parse.quote_plus(secret), json.dumps(secret)[1:-1],
+             raw.hex(), raw.hex().upper()}
+    for enc in (base64.b64encode, base64.urlsafe_b64encode):
+        whole = enc(raw).decode()
+        forms |= {whole, whole.rstrip("=")}
+        stable = enc(raw[:len(raw) // 3 * 3]).decode()
+        if len(stable) >= 8:
+            forms.add(stable)
+    return sorted((f for f in forms if len(f) >= 4), key=len, reverse=True)
+
+
 def redact(text: str, secrets: list[str]) -> str:
+    """Best effort: replaces the forms in secret_forms(). A command can still transform a secret some other way;
+    the guard hook limits which commands with_secrets.py may start without asking."""
     for s in secrets:
         if s and len(s) >= 4:
-            text = text.replace(s, "***REDACTED***")
+            for form in secret_forms(s):
+                text = text.replace(form, "***REDACTED***")
     return text
 
 
