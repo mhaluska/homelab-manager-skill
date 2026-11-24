@@ -77,6 +77,7 @@ TLS_SCRIPT = ["--script", "ssl-cert", "--script-timeout", "20s"]   # NSE "safe":
 # SMB, RDP, Synology, alternate web ports and iOS (62078). Each port costs a timeout on every empty address of a
 # routed range, so the list stays short.
 DISCOVERY_PORTS = "22,80,443,445,3389,5000,8080,8443,62078"
+HOST_TIMEOUT = "15m"   # services/os: nmap gives up on a host that answers this slowly (a tarpit) and scans the rest
 NO_PING_MAX = 16   # --no-ping: at most this many addresses (a -Pn port scan of a whole range is slow and loud)
 PROFILES = {
     "ping": ["-sn", "-T3", f"-PS{DISCOVERY_PORTS}"],
@@ -489,10 +490,20 @@ def run_nmap(cmd: list[str]) -> tuple[int, str]:
     """Run nmap, echoing only its progress lines (stats, timing) to stderr; return (code, stderr)."""
     with tempfile.TemporaryFile("w+") as errf:  # a file, not a pipe: a full stderr pipe would stall nmap
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=errf, text=True)
-        for line in proc.stdout:
-            if re.match(r"\s*(Stats:|\S.* Timing: About)", line):
-                print("  " + line.strip(), file=sys.stderr, flush=True)
-        code = proc.wait()
+        try:
+            for line in proc.stdout:
+                if re.match(r"\s*(Stats:|\S.* Timing: About)", line):
+                    print("  " + line.strip(), file=sys.stderr, flush=True)
+            code = proc.wait()
+        except BaseException:   # Ctrl-C or an error here: don't leave nmap scanning on its own
+            proc.terminate()
+            try:
+                proc.wait(5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            proc.stdout.close()
+            raise
         errf.seek(0)
         return code, errf.read()
 
@@ -640,6 +651,8 @@ def main():
     ap.add_argument("--arp", action="store_true",
                     help="ping: also the Mac's ARP table (targets on the Mac's own network segment only)")
     ap.add_argument("--site", help="the site this scan runs at (sites: in homelab.yaml)")
+    ap.add_argument("--host-timeout", default=HOST_TIMEOUT, metavar="TIME",
+                    help=f"services/os: give up on one host after TIME (nmap format, default {HOST_TIMEOUT}; 0: never)")
     ap.add_argument("--forget-missing", type=float, metavar="DAYS",
                     help="scan nothing: drop the site's hosts missing from ping sweeps for more than DAYS days")
     ap.add_argument("--dry-run", action="store_true", help="with --forget-missing: only list what would go")
@@ -745,6 +758,8 @@ def main():
         cmd = [nmap, *PROFILES[a.profile], *extra, "-oX", str(raw)]
         if a.profile != "ping":
             cmd += ["-p", a.ports] if a.ports else ["--top-ports", str(a.top_ports)]
+            if a.host_timeout not in ("0", "0s", ""):
+                cmd += ["--host-timeout", a.host_timeout]
         if excluded:
             cmd += ["--exclude", ",".join(str(n) for n in excluded)]
         cmd += targets

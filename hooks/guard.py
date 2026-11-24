@@ -204,7 +204,7 @@ NMAP_VALUE_OPTS = {"-p", "-oX", "-oN", "-oG", "-oA", "-oS", "-oM", "-iL", "--exc
                    "--data-string", "--ip-options"}
 # nmap_scan.py options whose next argument is a value, not a target
 NMAP_SCAN_VALUE_OPTS = {"--profile", "--ports", "--top-ports", "--out", "--interface", "-e", "--site",
-                        "--forget-missing"}
+                        "--forget-missing", "--host-timeout"}
 # ssh_probe.py options whose next argument is a value, not a target
 SSH_PROBE_VALUE_OPTS = {"--user", "--port", "--timeout", "--jobs", "--site"}
 
