@@ -13,4 +13,6 @@ unifi_auth: api_key
 #   self-hosted UniFi Network application: https://<host>:8443/integration/v1
 unifi_api_url: ""
 unifi_controller_url: ""                 # login: the application's base URL, e.g. https://<host>:8443
+# false: the certificate is not checked, so a device posing as the controller would receive the API key or
+# login (check_env.py warns). Set true once the controller's CA is trusted.
 unifi_validate_certs: false              # controllers mostly use self-signed certificates

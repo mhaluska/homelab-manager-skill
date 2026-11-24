@@ -10,6 +10,8 @@ ansible_python_interpreter: "{{ ansible_playbook_python }}"
 bmc_secret_env: BMC
 bmc_user: "{{ lookup('ansible.builtin.env', bmc_secret_env ~ '_USER') }}"
 bmc_password: "{{ lookup('ansible.builtin.env', bmc_secret_env ~ '_PASSWORD') }}"
+# false: the certificate is not checked, so a device posing as the BMC would receive its password
+# (check_env.py warns). Set true once the BMCs' CA is trusted.
 bmc_validate_certs: false   # BMCs mostly use self-signed certificates; true once their CA is trusted
 # A known, harmless reason for a health that is not OK (e.g. a tripped chassis intrusion sensor that needs a manual
 # re-arm) is accepted per host, by the cause names bmc-info.yml records in health_causes (an entry also matches as
