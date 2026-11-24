@@ -3,7 +3,8 @@
 ## "Find systems missing security updates" (read-only)
 
 ```bash
-cd ansible && ansible-playbook playbooks/check-updates.yml          # Linux, Windows, QNAP
+cd ansible                                                         # a call of its own, once
+ansible-playbook playbooks/check-updates.yml                       # Linux, Windows, QNAP
 ansible-playbook playbooks/check-updates.yml -e target=rocky       # subset (prefer this to -l; both write)
 ```
 `target` scopes every play: Linux checks skip its windows/appliances/qnap hosts, Windows and QNAP checks run only on

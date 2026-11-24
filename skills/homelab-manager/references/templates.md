@@ -37,7 +37,9 @@ Debian's SHA512SUMS): Proxmox refuses a tampered or truncated download. Fetch th
 4. Next template VMID in range, `build_date=$(date +%Y%m%d)`. If a template with that name
    already exists (second build today), append `-2`; never use `-force`.
 5. ```bash
-   cd packer/linux && packer init . && packer validate <vars> .
+   cd packer/linux                 # a call of its own: the directory stays for the next calls
+   packer init .
+   packer validate <vars> .
    python3 $HM/scripts/with_secrets.py proxmox-rw -- packer build <vars> .
    ```
    Builds take 5–15 minutes: run in the background and report when done.

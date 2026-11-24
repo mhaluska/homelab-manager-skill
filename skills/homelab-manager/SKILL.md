@@ -8,14 +8,14 @@ description: Orchestrator for a personal homelab managed from a homelab-infrastr
 You run a personal homelab conversationally from a headless Mac Mini. The user is often on a phone, so keep
 replies short, lead with the outcome, and put long output in files (`discovery/`, `docs/`) rather than in chat.
 
-`HM` below means this skill's base directory (shown when the skill loads). Scripts
-are Python 3 standard library only; run them as `python3 $HM/scripts/<name>.py`.
+`HM` below is this skill's base directory (shown when the skill loads); write it out as that absolute path. Run one
+script per Bash call, `python3 $HM/scripts/<name>.py` (Python 3 stdlib only), with no `HM=…;`, `cd … &&`, `| tail`
+or heredocs, and `git -C <repo>`: prompt rules match only simple commands (references/security.md).
 
 ## 1. Orient first (every request)
 
-1. **Find the repo.** Walk up from the working directory to `homelab.yaml`.
-   - Not found and the directory is empty or a fresh repo → **interactive setup** (section 2).
-   - Not found but it's some unrelated project → ask where the homelab repo is.
+1. **Find the repo.** Walk up from the working directory to `homelab.yaml`. Not found: an empty directory or a fresh
+   repo → **interactive setup** (section 2); some unrelated project → ask where the homelab repo is.
 2. **Load config** from `homelab.yaml`, the only source of site facts: enabled `components`, networks, Proxmox
    endpoint, storage, bridges, VMID ranges, keychain item names. When a value the task needs is empty, discover it
    read-only (Proxmox API) or ask the user; never guess an IP range, node, storage or bridge name: a wrong guess
@@ -26,17 +26,17 @@ are Python 3 standard library only; run them as `python3 $HM/scripts/<name>.py`.
 4. **Language.** `site.language` (e.g. `sk`; empty → the language the user writes in, and offer once to save it)
    is for replies, questions, docs and reports you write, commit messages and new code comments.
    Identifiers, scaffolded files, script output and skill issues (§6) stay English.
-5. **Check the environment** when it's the first operation of the session or something
-   failed: `python3 $HM/scripts/check_env.py` (tools, SSH agent, gh, keychain, secrets).
-6. **Updates.** A session-start hook checks once a day for a newer release. If the session
-   context says one is available, tell the user once (version + the update command).
-   "Is there a new version?" → `python3 $HM/../../hooks/update_check.py --force`. After an upgrade:
-   `init_repo.py --sync-managed --dry-run` lists one-time updates it applies (unedited template files replaced
-   whole), opt-in **suggestions** of newer releases (config keys, sections of edited files, snapshots to
-   regenerate, Proxmox steps) and reported skill issues the release fixed. Show them apart; on the user's yes run it for real, apply each accepted suggestion,
-   `upgrade_notes.py --decline ID` for each refused one (`--done ID` for a manual step), run it again to record
-   the review, `issues.py fixed --apply`, commit (`Update repo for homelab-manager`). A script from an older
-   version than the repo's `upgrades.reviewed` refuses to write: call the current version's `$HM` path.
+5. **Check the environment** when it's the first operation of the session or something failed:
+   `python3 $HM/scripts/check_env.py` (tools, SSH agent, gh, keychain, secrets).
+6. **Updates.** A session-start hook checks once a day for a newer release; if the session context says one is
+   available, tell the user once (version + the update command). "Is there a new version?" →
+   `python3 $HM/../../hooks/update_check.py --force`. After an upgrade: `init_repo.py --sync-managed --dry-run` lists
+   one-time updates it applies (unedited template files replaced whole), opt-in **suggestions** of newer releases
+   (config keys, sections of edited files, snapshots to regenerate, Proxmox steps) and reported skill issues the
+   release fixed. Show them apart; on the user's yes run it for real, apply each accepted suggestion,
+   `upgrade_notes.py --decline ID` for each refused one (`--done ID` for a manual step), run it again to record the
+   review, `issues.py fixed --apply`, commit (`Update repo for homelab-manager`). A script from an older version
+   than the repo's `upgrades.reviewed` refuses to write: call the current version's `$HM` path.
 
 ## 2. Interactive setup of a new repository
 
@@ -68,6 +68,7 @@ mostly confirms:
 - S3 state → `opentofu.s3.endpoint`, `bucket` (`key` if the bucket is shared). Local state needs nothing.
 - kubernetes → cluster group name(s) in Ansible and whether `kubectl` works on this Mac.
 - git → if the repo has a remote (`git remote -v`): `git.auto_push` (push each verified commit; off-Mac backup).
+- prompts → `permissions.auto_allow_readonly` (read-only skill scripts run without a prompt; references/security.md).
 - site name (propose `home`), last: `init_repo.py --name-default-site <name>` (`--dry-run` first; a 2nd site
   later is then additive, references/proxmox.md "Several sites").
 Write answers with `python3 $HM/scripts/config_set.py 'site.domain=home.arpa' 'network.authorized_ranges+=CIDR'`
@@ -160,7 +161,7 @@ would be nice if…"), or says *"note an idea for the skill"*. Only ones that wo
 generically (the site's own to-do list goes in the reply or `docs/`); finish the task, then add it before the report.
 ```bash
 python3 $HM/scripts/issues.py add --title "…" --kind script|guard|instructions|setup|template|other|improvement|idea \
-  --key <stable-key> --body-file <details.md>
+  --key <stable-key> --body-file <details.md>     # details.md: written to the scratchpad with the file tool
 ```
 - Body follows `issues.py template [--kind idea]`: problems get Summary, Steps to reproduce, Expected,
   Actual, Evidence, optional Proposed fix; ideas get Summary, Context, Proposal, optional Benefit.
@@ -254,6 +255,5 @@ to them too. Check their reports against the files before saying it's done.
 ## 11. Growing the skill
 
 Domain knowledge lives in `references/`, one file per area, never duplicated. When an area outgrows its reference
-(many scripts, its own triggers), propose splitting it into its own skill in this plugin (planned: `proxmox-manager`,
-`network-discovery`, `vm-template-manager`, `infrastructure-provisioning`, `ansible-manager`, `system-patching`,
-`security-audit`); this skill stays the entry point. A helper written twice belongs in `scripts/`. Skill code is English.
+(many scripts, its own triggers), propose splitting it into its own skill in this plugin; this skill stays the entry
+point. A helper written twice belongs in `scripts/`. Skill code is English.

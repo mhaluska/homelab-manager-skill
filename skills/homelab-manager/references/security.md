@@ -66,6 +66,25 @@ record: findings are not tracked anywhere else, and never sent to GitHub — if 
 (`overview.redact`), ask before committing the report or security.json (exploitable detail: IPs, versions,
 open shares).
 
+## Permission prompts
+
+Claude Code asks before each Bash command no rule allows; the guard only adds prompts. Two things keep the
+prompts to the steps that need a decision:
+- **`permissions.auto_allow_readonly: true`** in homelab.yaml (off by default; only on the user's own yes, and the
+  guard asks before it is set): the guard allows, without a prompt, read-only runs of this plugin's scripts:
+  `check_env.py [--json]`, `upgrade_notes.py [--all] [--json]`, `init_repo.py --sync-managed --dry-run`,
+  `issues.py list|show|template`, `issues.py fixed [--github]`, `issues.py report --dry-run`,
+  `overview.py --check`, `drift_report.py --stale`, `update_check.py --force`. Only from the running plugin
+  version, only as one simple command, and any guard finding still wins. Offer it during setup and after the
+  upgrade that brings it.
+- The template's `.claude/settings.json` allows `git add` and `git commit` (local; the pre-commit hook still
+  runs). `git push`, plugin updates and everything that writes elsewhere keep asking.
+
+Rules can only match simple commands, so write them that way: one script per Bash call, its absolute path written
+out (`$HM` expanded, never `HM=…;`), `git -C <repo> …`, and no `cd … &&`, pipes into `tail`/`head` or heredocs
+(change directory in a call of its own; scripts find the repo from the working directory; write a text such as an
+issue body to a scratchpad file with the file tool and pass `--body-file`).
+
 ## Hard rules (also enforced by hooks/guard.py and hooks/guard_files.py)
 
 - Secrets: keychain only, injected via `with_secrets.py`, never printed/committed/written. Wrap only `tofu`,
@@ -77,8 +96,9 @@ open shares).
 - Scans: only `network.authorized_ranges`; no `-iR`, no decoys; NSE/OS detection with approval. Other scanners
   (`masscan`, `arp-scan`, `nc -z` over several ports or outside the ranges, …) ask.
 - The files that guard the guard ask before they change: homelab.yaml written by anything but `config_set.py`,
-  its scan scope, TLS checks and `issues.auto_send` changed with the file tools, the installed plugin and
-  `.claude/settings*.json`. Skipping the pre-commit hook (`--no-verify`, `core.hooksPath`) asks.
+  its scan scope, TLS checks, `issues.auto_send` and `permissions.auto_allow_readonly` changed with the file tools,
+  the installed plugin and `.claude/settings*.json`. Skipping the pre-commit hook (`--no-verify`,
+  `core.hooksPath`) asks.
 - No `-auto-approve`; destructive tofu/Proxmox/ZFS commands and reboots prompt the user. Make a plan and apply it
   in separate commands: a plan file written by the same command it is applied in always asks.
 - Generated scripts are scanned by the guard before execution; don't try to route around it. Write a script in
