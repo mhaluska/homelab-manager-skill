@@ -16,7 +16,7 @@ import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from helpers import ROOT, SCRIPTS, run, yq  # noqa: E402,F401
+from helpers import ROOT, SCRIPTS, closed_http_error, run, yq  # noqa: E402,F401
 
 sys.path.insert(0, str(ROOT / "hooks"))
 import guard  # noqa: E402,F401
@@ -612,7 +612,7 @@ class OverviewCollectorTests(unittest.TestCase):  # GitHub issue #89: data for t
             for key, val in routes.items():
                 if path.endswith(key):
                     if val == 403:
-                        raise urllib.error.HTTPError(path, 403, "Forbidden", {}, None)
+                        raise closed_http_error(path, 403, "Forbidden", {}, None)
                     return val
             raise AssertionError(path)
         pve._get = get

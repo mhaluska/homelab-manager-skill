@@ -16,7 +16,7 @@ import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from helpers import ROOT, SCRIPTS, run, yq  # noqa: E402,F401
+from helpers import ROOT, SCRIPTS, closed_http_error, run, yq  # noqa: E402,F401
 
 sys.path.insert(0, str(ROOT / "hooks"))
 import guard  # noqa: E402,F401
@@ -251,7 +251,7 @@ class GuestNetworkMappingTests(unittest.TestCase):
                     return {"result": [{"name": "lo", "ip-addresses": [{"ip-address": "127.0.0.1"}]},
                                        {"name": "eth0", "hardware-address": "bc:24:11:00:00:02",
                                         "ip-addresses": [{"ip-address": "10.0.10.80"}, {"ip-address": "fe80::1"}]}]}
-                raise urllib.error.HTTPError(path, 403, "Forbidden", {}, None)
+                raise closed_http_error(path, 403, "Forbidden", {}, None)
             if path.endswith("/interfaces"):
                 return [{"name": "eth0", "hwaddr": "bc:24:11:00:00:01", "inet": "10.0.10.53/24"}]
             raise AssertionError(path)

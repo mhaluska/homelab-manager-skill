@@ -13,3 +13,11 @@ def run(script, *args, cwd):
 
 def yq(expr, path):
     return subprocess.run(["yq", "-o=json", expr, str(path)], capture_output=True, text=True).stdout.strip()
+
+
+def closed_http_error(url, code, msg, hdrs, fp):
+    """An HTTPError as PVE._get raises it: closed already (an open one warns when it is garbage-collected)."""
+    import urllib.error
+    e = urllib.error.HTTPError(url, code, msg, hdrs, fp)
+    e.close()
+    return e
