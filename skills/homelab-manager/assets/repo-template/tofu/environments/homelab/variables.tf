@@ -33,8 +33,10 @@ variable "base_images" {
     image_file_name    = string
     checksum           = optional(string)
     checksum_algorithm = optional(string, "sha256")
-    content_type       = optional(string, "import")
-    node               = optional(string)
+    # true only for a base imported before checksums were required: no check of the download
+    allow_unverified_image = optional(bool, false)
+    content_type           = optional(string, "import")
+    node                   = optional(string)
   }))
   default = {}
 }

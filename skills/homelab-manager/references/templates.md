@@ -19,8 +19,9 @@ never rebuilds existing VMs.
 | Debian 13 | `https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2` | `SHA512SUMS` | `debian` |
 | Ubuntu 24.04 | `https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img` (qcow2) | `SHA256SUMS` | `ubuntu` |
 
-Prefer a dated/versioned URL over `latest` in tfvars, and always set `checksum`, so the
-base is reproducible. Fetch the checksum file with `curl -fsSL` (no secrets involved).
+Prefer a dated/versioned URL over `latest` in tfvars. `checksum` is required (`checksum_algorithm = "sha512"` for
+Debian's SHA512SUMS): Proxmox refuses a tampered or truncated download. Fetch the checksum file with `curl -fsSL`
+(no secrets involved). `allow_unverified_image = true` skips the check; only for a base imported before 0.54.0.
 
 ## Build or update a template ("Update the Rocky Linux Packer template")
 

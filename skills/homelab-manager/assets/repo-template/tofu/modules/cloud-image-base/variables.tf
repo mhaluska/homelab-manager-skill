@@ -14,8 +14,14 @@ variable "image_file_name" {
   description = "Name on Proxmox storage; must end in .qcow2 (content_type import) or .img (content_type iso)."
 }
 variable "checksum" {
-  type    = string
-  default = null
+  type        = string
+  default     = null
+  description = "The image's checksum from the distribution's CHECKSUM/SHA256SUMS file. Required unless allow_unverified_image."
+}
+variable "allow_unverified_image" {
+  type        = bool
+  default     = false
+  description = "Import the image without a checksum: a tampered or truncated download goes unnoticed. Only for a base imported before checksums were required."
 }
 variable "checksum_algorithm" {
   type    = string

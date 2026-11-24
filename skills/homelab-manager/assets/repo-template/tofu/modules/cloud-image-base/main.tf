@@ -11,6 +11,13 @@ resource "proxmox_download_file" "image" {
   checksum_algorithm  = var.checksum == null ? null : var.checksum_algorithm
   overwrite           = false
   overwrite_unmanaged = false
+
+  lifecycle {
+    precondition {
+      condition     = var.checksum != null || var.allow_unverified_image
+      error_message = "Base image ${var.name}: set checksum (from the distribution's CHECKSUM or SHA256SUMS file) so a tampered or truncated download is refused, or allow_unverified_image = true."
+    }
+  }
 }
 
 resource "proxmox_virtual_environment_vm" "base" {

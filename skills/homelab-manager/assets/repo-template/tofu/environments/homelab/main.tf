@@ -30,6 +30,8 @@ module "base_image" {
   image_datastore    = local.storage[local.bi_node[each.key]].image
   datastore          = local.storage[local.bi_node[each.key]].vm
   bridge             = var.defaults.bridge
+
+  allow_unverified_image = each.value.allow_unverified_image
 }
 
 module "vm" {
