@@ -400,6 +400,10 @@ def edit_file(path: Path, ops: list[tuple], dry_run: bool = False) -> str:
             hmlib.sites(want)
         except hmlib.ConfigError as e:
             raise EditError(f"{e} Nothing was written.") from None
+    lang = hmlib.get(want, "site.language")
+    if lang is not None and any(segments(op[1])[0][0] == "site" for op in ops) and not hmlib.language_code(lang):
+        raise EditError("site.language must be a language code such as sk or pt-BR (or one word naming the "
+                        "language); nothing was written.")
     got = yq_json(new)
     if _norm(got) != _norm(want):
         raise EditError("the edited file doesn't match the intended change; nothing was written. "

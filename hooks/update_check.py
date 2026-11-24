@@ -128,13 +128,14 @@ def repo_upgrades() -> tuple[list[str], list[str], list[str]]:
 
 
 def repo_language() -> tuple[bool, str]:
-    """(inside a homelab repo, its site.language or "")."""
+    """(inside a homelab repo, its site.language or ""). A value that is not a language code or name is ignored:
+    it goes into Claude's context before the user types anything."""
     sys.path.insert(0, str(SCRIPTS))
     import hmlib
     root = hmlib.find_repo_root()
     if not root:
         return False, ""
-    return True, str(hmlib.get(hmlib.load_config(root), "site.language", "")).strip()
+    return True, hmlib.language_code(hmlib.get(hmlib.load_config(root), "site.language", "")) or ""
 
 
 def language_text(lang: str) -> str:

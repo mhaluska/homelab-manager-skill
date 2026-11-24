@@ -1140,6 +1140,16 @@ def vmid_fit(cfg: dict, guests: list[dict]) -> str | None:
 
 # --------------------------------------------------------------------------- language
 
+LANGUAGE_CODE_RE = re.compile(r"[A-Za-z]{2,3}([-_][A-Za-z0-9]{2,8}){0,2}|[^\W\d_]{2,20}")
+
+
+def language_code(value) -> str | None:
+    """site.language when it is a language code (sk, pt-BR, zh-Hant-TW) or one word naming a language (Slovak),
+    else None. The session-start hook puts it into Claude's context, so free text there is never used."""
+    v = str(value).strip() if value is not None else ""
+    return v if LANGUAGE_CODE_RE.fullmatch(v) else None
+
+
 # Text that goes to the plugin's GitHub repository (skill issues, pull requests, code) must be English.
 # The user's homelab repo may use another language (site.language); this check is only for the plugin side.
 LANGUAGE_WORDS = PLUGIN_ROOT / "skills" / "homelab-manager" / "assets" / "language-words.json"
