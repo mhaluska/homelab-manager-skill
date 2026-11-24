@@ -306,6 +306,10 @@ def proxmox_site(cfg: dict, name: str | None = None) -> dict:
         u = urllib.parse.urlsplit(ep)
         if u.scheme not in ("http", "https") or not u.hostname:
             raise ConfigError(f"{px['_where']}.endpoint: {ep!r} is not a URL like https://pve1.example:8006.")
+        if u.scheme == "http" and px.get("allow_http") is not True:
+            raise ConfigError(f"{px['_where']}.endpoint: {ep!r} is plain http, so the API token would cross the "
+                              "network in clear text. Proxmox serves https on port 8006: use https://<host>:8006 "
+                              f"(or set {px['_where']}.allow_http: true if a TLS proxy in front really needs it).")
     return {**px, "endpoint": eps[0], "endpoints": eps, "_site": s["name"]}
 
 

@@ -248,6 +248,10 @@ def _check_tls(cfg, px):
         return [{"check": check, "ok": None,
                  "detail": f"verify_tls: false — certificate not checked (prefer {where}.ca_cert)"}]
     u = urllib.parse.urlsplit(endpoint)
+    if u.scheme == "http":   # hmlib.proxmox_site allows it only with allow_http: true
+        return [{"check": check, "ok": None,
+                 "detail": f"{where}.allow_http: true — the API token crosses the network in clear text "
+                           "(use https://<host>:8006)"}]
     host, port = u.hostname, u.port or (443 if u.scheme == "https" else 8006)
     if not host:
         return [{"check": check, "ok": False, "detail": f"{where}.endpoint {endpoint!r} is not a URL"}]
@@ -407,6 +411,21 @@ def check_site_ambiguity(cfg, inventory: dict | None = None):
     return [{"check": "sites:ambiguous", "ok": False, "detail": f} for f in found]
 
 
+CERT_VARS = (("bmc_validate_certs", "BMC", "group_vars/bmc.yml"),
+             ("unifi_validate_certs", "UniFi controller", "group_vars/unifi.yml"))
+
+
+def unverified_cert_hosts(inventory: dict) -> dict[str, list[str]]:
+    """{variable: hosts} for the Ansible variables that turn certificate checks off (BMCs, UniFi controllers)."""
+    hv = (inventory.get("_meta") or {}).get("hostvars") or {}
+    out = {}
+    for var, _, _ in CERT_VARS:
+        hosts = sorted(h for h, v in hv.items() if str((v or {}).get(var, "")).strip().lower() in ("false", "no", "0"))
+        if hosts:
+            out[var] = hosts
+    return out
+
+
 def check_ansible_targets(cfg):
     inventory = managed_inventory(cfg)
     if not inventory:
@@ -425,6 +444,15 @@ def check_ansible_targets(cfg):
                               f"{', …' if len(hosts) > 5 else ''}): ansible-core 2.17+ can't use EL8's Python 3.6. "
                               "Install python3.12 there and set ansible_python_interpreter: /usr/bin/python3.12 in the "
                               "group's group_vars (references/ansible.md, Onboarding existing hosts)"})
+    off = unverified_cert_hosts(inventory)
+    for var, what, where in CERT_VARS:
+        if var in off:
+            hosts = off[var]
+            out.append({"check": f"ansible:{var}", "ok": None,
+                        "detail": f"{var}: false for {len(hosts)} host(s) ({', '.join(hosts[:5])}"
+                                  f"{', …' if len(hosts) > 5 else ''}) — the {what} certificate is not checked, so "
+                                  "a device posing as it on the network would receive its credentials. Set it true "
+                                  f"in {where} once the CA is trusted"})
     return out
 
 

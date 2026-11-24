@@ -51,6 +51,7 @@ class GuardFilesTests(unittest.TestCase):
         self.assertEqual(self.edit("https://10.0.10.2:8006\n", "https://10.0.10.2:8006\n  verify_tls: false\n"), "ask")
         self.assertEqual(self.edit("{endpoint: https://192.0.2.10:8006}", "{endpoint: https://192.0.2.10:8006, verify_tls: false}"),
                          "ask")
+        self.assertEqual(self.edit("https://10.0.10.2:8006\n", "http://10.0.10.2:8006\n  allow_http: true\n"), "ask")
         self.assertEqual(self.edit("site:\n", "issues: {auto_send: true}\nsite:\n"), "ask")
         self.assertEqual(run("Write", {"file_path": str(self.cfg), "content": CONFIG.replace("10.0.10.0/24", "10.0.0.0/8")},
                              str(self.d)), "ask")
@@ -61,6 +62,7 @@ class GuardFilesTests(unittest.TestCase):
     def test_other_homelab_yaml_edits_pass(self):
         self.assertIsNone(self.edit("home.arpa", "lan"))
         self.assertIsNone(self.edit("https://10.0.10.2:8006\n", "https://10.0.10.2:8006\n  verify_tls: true\n"))
+        self.assertIsNone(self.edit("https://10.0.10.2:8006\n", "https://10.0.10.2:8006\n  allow_http: false\n"))
         self.assertIsNone(run("Write", {"file_path": str(self.cfg), "content": CONFIG + "overview: {redact: true}\n"},
                               str(self.d)))
         self.assertIsNone(run("Edit", {"file_path": "notes.md", "old_string": "a", "new_string": "b"}, str(self.d)))

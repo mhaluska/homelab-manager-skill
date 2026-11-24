@@ -492,9 +492,11 @@ class ProtectedFilesTests(unittest.TestCase):
                       "yq -i '.site.domain = \"x\"' homelab.yaml", "printf x | tee homelab.yaml",
                       "python3 /p/config_set.py network.excluded_hosts-=10.0.10.1",
                       "python3 /p/config_set.py 'proxmox.verify_tls=false'",
-                      "python3 /p/config_set.py 'sites[offsite].proxmox.verify_tls=false'"]:
+                      "python3 /p/config_set.py 'sites[offsite].proxmox.verify_tls=false'",
+                      "python3 /p/config_set.py 'proxmox.allow_http=true'"]:
                 self.assertEqual(decision(c, r), "ask", c)
             for c in ["python3 /p/config_set.py site.domain=home.arpa", "python3 /p/config_set.py proxmox.verify_tls=true",
+                      "python3 /p/config_set.py proxmox.allow_http=false",
                       "python3 /p/config_set.py 'network.excluded_hosts+=10.0.10.9'", "yq '.network' homelab.yaml",
                       "cat homelab.yaml"]:
                 self.assertIsNone(decision(c, r), c)

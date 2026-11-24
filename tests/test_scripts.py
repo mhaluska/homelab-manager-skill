@@ -3636,6 +3636,35 @@ class ProxmoxTlsAndPermissionTests(unittest.TestCase):
         with mock.patch.object(ce, "_handshake", return_value=down):
             self.assertEqual([r["ok"] for r in ce.check_proxmox_tls(cfg)], [False, False, False])
 
+    def test_plain_http_endpoint_needs_allow_http(self):
+        h, ce = self.hmlib, self.check_env
+        cfg = {"proxmox": {"endpoint": "http://pve.example:8006"}}
+        with self.assertRaises(h.ConfigError) as e:
+            h.proxmox_site(cfg)
+        self.assertIn("clear text", str(e.exception))
+        self.assertFalse(ce.check_proxmox_tls(cfg)[0]["ok"])
+        cfg["proxmox"]["allow_http"] = "true"                           # only a real boolean
+        with self.assertRaises(h.ConfigError):
+            h.proxmox_site(cfg)
+        cfg["proxmox"]["allow_http"] = True
+        self.assertEqual(h.proxmox_site(cfg)["endpoint"], "http://pve.example:8006")
+        r = ce.check_proxmox_tls(cfg)[0]
+        self.assertIsNone(r["ok"])
+        self.assertIn("clear text", r["detail"])
+        sites = {"sites": [{"name": "home", "proxmox": {"endpoint": "https://pve.example:8006"}},
+                           {"name": "far", "proxmox": {"endpoint": "http://pve2.example:8006"}}]}
+        with self.assertRaises(h.ConfigError) as e:
+            h.proxmox_site(sites, "far")
+        self.assertIn("sites[far].proxmox", str(e.exception))
+        self.assertEqual(h.proxmox_site(sites, "home")["endpoint"], "https://pve.example:8006")
+
+    def test_unverified_bmc_and_unifi_certificates_warn(self):
+        inv = {"_meta": {"hostvars": {"bmc-pve1": {"bmc_validate_certs": False}, "bmc-pve2": {"bmc_validate_certs": True},
+                                      "udm": {"unifi_validate_certs": "false"}, "web1": {}}}}
+        self.assertEqual(self.check_env.unverified_cert_hosts(inv),
+                         {"bmc_validate_certs": ["bmc-pve1"], "unifi_validate_certs": ["udm"]})
+        self.assertEqual(self.check_env.unverified_cert_hosts({}), {})
+
     def test_ca_cert_path_expanded_and_relative_to_repo(self):
         cfg = {"_root": "/repo", "proxmox": {"ca_cert": "certs/ca.pem"}}
         self.assertEqual(self.hmlib.proxmox_ca_file(cfg), "/repo/certs/ca.pem")

@@ -21,6 +21,9 @@ never values). Run it after setup, after macOS updates, and whenever a secret re
 - TLS: Python scripts use OpenSSL's CA bundle, not the macOS keychain. A private CA trusted in the
   keychain must still be exported (`security find-certificate -a -c "<CA>" -p <keychain> > file.pem`)
   and set as `proxmox.ca_cert`; `check_env.py` detects this and prints the exact command.
+- Plain `http://` Proxmox endpoints are refused (the token would cross the network in clear text) unless the
+  site sets `allow_http: true`; `check_env.py` warns while it is set, and while `bmc_validate_certs` or
+  `unifi_validate_certs` is false (a device posing as the BMC or controller would receive its credentials).
 - S3 state keys (if used): a key limited to the state bucket, not the store's admin key.
 - GitHub: `gh` keeps its token in the keychain (`gh auth login`); never print it (`gh auth token` is denied).
 - Rotation: user creates the new token, updates the keychain item (`-U` overwrites),

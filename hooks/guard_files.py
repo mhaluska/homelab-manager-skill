@@ -3,7 +3,7 @@
 
 guard.py checks Bash commands; this hook asks before Claude changes, with its file tools,
   - homelab.yaml settings that widen what the plugin may do: the scan scope (network.authorized_ranges,
-    network.excluded_hosts), TLS certificate checks (every verify_tls) and issues.auto_send;
+    network.excluded_hosts), TLS checks (every verify_tls and allow_http) and issues.auto_send;
   - the installed plugin (its hooks and scripts) or any other Claude Code plugin;
   - Claude Code permission settings (.claude/settings.json, .claude/settings.local.json).
 Other edits get no decision (normal Claude Code permission handling). Fails closed: any error asks.
@@ -68,13 +68,17 @@ def parse_yaml(text: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+TLS_KEYS = {"verify_tls": True, "allow_http": False}   # key: its default
+
+
 def tls_settings(node, path: str = "") -> dict[str, object]:
-    """Every verify_tls in the document, by its path (proxmox.verify_tls, sites[offsite].proxmox.verify_tls, …)."""
+    """Every verify_tls and allow_http in the document, by its path (proxmox.verify_tls,
+    sites[offsite].proxmox.allow_http, …)."""
     out = {}
     if isinstance(node, dict):
         for k, v in node.items():
             p = f"{path}.{k}" if path else str(k)
-            if k == "verify_tls":
+            if k in TLS_KEYS:
                 out[p] = v
             out.update(tls_settings(v, p))
     elif isinstance(node, list):
@@ -99,7 +103,8 @@ def homelab_changes(old: str, new: str) -> list[str]:
     after = parse_yaml(new)   # an edit that breaks the file raises: main() asks
     changed = [k for k in WATCHED if get(before, k) != get(after, k)]
     a, b = tls_settings(before), tls_settings(after)
-    changed += sorted(k for k in set(a) | set(b) if a.get(k, True) != b.get(k, True))
+    default = lambda k: TLS_KEYS[k.rsplit(".", 1)[-1]]
+    changed += sorted(k for k in set(a) | set(b) if a.get(k, default(k)) != b.get(k, default(k)))
     return changed
 
 

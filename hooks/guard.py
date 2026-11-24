@@ -155,9 +155,10 @@ RULES: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"(config_set\.py|\byq\b[^\n;&|]*\s-i\b)[^\n;&|]*authorized_ranges\s*\+?=(?!=)"), ASK,
      "Widens the scan scope (network.authorized_ranges): only for ranges the user owns, with their yes."),
     (re.compile(r"config_set\.py\b[^\n;&|]*\s['\"]?(network\s*=|network\.excluded_hosts\s*-?=(?!=)"
-                r"|[\w.\[\]-]*verify_tls\s*=\s*['\"]?(false|no|off|0)\b)"), ASK,
-     "Narrows the scan exclusions, replaces the network settings or turns off TLS certificate checks: only with the "
-     "user's yes."),
+                r"|[\w.\[\]-]*verify_tls\s*=\s*['\"]?(false|no|off|0)\b"
+                r"|[\w.\[\]-]*allow_http\s*=\s*['\"]?(true|yes|on|1)\b)"), ASK,
+     "Narrows the scan exclusions, replaces the network settings, turns off TLS certificate checks or allows a plain "
+     "http Proxmox endpoint: only with the user's yes."),
     (re.compile(r"\bgit\b[^\n;&|]*\scommit\b[^\n;&|]*\s(--no-verify|-n)(?=\s|$)"), ASK,
      "Skips the repository's pre-commit hook, which blocks committing secrets."),
     (re.compile(r"(?i)\bgit\b[^\n;&|]*(\s-c\s*core\.hookspath=|\sconfig\b[^\n;&|]*\s(--unset(-all)?\s+core\.hookspath\b"
