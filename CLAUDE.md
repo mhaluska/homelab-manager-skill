@@ -3,6 +3,9 @@
 - Plugin layout: repo root is both marketplace (`.claude-plugin/marketplace.json`) and plugin
   (`.claude-plugin/plugin.json`). Bump `version` in plugin.json and add a CHANGELOG entry for every release,
   then tag the release commit `vX.Y.Z` (annotated) and push the tag with `main`.
+  `python3 .github/release.py X.Y.Z` does it all but the push: it dates a `## Unreleased` CHANGELOG section,
+  bumps plugin.json, regenerates the template history when the template changed, runs the tests, commits
+  `Release X.Y.Z` and tags; then `git push origin main vX.Y.Z`.
   Pushing the tag runs `.github/workflows/release.yml`: it checks plugin.json matches the tag and
   publishes a GitHub release with that version's CHANGELOG section (`.github/release_notes.py`).
   Run the unit tests locally before tagging (they target macOS). Push at most 3 tags at once.
@@ -18,8 +21,9 @@
 - Scripts: Python 3 stdlib only (the target Mac has no pip packages); YAML via `yq`.
 - Keep SKILL.md under ~250 lines; domain detail goes to `references/`, one file per domain, no duplication.
 - Every guard rule change needs a test in `tests/test_guard.py`. Run `python3 -m unittest discover -s tests`.
-- Template changes: scaffold into a temp dir and run `tofu validate`, `packer validate`
-  (dummy PROXMOX_* env), `ansible-playbook --syntax-check`, `tofu fmt -check`, `packer fmt -check`.
+- Template changes: `.github/validate_template.sh` scaffolds every component into a temp dir and runs
+  `tofu validate`, `packer validate` (dummy PROXMOX_* env), `ansible-playbook --syntax-check`, `tofu fmt -check`,
+  `packer fmt -check`. CI (`.github/workflows/tests.yml`) runs it and the unit tests on every push and PR.
 - English only: code, identifiers, comments, docs, commit messages, issues and PRs. CI checks pull requests
   (`.github/check_english.py`); deliberate non-English samples get a `lang: allow` marker on the line.
 - Never put real IPs, hostnames, tokens or site data in this repo — they belong in the user's
