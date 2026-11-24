@@ -304,6 +304,34 @@ class ReportTests(unittest.TestCase):
         self.assertFalse(any(c[:2] == ["issue", "create"] for c in self.calls()))
         self.assertNotIn("reported-through", p.read_text())
 
+    def test_report_stops_on_names_and_tokens_left_after_redaction(self):
+        self.issues("add", "--title", "nmap_scan.py misses nas.mylab.cz", "--kind", "script",
+                    "--body", "It failed with key aB3dE5fG7hJ9kL1mN2pQx7 on Rocky-9-GenericCloud-Base, see "
+                              "https://github.com/x/y and hmlib.py, module.vm, 3f786850e387550fdab836ed7e6dc881de23001b.")
+        dry = self.issues("report", "--dry-run")
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        self.assertIn("SKILL-001: nas.mylab.cz, aB3dE5fG7hJ9kL1mN2pQx7\n", dry.stderr)   # names, not hmlib.py etc.
+        r = self.issues("report")
+        self.assertEqual(r.returncode, 6)
+        self.assertIn("Nothing sent", r.stderr)
+        self.assertFalse(any(c[:2] == ["issue", "create"] for c in self.calls()))
+        r = self.issues("report", "--keep", "nas.mylab.cz", "--dry-run")
+        self.assertIn("SKILL-001: aB3dE5fG7hJ9kL1mN2pQx7\n", r.stderr)
+        r = self.issues("report", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(any(c[:2] == ["issue", "create"] for c in self.calls()))
+
+    def test_leftover_patterns(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import issues
+        text = ("pve1.home.lan, home.arpa, nas.home.arpa, api.github.com, pve.example, x.test, docs.proxmox.com, "
+                "config_set.py, ansible.builtin.command, site.language, ubuntu-24.04-server-cloudimg-amd64, "
+                "DistUpgradeViewNonInteractive, HomelabAgentAudit2025Role, <host>.lan, pve2.<domain>, v1.2.3, "
+                "Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MA== and k3x9q2m8v7z4t6w1r5y0p")
+        self.assertEqual(issues.leftovers(text), ["pve1.home.lan", "nas.home.arpa", "Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MA==",
+                                                  "k3x9q2m8v7z4t6w1r5y0p"])
+        self.assertEqual(issues.leftovers(text, keep=["PVE1.home.lan"])[0], "nas.home.arpa")
+
     def test_report_targets_plugin_repo_updates_similar_creates_new_and_sets_marker(self):
         self.issues("add", "--title", "drift_report.py crashes without backup_jobs", "--kind", "script")
         self.issues("add", "--title", "Guard asks for gh issue list", "--kind", "guard", "--key", "guard:gh-issue-list")

@@ -6,9 +6,11 @@ reported to the plugin's GitHub repository.
                   [--body-file F | --body TEXT] [--key K]
     issues.py list [--status open|reported|resolved|all]
     issues.py show SKILL-002
-    issues.py report [--dry-run] [--match SKILL-002=42] [--new SKILL-003] [--keep WORD] [IDS…]
+    issues.py report [--dry-run] [--match SKILL-002=42] [--new SKILL-003] [--keep WORD] [--force] [IDS…]
                                               # refuses (exit 5) entries that aren't English; `add` refuses
-                                              # them too (exit 2): the plugin repository is English-only
+                                              # them too (exit 2): the plugin repository is English-only;
+                                              # refuses (exit 6) host names with a domain or tokens left after
+                                              # redaction, unless --keep'd or --force'd
                                               # send new/changed issues to the plugin repository: comment on
                                               # the same/similar GitHub issue or create one, then set the
                                               # "reported through" marker so they aren't sent again
@@ -588,6 +590,55 @@ class Redactor:
                " (secrets, e-mail addresses and paths are always removed)"
 
 
+# After redaction: names and tokens the redactor could not place (a host outside the inventory, a key in an unknown
+# format). A send stops on them unless they are --keep'd or the user checked them (--force).
+FQDN = re.compile(r"(?i)(?<![\w.@/<>-])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+([a-z]{2,24}))(?![\w-]|\.\w)")
+NAME_TLDS = {"lan", "local", "home", "arpa", "internal", "intranet", "corp", "private", "localdomain", "box", "zone",
+             "com", "net", "org", "io", "dev", "app", "cloud", "info", "biz", "xyz", "tech", "site", "online", "eu",
+             "me", "cc", "tv", "network", "systems", "space", "host", "website", "work", "club", "family"}
+FILE_EXTS = {"py", "sh", "md", "rb", "js", "ts", "go", "rs", "pl", "pm", "tf", "cs", "hs", "gz", "xz", "bz", "zs",
+             "so", "db", "ps", "el", "ml", "mk", "in", "rc", "am", "ac", "ok", "id", "pc", "cf", "lo", "di", "ex",
+             "vm", "ct", "to", "is", "as", "at", "by", "do", "be", "no", "on", "or", "it", "if"}
+PUBLIC_DOMAINS = ("github.com", "githubusercontent.com", "github.io", "proxmox.com", "example.com", "example.net",
+                  "example.org", "example", "invalid", "test", "localhost", "in-addr.arpa", "ip6.arpa",
+                  "anthropic.com", "claude.ai", "claude.com", "python.org", "pypi.org", "ubuntu.com", "debian.org",
+                  "mikrotik.com", "ui.com", "opentofu.org", "hashicorp.com", "terraform.io", "ansible.com",
+                  "packer.io", "apple.com", "microsoft.com", "redhat.com", "rockylinux.org", "almalinux.org",
+                  "fedoraproject.org", "centos.org", "kernel.org", "cloudflare.com", "google.com", "letsencrypt.org",
+                  "brew.sh", "docker.com", "docker.io", "ghcr.io", "quay.io", "nmap.org", "openssl.org",
+                  "registry.terraform.io", "registry.opentofu.org", "bpg.github.io", "wikipedia.org")
+TOKEN = re.compile(r"(?<![\w+/=-])[A-Za-z0-9_+/=-]{20,}(?![\w+/=-])")
+
+
+def random_looking(t: str) -> bool:
+    """A key or password rather than a name: 20+ letters and digits that switch between lower case, upper case and
+    digits about as often as random text does (CamelCase names, versions and paths switch far less). Hex (hashes,
+    commit IDs) is public."""
+    a = re.sub(r"[^A-Za-z0-9]", "", t)
+    if len(a) < 20 or re.fullmatch(r"[0-9a-f]+|[0-9A-F]+", a):
+        return False
+    cls = ["u" if c.isupper() else "l" if c.islower() else "d" for c in a]
+    if len(set(cls)) < 2:
+        return False   # letters of one case and digits switch less often at random; CamelCase words have no digits
+    return sum(x != y for x, y in zip(cls, cls[1:])) / (len(a) - 1) >= (0.3 if set(cls) in ({"l", "d"}, {"u", "d"})
+                                                                         else 0.45)
+
+
+def leftovers(text: str, keep=()) -> list[str]:
+    """Host names (with a domain) and token-like strings still in `text` after redaction, in order, once each."""
+    keep = {k.lower() for k in keep}
+    out = []
+    for m in FQDN.finditer(text):
+        name, tld = m.group(1).lower(), m.group(2).lower()
+        if (tld not in NAME_TLDS and (len(tld) != 2 or tld in FILE_EXTS)) or name in keep:
+            continue
+        if name in ("home.arpa", "local.lan") or any(name == d or name.endswith("." + d) for d in PUBLIC_DOMAINS):
+            continue
+        out.append(m.group(1))
+    out += [m.group(0) for m in TOKEN.finditer(text) if random_looking(m.group(0)) and m.group(0).lower() not in keep]
+    return list(dict.fromkeys(out))
+
+
 def redactor(cfg) -> Redactor:
     if "_redactor" not in cfg:
         cfg["_redactor"] = Redactor(cfg)
@@ -983,10 +1034,23 @@ def cmd_report(a, cfg):
                 print(f"    near: #{n['number']} ({sc:.0%}) \"{n['title']}\"")
             if a.dry_run:
                 print("  body:\n" + indent(st["text"]))
+    left = {}
+    for st in plan:
+        found = leftovers(st.get("title", "") + "\n" + st["text"], a.keep)
+        if found:
+            left[st["item"]["id"]] = found
     if plan:
         print("\n" + redactor(cfg).summary())
         if a.dry_run and redactor(cfg).details():
             print(redactor(cfg).details())
+    if left:
+        print("\nPossibly site-specific, not redacted (a host name with a domain, a token):\n"
+              + "\n".join(f"  {k}: " + ", ".join(v) for k, v in left.items())
+              + "\nEdit them out of skill_issues.md and re-run, or re-run with --keep VALUE for one that is generic"
+              + ("." if a.dry_run else "; --force sends anyway, only after the user checked them."), file=sys.stderr)
+        if not a.dry_run and not a.force:
+            print("Nothing sent.", file=sys.stderr)
+            return 6
     hint = fixed_hint(items)
     if hint and a.dry_run:
         print("\n" + hint)
@@ -1232,8 +1296,10 @@ def main():
                    help="comment on this GitHub issue instead of the automatic choice")
     p.add_argument("--new", action="append", default=[], metavar="ID", help="create even if a similar one exists")
     p.add_argument("--keep", action="append", default=[], metavar="WORD",
-                   help="don't redact this word, address or MAC (a plain word the site also uses as a name, a "
-                        "public address); secrets are always removed")
+                   help="don't redact or flag this word, name, address or MAC (a plain word the site also uses as "
+                        "a name, a public address or host name); secrets are always removed")
+    p.add_argument("--force", action="store_true",
+                   help="send although names or tokens that look site-specific are left (after the user checked)")
     for name in ("show", "resolve", "reopen"):
         p = sp.add_parser(name)
         p.add_argument("id")

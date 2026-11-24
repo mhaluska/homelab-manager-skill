@@ -337,6 +337,8 @@ class HookProcessTests(unittest.TestCase):
             self.assertIsNone(self.run_hook(f"cd {r} && {send}", r))
             for c in ("gh issue create -R o/r -t x -b y", f"{send}; gh issue comment 5 -b x"):   # raw gh still asks
                 self.assertEqual(self.run_hook(c, r)["hookSpecificOutput"]["permissionDecision"], "ask", c)
+            self.assertEqual(self.run_hook(send + " --force", r)["hookSpecificOutput"]["permissionDecision"], "ask")
+            self.assertIsNone(self.run_hook(send + " --force --dry-run", r))
             Path(r, "homelab.yaml").write_text(CONFIG + "issues:\n  auto_send: \"yes\"\n")   # only a real true
             self.assertEqual(self.run_hook(send, r)["hookSpecificOutput"]["permissionDecision"], "ask")
 

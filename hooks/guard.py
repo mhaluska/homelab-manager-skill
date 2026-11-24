@@ -138,6 +138,9 @@ RULES: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"\bgh\s+api\b(?![^\n;&|]*(-X|--method)\s*GET)[^\n;&|]*((-X|--method)\s*(POST|PUT|PATCH|DELETE)"
                 r"|\s(-f|-F|--field|--raw-field|--input)\b)"), ASK, "Writes to the GitHub API."),
     (re.compile(r"issues\.py\b[^\n;&|]*\s(open|report)\b(?![^\n;&|]*--dry-run)"), ASK, ISSUES_SEND),
+    (re.compile(r"issues\.py\b(?![^\n;&|]*--dry-run)[^\n;&|]*\sreport\b[^\n;&|]*\s--force\b"), ASK,
+     "Sends skill issues although issues.py found host names or tokens it could not redact: only after the user "
+     "checked them (issues.auto_send does not cover this)."),
     (re.compile(r"(config_set\.py|\byq\b[^\n;&|]*\s-i\b)[^\n;&|]*issues\.auto_send\s*=(?!=)"), ASK,
      "Lets skill issues be sent to the public plugin repository without asking (issues.auto_send): only on the "
      "user's own request."),

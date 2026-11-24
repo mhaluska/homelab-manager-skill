@@ -174,7 +174,8 @@ python3 $HM/scripts/issues.py add --title "…" --kind script|guard|instructions
   and closed: same key, already linked, similar title → **UPDATE** = a comment; else **CREATE**) and
   prints the exact sanitised text (IPs, MACs, domain, host/guest/node names, VMIDs, VLANs, storage, pools,
   bridges, user, paths, secrets → placeholders, counted in `Redacted:`). Anything still site-specific? Edit, re-run.
-  A plain word or public address redacted wrongly (a VLAN named "storage") → re-run with `--keep storage`.
+  Names/tokens it can't place are listed and stop the send (exit 6): edit them out; `--force` only after the user
+  checked. A plain word or public name redacted or listed wrongly (a VLAN "storage") → `--keep storage`.
   Fix wrong matches with `--match SKILL-002=<number>` / `--new SKILL-002`. Show the plan, get the
   user's yes, run without `--dry-run` (the guard asks too; with `issues.auto_send: true`, which only the user sets,
   their "report skill issues" is the yes and the guard doesn't ask), commit skill_issues.md. The marker stops
