@@ -3,7 +3,8 @@
 
 guard.py checks Bash commands; this hook asks before Claude changes, with its file tools,
   - homelab.yaml settings that widen what the plugin may do: the scan scope (network.authorized_ranges,
-    network.excluded_hosts), TLS checks (every verify_tls and allow_http) and issues.auto_send;
+    network.excluded_hosts), TLS checks (every verify_tls and allow_http), issues.auto_send and
+    permissions.auto_allow_readonly;
   - the installed plugin (its hooks and scripts) or any other Claude Code plugin;
   - Claude Code permission settings (.claude/settings.json, .claude/settings.local.json).
 Other edits get no decision (normal Claude Code permission handling). Fails closed: any error asks.
@@ -23,7 +24,8 @@ FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 # the plugin, its other installed versions (…/homelab-manager/<version>), and every plugin
 PLUGIN_HOMES = [PLUGIN_ROOT] + ([PLUGIN_ROOT.parent] if PLUGIN_ROOT.parent.name == "homelab-manager" else []) \
     + [Path.home() / ".claude" / "plugins"]
-WATCHED = ("network.authorized_ranges", "network.excluded_hosts", "issues.auto_send")
+WATCHED = ("network.authorized_ranges", "network.excluded_hosts", "issues.auto_send",
+           "permissions.auto_allow_readonly")
 
 
 def resolved(path: str, cwd: str) -> Path:

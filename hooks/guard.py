@@ -144,6 +144,9 @@ RULES: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"(config_set\.py|\byq\b[^\n;&|]*\s-i\b)[^\n;&|]*issues\.auto_send\s*=(?!=)"), ASK,
      "Lets skill issues be sent to the public plugin repository without asking (issues.auto_send): only on the "
      "user's own request."),
+    (re.compile(r"(config_set\.py|\byq\b[^\n;&|]*\s-i\b)[^\n;&|]*permissions\.auto_allow_readonly\s*=(?!=)"), ASK,
+     "Lets this plugin's read-only scripts run without a permission prompt (permissions.auto_allow_readonly): "
+     "only on the user's own request."),
     # --- templates / git / misc -------------------------------------------------------
     (re.compile(r"\bpacker\s+build\b[^\n;&|]*\s-force\b"), ASK, "packer build -force overwrites an existing template."),
     (re.compile(r"\bgit\s+push\b[^\n;&|]*\s(--force|--force-with-lease|-f)\b"), ASK, "Force-push rewrites Git history."),
@@ -1375,6 +1378,73 @@ def opted_in(findings: list[tuple[str, str]], cwd: str) -> list[tuple[str, str]]
     return findings
 
 
+# --- permissions.auto_allow_readonly (GitHub issue #147) -----------------------------------
+# Read-only runs of this plugin's own scripts that need no prompt once the user opted in: {script: test of its
+# arguments}. Arguments are matched exactly, never by prefix: argparse accepts abbreviations (`--app` = `--apply`).
+_SCRIPTS_DIR = PLUGIN_ROOT / "skills" / "homelab-manager" / "scripts"
+_ISSUES_READ = {"list", "show", "template"}   # subcommands without an option that writes
+
+
+def _only(*allowed: str, need: tuple[str, ...] = ()):
+    return lambda args: set(args) <= set(allowed) and all(n in args for n in need)
+
+
+def _issues_readonly(args: list[str]) -> bool:
+    if not args:
+        return False
+    sub, rest = args[0], args[1:]
+    if sub in _ISSUES_READ:
+        return True
+    if sub == "fixed":
+        return set(rest) <= {"--github"}
+    return sub == "report" and "--dry-run" in rest
+
+
+READONLY_SCRIPTS = {
+    (_SCRIPTS_DIR, "check_env.py"): _only("--json"),
+    (_SCRIPTS_DIR, "upgrade_notes.py"): _only("--all", "--json"),
+    (_SCRIPTS_DIR, "init_repo.py"): _only("--sync-managed", "--dry-run", need=("--sync-managed", "--dry-run")),
+    (_SCRIPTS_DIR, "issues.py"): _issues_readonly,
+    (_SCRIPTS_DIR, "overview.py"): _only("--check", "--no-ansible", need=("--check",)),
+    (_SCRIPTS_DIR, "drift_report.py"): _only("--stale", need=("--stale",)),
+    (PLUGIN_ROOT / "hooks", "update_check.py"): _only("--force"),
+}
+# anything a shell would interpret: a command list, pipe, redirection, substitution, variable, glob or comment
+SHELL_META_RE = re.compile(r"[;&|<>`$(){}\[\]*?~!#\\\n\r]")
+AUTO_ALLOW_REASON = ("homelab-manager guard: a read-only script of this plugin "
+                     "(permissions.auto_allow_readonly in homelab.yaml)")
+
+
+def readonly_run(command: str, cwd: str) -> bool:
+    """`python3 <script> <args>` as one simple command, where the script is in the running plugin version (not
+    another cached one) and the arguments keep it read-only (READONLY_SCRIPTS)."""
+    if SHELL_META_RE.search(command):
+        return False
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return False
+    if len(argv) < 2 or argv[0] != "python3":
+        return False
+    p = Path(argv[1])
+    p = p if p.is_absolute() else Path(cwd) / p
+    try:
+        script = p.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return False
+    test = READONLY_SCRIPTS.get((script.parent, script.name))
+    return bool(test) and script.is_file() and test(argv[2:])
+
+
+def auto_allow_readonly(cwd: str) -> bool:
+    """permissions.auto_allow_readonly: true in the repository's homelab.yaml: only the user sets it."""
+    try:
+        root = hmlib.find_repo_root(cwd)
+        return bool(root) and hmlib.get(load_config(root), "permissions.auto_allow_readonly") is True
+    except Exception:   # noqa: BLE001 — unreadable config: normal permission handling
+        return False
+
+
 def decide(findings: list[tuple[str, str]]) -> dict | None:
     if not findings:
         return None
@@ -1398,7 +1468,11 @@ def check_payload(payload) -> dict | None:
     if not isinstance(command, str):
         raise ValueError("command is not a string")
     cwd = payload.get("cwd") or os.getcwd()
-    return decide(opted_in(evaluate(command, cwd), cwd))
+    out = decide(opted_in(evaluate(command, cwd), cwd))
+    if out is None and readonly_run(command, cwd) and auto_allow_readonly(cwd):   # a finding always wins
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                                       "permissionDecisionReason": AUTO_ALLOW_REASON}}
+    return out
 
 
 def main() -> int:

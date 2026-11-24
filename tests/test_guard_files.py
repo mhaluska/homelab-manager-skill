@@ -53,6 +53,7 @@ class GuardFilesTests(unittest.TestCase):
                          "ask")
         self.assertEqual(self.edit("https://10.0.10.2:8006\n", "http://10.0.10.2:8006\n  allow_http: true\n"), "ask")
         self.assertEqual(self.edit("site:\n", "issues: {auto_send: true}\nsite:\n"), "ask")
+        self.assertEqual(self.edit("site:\n", "permissions: {auto_allow_readonly: true}\nsite:\n"), "ask")  # #147
         self.assertEqual(run("Write", {"file_path": str(self.cfg), "content": CONFIG.replace("10.0.10.0/24", "10.0.0.0/8")},
                              str(self.d)), "ask")
         self.assertEqual(run("MultiEdit", {"file_path": str(self.cfg), "edits": [

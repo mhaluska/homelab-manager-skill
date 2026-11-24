@@ -343,6 +343,61 @@ class HookProcessTests(unittest.TestCase):
             Path(r, "homelab.yaml").write_text(CONFIG + "issues:\n  auto_send: \"yes\"\n")   # only a real true
             self.assertEqual(self.run_hook(send, r)["hookSpecificOutput"]["permissionDecision"], "ask")
 
+    def test_auto_allow_readonly(self):  # GitHub issue #147
+        s, h = ROOT / "skills" / "homelab-manager" / "scripts", ROOT / "hooks"
+        allowed = [f"python3 {s}/issues.py list", f"python3 {s}/issues.py list --status open",
+                   f"python3 {s}/issues.py show SKILL-001", f"python3 {s}/issues.py template --kind idea",
+                   f"python3 {s}/issues.py fixed", f"python3 {s}/issues.py fixed --github",
+                   f"python3 {s}/issues.py report --dry-run", f"python3 {s}/issues.py report SKILL-001 --dry-run",
+                   f"python3 {s}/check_env.py", f"python3 {s}/check_env.py --json",
+                   f"python3 {s}/upgrade_notes.py --all", f"python3 {s}/init_repo.py --sync-managed --dry-run",
+                   f"python3 {s}/overview.py --check", f"python3 {s}/drift_report.py --stale",
+                   f"python3 {h}/update_check.py --force", f"python3 '{s}/issues.py' list"]
+        prompted = [f"python3 {s}/issues.py fixed --apply", f"python3 {s}/issues.py fixed --app",  # abbreviation
+                    f"python3 {s}/issues.py resolve SKILL-001", f"python3 {s}/issues.py add --title x --kind idea",
+                    f"python3 {s}/issues.py compact", f"python3 {s}/check_env.py --keychain",
+                    f"python3 {s}/check_env.py --key", f"python3 {s}/upgrade_notes.py --decline x",
+                    f"python3 {s}/init_repo.py --sync-managed", f"python3 {s}/init_repo.py --dry-run",
+                    f"python3 {s}/overview.py", f"python3 {s}/overview.py --check --out x.md",
+                    f"python3 {s}/drift_report.py", f"python3 {s}/config_set.py site.domain=lan",
+                    f"python3 {s}/with_secrets.py proxmox-ro -- python3 {s}/proxmox_inventory.py",
+                    f"python3 {s}/issues.py list; rm -rf x", f"python3 {s}/issues.py list | tail -5",
+                    f"python3 {s}/issues.py list > out.txt", f"python3 {s}/issues.py list && git push",
+                    f"python3 {s}/issues.py list\nrm x", f"python3 {s}/issues.py list $(rm x)",
+                    f"HM={s.parent}; python3 $HM/scripts/issues.py list", "python3 $HM/scripts/issues.py list",
+                    f"X=1 python3 {s}/issues.py list", f"python3 -I {s}/issues.py list", f"python {s}/issues.py list",
+                    f"sudo python3 {s}/issues.py list", "python3 -c 'print(1)'", f"python3 {s}/missing.py",
+                    f"python3 {s}/issues.py list *", f"python3 {s}/issues.py 'list"]
+        with Repo() as r:
+            for c in allowed[:3]:   # off by default
+                self.assertIsNone(self.run_hook(c, r), c)
+            Path(r, "homelab.yaml").write_text(CONFIG + "permissions:\n  auto_allow_readonly: true\n")
+            for c in allowed:
+                out = self.run_hook(c, r)
+                self.assertEqual(out and out["hookSpecificOutput"]["permissionDecision"], "allow", c)
+                self.assertIn("auto_allow_readonly", out["hookSpecificOutput"]["permissionDecisionReason"])
+            for c in prompted:
+                out = self.run_hook(c, r)
+                self.assertNotEqual(out and out["hookSpecificOutput"]["permissionDecision"], "allow", c)
+            # a finding always wins: the send still asks
+            send = self.run_hook(f"python3 {s}/issues.py report SKILL-001", r)
+            self.assertEqual(send["hookSpecificOutput"]["permissionDecision"], "ask")
+            # relative path from the script directory, and a copy outside the running plugin version
+            self.assertEqual(self.run_hook("python3 issues.py list", str(s)), None)   # no homelab.yaml up from there
+            other = Path(r, "scripts")
+            other.mkdir()
+            Path(other, "issues.py").write_text("print(1)\n")   # same name, not the plugin's script
+            self.assertIsNone(self.run_hook("python3 scripts/issues.py list", r))
+            self.assertIsNone(self.run_hook(f"python3 {other}/issues.py list", r))
+            Path(other, "link.py").symlink_to(s / "issues.py")   # resolves into the plugin: still read-only
+            self.assertEqual(self.run_hook("python3 scripts/link.py list", r)["hookSpecificOutput"]
+                             ["permissionDecision"], "allow")
+            Path(r, "homelab.yaml").write_text(CONFIG + "permissions:\n  auto_allow_readonly: \"yes\"\n")
+            self.assertIsNone(self.run_hook(allowed[0], r))   # only a real true
+            for c in ("python3 config_set.py permissions.auto_allow_readonly=true",
+                      "yq -i '.permissions.auto_allow_readonly = true' homelab.yaml"):
+                self.assertEqual(self.run_hook(c, r)["hookSpecificOutput"]["permissionDecision"], "ask", c)
+
     def test_non_bash_ignored(self):
         payload = json.dumps({"tool_name": "Read", "tool_input": {"file_path": "/x"}})
         r = subprocess.run([sys.executable, str(ROOT / "hooks" / "guard.py")], input=payload,
