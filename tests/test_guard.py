@@ -484,6 +484,29 @@ class SecretsTests(unittest.TestCase):
             self.assertIsNone(decision(c, "/"), c)
 
 
+class ProtectedFilesTests(unittest.TestCase):
+    def test_homelab_yaml_written_outside_config_set(self):
+        with Repo() as r:
+            for c in ["sed -i '' 's#10.0.10.0/24#0.0.0.0/0#' homelab.yaml", "perl -pi -e 's/x/y/' homelab.yaml",
+                      "echo 'network: {authorized_ranges: [0.0.0.0/0]}' > homelab.yaml", "cp /tmp/x homelab.yaml",
+                      "yq -i '.site.domain = \"x\"' homelab.yaml", "printf x | tee homelab.yaml",
+                      "python3 /p/config_set.py network.excluded_hosts-=10.0.10.1",
+                      "python3 /p/config_set.py 'proxmox.verify_tls=false'",
+                      "python3 /p/config_set.py 'sites[offsite].proxmox.verify_tls=false'"]:
+                self.assertEqual(decision(c, r), "ask", c)
+            for c in ["python3 /p/config_set.py site.domain=home.arpa", "python3 /p/config_set.py proxmox.verify_tls=true",
+                      "python3 /p/config_set.py 'network.excluded_hosts+=10.0.10.9'", "yq '.network' homelab.yaml",
+                      "cat homelab.yaml"]:
+                self.assertIsNone(decision(c, r), c)
+
+    def test_plugin_and_claude_settings(self):
+        with Repo() as r:
+            for c in [f"echo x >> {ROOT}/hooks/guard.py", f"sed -i '' 's/DENY/x/' {ROOT}/hooks/guard.py",
+                      f"rm {ROOT}/hooks/hooks.json", "echo '{}' > .claude/settings.json",
+                      "cp x.json ~/.claude/settings.local.json"]:
+                self.assertEqual(decision(c, r), "ask", c)
+
+
 class TofuPlanTests(unittest.TestCase):
     def setUp(self):
         self.d = Path(tempfile.mkdtemp())

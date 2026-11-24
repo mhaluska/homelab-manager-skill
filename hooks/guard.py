@@ -152,6 +152,10 @@ RULES: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"nmap_scan\.py\b[^\n;&|]*--profile[ =]os\b"), ASK, "OS detection needs `sudo nmap -O`."),
     (re.compile(r"(config_set\.py|\byq\b[^\n;&|]*\s-i\b)[^\n;&|]*authorized_ranges\s*\+?=(?!=)"), ASK,
      "Widens the scan scope (network.authorized_ranges): only for ranges the user owns, with their yes."),
+    (re.compile(r"config_set\.py\b[^\n;&|]*\s['\"]?(network\s*=|network\.excluded_hosts\s*-?=(?!=)"
+                r"|[\w.\[\]-]*verify_tls\s*=\s*['\"]?(false|no|off|0)\b)"), ASK,
+     "Narrows the scan exclusions, replaces the network settings or turns off TLS certificate checks: only with the "
+     "user's yes."),
 ]
 
 # ansible-playbook runs that change systems in high-impact ways
@@ -988,6 +992,7 @@ SECRET_VARS_RE = re.compile(r"\b(PROXMOX_(VE_API_TOKEN|TOKEN|PASSWORD)|AWS_SECRE
                             r"|[A-Z][A-Z0-9_]*_(PASSWORD|API_KEY|SECRET|TOKEN))\b")
 # the plugin itself, and its other installed versions (…/plugins/cache/<marketplace>/homelab-manager/<version>)
 PLUGIN_HOMES = [PLUGIN_ROOT] + ([PLUGIN_ROOT.parent] if PLUGIN_ROOT.parent.name == "homelab-manager" else [])
+PLUGINS_DIR = Path.home() / ".claude" / "plugins"
 
 
 def in_plugin(p: Path) -> bool:
@@ -1123,6 +1128,45 @@ def check_state_read(tok: list[str]) -> list[tuple[str, str]]:
     return []
 
 
+# --- files that guard the guard ----------------------------------------------------------
+IN_PLACE_EDITORS = {"sed", "gsed", "perl", "ruby", "yq", "awk", "gawk"}
+REMOVERS = {"rm", "unlink", "truncate", "shred"}
+
+
+def edit_targets(tok: list[str]) -> list[str]:
+    """Files a command changes in place or removes (sed -i, perl -pi, yq -i, awk -i inplace, rm, truncate, dd of=)."""
+    name = Path(tok[0]).name
+    out = [t[3:] for t in tok if t.startswith("of=")] if name == "dd" else []
+    in_place = any(t == "--in-place" or t.startswith("--in-place=")
+                   or (t.startswith("-") and not t.startswith("--") and "i" in t[1:]) for t in tok[1:])
+    if (name in IN_PLACE_EDITORS and in_place) or name in REMOVERS:
+        out += [t for t in tok[1:] if not t.startswith("-")]
+    return out
+
+
+def protected_target(target: str, cwd: str) -> str | None:
+    """Why writing this file needs the user's yes, or None."""
+    p = Path(os.path.expanduser(target))
+    p = p if p.is_absolute() else Path(cwd) / p
+    if p.name == "homelab.yaml":
+        return ("Changes homelab.yaml outside config_set.py (it holds the scan scope, TLS checks and the guard's own "
+                "settings).")
+    try:
+        r = Path(os.path.abspath(p)).resolve()
+    except OSError:
+        r = p
+    if in_plugin(r) or r.is_relative_to(PLUGINS_DIR.resolve()):
+        return "Changes the installed plugin (its guard hook and scripts)."
+    if r.name in ("settings.json", "settings.local.json") and r.parent.name == ".claude":
+        return "Changes Claude Code permission settings (.claude/settings*.json)."
+    return None
+
+
+def check_protected_writes(tok: list[str], cwd: str) -> list[tuple[str, str]]:
+    reasons = {protected_target(t, cwd) for t in write_targets(tok) + edit_targets(tok) if t and not computed(t)}
+    return [(ASK, r) for r in sorted(reasons - {None})]
+
+
 def runner_nmap_at(tok: list[str]) -> int | None:
     """Index of nmap run by a command runner: the program after find -exec/-execdir/-ok, else nmap anywhere."""
     for i, t in enumerate(tok[1:], 1):
@@ -1199,7 +1243,7 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
             findings.append((ASK, f"the program to run is computed at run time ({tok[0][:60]}); this hook cannot "
                                   f"check what it does."))
         findings += check_text(" ".join(tok))   # the command as the shell sees it: no quotes or backslashes
-        findings += check_ssh_keys(tok) + check_state_read(tok)
+        findings += check_ssh_keys(tok) + check_state_read(tok) + check_protected_writes(tok, here)
         inner = inner_command(tok)
         if inner and depth < 3:
             findings += evaluate(inner, here, depth + 1)
