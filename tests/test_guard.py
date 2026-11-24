@@ -330,6 +330,7 @@ class HookProcessTests(unittest.TestCase):
             send = "python3 $HM/scripts/issues.py report SKILL-001"
             self.assertEqual(self.run_hook(send, r)["hookSpecificOutput"]["permissionDecision"], "ask")
             self.assertIsNone(self.run_hook("python3 issues.py report --dry-run", r))
+            self.assertIsNone(self.run_hook("python3 issues.py list --status open", r))   # a filter, not a send
             for c in ("python3 config_set.py issues.auto_send=true", "yq -i '.issues.auto_send = true' homelab.yaml"):
                 self.assertEqual(self.run_hook(c, r)["hookSpecificOutput"]["permissionDecision"], "ask", c)
             Path(r, "homelab.yaml").write_text(CONFIG + "issues:\n  auto_send: true\n")

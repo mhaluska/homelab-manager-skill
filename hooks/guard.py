@@ -137,7 +137,7 @@ RULES: list[tuple[re.Pattern, str, str]] = [
                 r"|pr\s+merge|workflow\s+run)\b"), ASK, "Changes the GitHub repository or its settings."),
     (re.compile(r"\bgh\s+api\b(?![^\n;&|]*(-X|--method)\s*GET)[^\n;&|]*((-X|--method)\s*(POST|PUT|PATCH|DELETE)"
                 r"|\s(-f|-F|--field|--raw-field|--input)\b)"), ASK, "Writes to the GitHub API."),
-    (re.compile(r"issues\.py\b[^\n;&|]*\s(open|report)\b(?![^\n;&|]*--dry-run)"), ASK, ISSUES_SEND),
+    (re.compile(r"issues\.py\b[^\n;&|]*(?<!--status)\s(open|report)\b(?![^\n;&|]*--dry-run)"), ASK, ISSUES_SEND),
     (re.compile(r"issues\.py\b(?![^\n;&|]*--dry-run)[^\n;&|]*\sreport\b[^\n;&|]*\s--force\b"), ASK,
      "Sends skill issues although issues.py found host names or tokens it could not redact: only after the user "
      "checked them (issues.auto_send does not cover this)."),
