@@ -343,6 +343,55 @@ class DefaultSiteTests(unittest.TestCase):  # issue 65
                                                        "home", ["x"]))
 
 
+class TofuToInventoryTests(unittest.TestCase):
+    """tofu_to_inventory.py main(): `tofu output -json ansible_hosts` → the generated inventory file."""
+    FAKE_TOFU = """#!/usr/bin/env python3
+import os, sys, time
+mode = os.environ.get("FAKE_TOFU", "ok")
+if mode == "ok":
+    print('{"web01": {"ansible_host": "192.0.2.10", "vm_id": 101, "node": "pve1", "kind": "vm", "groups": ["linux"]},'
+          ' "db01": {"ansible_host": null, "vm_id": 102, "node": "pve1", "kind": "lxc"}}')
+elif mode == "bad":
+    print("not json")
+elif mode == "fail":
+    sys.stderr.write("Error: No outputs found\\n"); sys.exit(1)
+"""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d)
+        r = run("init_repo.py", str(self.d), "--components", "proxmox,ansible,discovery", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        b = self.d / "bin"
+        b.mkdir()
+        (b / "tofu").write_text(self.FAKE_TOFU)
+        (b / "tofu").chmod(0o755)
+        self.path = f"{b}:{os.environ['PATH']}"
+
+    def run_it(self, mode):
+        return subprocess.run([sys.executable, str(SCRIPTS / "tofu_to_inventory.py")], cwd=self.d, capture_output=True,
+                              text=True, env={**os.environ, "PATH": self.path, "FAKE_TOFU": mode})
+
+    def test_writes_inventory(self):
+        r = self.run_it("ok")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("2 host(s) in 2 group(s)", r.stdout)
+        self.assertIn("No IP yet (DHCP, guest agent not reporting): db01", r.stdout)
+        text = (self.d / "ansible/inventory/managed/tofu_hosts.yml").read_text()
+        self.assertIn('ansible_host: "192.0.2.10"', text)
+        self.assertIn("    ungrouped_tofu:", text)
+        self.assertIn("proxmox_kind: \"lxc\"", text)
+
+    def test_errors_are_one_line(self):
+        r = self.run_it("bad")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("printed no valid JSON", r.stderr)
+        r = self.run_it("fail")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("No outputs found", r.stderr)
+        self.assertFalse((self.d / "ansible/inventory/managed/tofu_hosts.yml").exists())
+
+
 class SiteTofuTests(unittest.TestCase):  # issue 52, part 2
     def setUp(self):
         self.d = tempfile.mkdtemp()

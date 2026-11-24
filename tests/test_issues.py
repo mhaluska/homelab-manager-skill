@@ -193,6 +193,21 @@ elif sys.argv[1:3] == ["repo", "view"]:
 """
 
 
+class GhTimeoutTests(unittest.TestCase):
+    def test_hanging_gh_is_a_failed_call(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import issues
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        fake = d / "gh"
+        fake.write_text("#!/bin/sh\nsleep 30\n")
+        fake.chmod(0o755)
+        with unittest.mock.patch.object(issues, "GH", str(fake)):
+            r = issues.gh(["issue", "list"], {"_root": str(d)}, timeout=1)
+        self.assertEqual(r.returncode, 124)
+        self.assertIn("did not answer in 1 s", r.stderr)
+
+
 class ReportTests(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
