@@ -98,10 +98,10 @@ RULES: list[tuple[re.Pattern, str, str]] = [
                 r"restore|importdisk|import|disk|move[-_]disk|move[-_]volume|rollback|delsnapshot|template|unlock|mount)\b"), ASK,
      "Changes a Proxmox VM/container directly (outside OpenTofu)."),
     (re.compile(r"\bpvesh\s+(create|set|delete)\b"), ASK, "Writes to the Proxmox API."),
-    (re.compile(r"pve_snapshot\.py\b[^\n;&|]*\s(delete|rollback)\b"), ASK,
-     "Deletes a guest snapshot or rolls a guest back to one (its changes since are lost)."),
+    (re.compile(r"pve_snapshot\.py\b(?![^\n;&|]*--dry-run)[^\n;&|]*\s(delete|rollback|restore|prune)\b"), ASK,
+     "Deletes guest snapshots or rolls a guest back to one (its changes since are lost)."),
     # --- LXD / Incus (containers on a NAS or an LXD/Incus host) -------------------------
-    (re.compile(r"lxd_snapshot\.py\b[^\n;&|]*\s(delete|restore)\b"), ASK,
+    (re.compile(r"lxd_snapshot\.py\b(?![^\n;&|]*--dry-run)[^\n;&|]*\s(delete|restore|rollback|prune)\b"), ASK,
      "Deletes an LXD/Incus snapshot or restores an instance to one (its changes since are lost)."),
     (re.compile(r"\b(lxc|incus)\s+((snapshot\s+)?(delete|rm|restore)\b|query\b[^\n;&|]*(-X\s*|--request[ =])(PUT|PATCH|DELETE)\b)"), ASK,
      "Deletes or restores an LXD/Incus instance or snapshot, or changes it through the API."),

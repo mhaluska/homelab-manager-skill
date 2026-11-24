@@ -894,6 +894,13 @@ class GuardConfigTests(unittest.TestCase):
         self.assertIsNone(self.d("python3 /p/pve_snapshot.py create web01 db01"))
         self.assertIsNone(self.d("python3 /p/pve_snapshot.py list web01"))
         self.assertIsNone(self.d("python3 /p/pve_snapshot.py check web01 db01 --json"))  # read-only (#49)
+        for cmd in ("python3 /p/pve_snapshot.py restore 101 --name x", "python3 /p/pve_snapshot.py prune web01 --older-than 30",
+                    "python3 /p/lxd_snapshot.py rollback app1 --name x", "python3 /p/lxd_snapshot.py prune app1 --older-than 30"):
+            self.assertEqual(self.d(cmd), "ask", cmd)
+        for cmd in ("python3 /p/pve_snapshot.py prune web01 --older-than 30 --dry-run",
+                    "python3 /p/pve_snapshot.py rollback 101 --name x --dry-run",
+                    "python3 /p/lxd_snapshot.py prune app1 --older-than 30 --dry-run"):
+            self.assertIsNone(self.d(cmd), cmd)
 
     def test_lxd_snapshot_delete_and_restore_ask(self):  # issue 44
         for cmd in ("python3 /p/lxd_snapshot.py delete app1 --name prepatch-20261117",
