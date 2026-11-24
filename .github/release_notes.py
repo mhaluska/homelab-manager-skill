@@ -16,7 +16,7 @@ REPO = "mhaluska/homelab-manager-skill"
 
 
 def section(changelog: str, version: str) -> str:
-    m = re.search(rf"^## {re.escape(version)}\b[^\n]*\n(.*?)(?=^## |\Z)", changelog, re.S | re.M)
+    m = re.search(rf"^## {re.escape(version)}(?![\w.])[^\n]*\n(.*?)(?=^## |\Z)", changelog, re.S | re.M)
     if not m:
         raise SystemExit(f"CHANGELOG.md has no '## {version}' section")
     body = m.group(1).strip()
