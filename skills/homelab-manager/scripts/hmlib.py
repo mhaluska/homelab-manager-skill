@@ -1040,6 +1040,37 @@ def ssh_host(value) -> str:
     return h
 
 
+def ssh_bin() -> str:
+    return shutil.which("ssh") or "/usr/bin/ssh"
+
+
+def ssh_cmd(host, command: list[str], user: str | None = None, port=None, timeout: int = 10,
+            options: list[str] = ()) -> list[str]:
+    """The argv of a non-interactive ssh the scripts run: no pty, agent keys only (BatchMode, never a password), no
+    connection sharing, nothing forwarded (SSH_SAFE_OPTS), the host after `--`. ValueError for a host ssh would
+    misread (ssh_host). `options` go before the safe ones (e.g. a known_hosts file)."""
+    return [ssh_bin(), "-T", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={timeout}", *options,
+            "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "LogLevel=ERROR", *SSH_SAFE_OPTS,
+            *(["-p", str(port)] if port else []), *(["-l", user] if user else []), "--", ssh_host(host), *command]
+
+
+def ssh_config(host, port=None, user: str | None = None) -> dict[str, list[str]] | None:
+    """What ssh would use for host (`ssh -G`, which reads the config and connects to nothing): {lower-case option:
+    [values]}; None when it can't tell."""
+    try:
+        r = subprocess.run([ssh_bin(), "-G", *(["-p", str(port)] if port else []), *(["-l", user] if user else []),
+                            "--", ssh_host(host)], capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    opts: dict[str, list[str]] = {}
+    for line in r.stdout.splitlines():
+        k, _, v = line.partition(" ")
+        opts.setdefault(k.lower(), []).append(v.strip())
+    return opts
+
+
 # --------------------------------------------------------------------------- untrusted data
 
 _CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")

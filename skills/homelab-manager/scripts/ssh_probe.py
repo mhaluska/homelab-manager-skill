@@ -135,11 +135,9 @@ def select(db: dict, targets: list[str], cfg: dict, managed_ips: set[str], inclu
 # --------------------------------------------------------------------------- probing
 
 def ssh_command(ip: str, user: str | None, port: int, timeout: int, known_hosts: str) -> list[str]:
-    return [shutil.which("ssh") or "/usr/bin/ssh", "-T", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={timeout}",
-            "-o", "StrictHostKeyChecking=accept-new", "-o", f"UserKnownHostsFile={known_hosts}",
-            "-o", "GlobalKnownHostsFile=/dev/null", "-o", "ControlMaster=no", "-o", "ControlPath=none",
-            "-o", "LogLevel=ERROR", *hmlib.SSH_SAFE_OPTS, "-p", str(port), *(["-l", user] if user else []),
-            "--", hmlib.ssh_host(ip), "sh", "-s"]
+    return hmlib.ssh_cmd(ip, ["sh", "-s"], user=user, port=port, timeout=timeout,
+                         options=["-o", "StrictHostKeyChecking=accept-new", "-o", f"UserKnownHostsFile={known_hosts}",
+                                  "-o", "GlobalKnownHostsFile=/dev/null"])
 
 
 NO_KEY_HINT = "ssh-add --apple-use-keychain ~/.ssh/<key>"
@@ -161,18 +159,9 @@ def agent_has_keys(sock: str | None) -> bool:
 def has_key(ip: str, user: str | None, port: int, agents: dict) -> bool:
     """ssh would have a key to offer ip: the agent its config names (IdentityAgent, else $SSH_AUTH_SOCK) holds
     one, or an identity file it would try exists on disk (GitHub issue #122). `ssh -G` only reads the config."""
-    try:
-        r = subprocess.run([shutil.which("ssh") or "/usr/bin/ssh", "-G", "-p", str(port),
-                            *(["-l", user] if user else []), "--", hmlib.ssh_host(ip)], capture_output=True, text=True,
-                           timeout=10)
-    except (OSError, ValueError, subprocess.TimeoutExpired):
+    opts = hmlib.ssh_config(ip, port, user)
+    if opts is None:
         return True
-    if r.returncode != 0:
-        return True
-    opts: dict[str, list[str]] = {}
-    for line in r.stdout.splitlines():
-        k, _, v = line.partition(" ")
-        opts.setdefault(k.lower(), []).append(v.strip())
     agent = (opts.get("identityagent") or [""])[0]
     sock = None if agent in ("", "SSH_AUTH_SOCK") else ("" if agent == "none" else
                                                           os.path.expanduser(agent.strip('"')))

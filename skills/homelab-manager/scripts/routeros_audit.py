@@ -210,12 +210,7 @@ CONSOLE_OPTS = "+ct512w"   # RouterOS login options: no colours, no terminal aut
 
 def ssh_user(host: str, port: int) -> str | None:
     """The user ssh would log in as (ssh config, else the local user): `ssh -G`, which connects to nothing."""
-    try:
-        p = subprocess.run([shutil.which("ssh") or "/usr/bin/ssh", "-G", "-p", str(port), "--", hmlib.ssh_host(host)],
-                           capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return None
-    return next((l.split(None, 1)[1].strip() for l in p.stdout.splitlines() if l.startswith("user ")), None)
+    return ((hmlib.ssh_config(host, port) or {}).get("user") or [None])[0]
 
 
 def ssh_run(host: str, user: str | None, port: int, timeout: int, command: str) -> tuple[bool, str]:
@@ -226,9 +221,7 @@ def ssh_run(host: str, user: str | None, port: int, timeout: int, command: str) 
     user = user or ssh_user(host, port)
     if user and "+" not in user:
         user += CONSOLE_OPTS
-    cmd = [shutil.which("ssh") or "/usr/bin/ssh", "-T", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={timeout}",
-           "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "LogLevel=ERROR", *hmlib.SSH_SAFE_OPTS,
-           "-p", str(port), *(["-l", user] if user else []), "--", host, command]
+    cmd = hmlib.ssh_cmd(host, [command], user=user, port=port, timeout=timeout)
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 20, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:

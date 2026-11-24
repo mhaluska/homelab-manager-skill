@@ -37,7 +37,6 @@ import datetime as dt
 import json
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -61,12 +60,9 @@ class LxdError(Exception):
 
 def ssh_run(t: dict, command: str, timeout: int) -> tuple[int, str, str]:
     try:
-        host = hmlib.ssh_host(t["address"])
+        cmd = hmlib.ssh_cmd(t["address"], [command], user=t.get("user"), port=t.get("port"), timeout=SSH_TIMEOUT)
     except ValueError as e:
         return 255, "", str(e)
-    cmd = [shutil.which("ssh") or "/usr/bin/ssh", "-T", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={SSH_TIMEOUT}",
-           "-o", "LogLevel=ERROR", *hmlib.SSH_SAFE_OPTS, *(["-p", str(t["port"])] if t.get("port") else []),
-           *(["-l", t["user"]] if t.get("user") else []), "--", host, command]
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:

@@ -61,6 +61,21 @@ class AtomicWriteTests(unittest.TestCase):
                 t.join()
         self.assertEqual(sorted(json.loads(f.read_text())["sites"]), sorted(hmlib.site_key(s) for s in sites))
 
+    def test_ssh_cmd(self):
+        cmd = hmlib.ssh_cmd("10.0.0.1", ["sh", "-s"], user="ops", port=2222, timeout=5, options=["-o", "X=1"])
+        self.assertEqual(cmd[cmd.index("--"):], ["--", "10.0.0.1", "sh", "-s"])
+        self.assertIn("BatchMode=yes", cmd)
+        self.assertIn("ConnectTimeout=5", cmd)
+        self.assertEqual(cmd[cmd.index("-p") + 1], "2222")
+        self.assertEqual(cmd[cmd.index("-l") + 1], "ops")
+        self.assertLess(cmd.index("X=1"), cmd.index("ControlMaster=no"))
+        for opt in hmlib.SSH_SAFE_OPTS:
+            self.assertIn(opt, cmd)
+        self.assertNotIn("-p", hmlib.ssh_cmd("h1", ["true"]))
+        for bad in ("-oProxyCommand=x", "", "a b"):
+            with self.assertRaises(ValueError):
+                hmlib.ssh_cmd(bad, ["true"])
+
     def test_scripts_write_repository_files_atomically(self):
         allowed = {("check_env.py", "f.write_text(ssl.DER_cert_to_PEM_cert(der))"),   # a new CA file in a temp dir
                    ("init_repo.py", "(target / rel).write_text(files[rel])"),        # new files of the scaffold
