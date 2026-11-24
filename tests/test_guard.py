@@ -345,6 +345,67 @@ class HookProcessTests(unittest.TestCase):
         self.assertEqual(r.stdout.strip(), "")
 
 
+class FailClosedTests(unittest.TestCase):
+    """Any guard failure asks instead of letting the command run unchecked."""
+
+    def run_main(self, stdin: str):
+        import contextlib
+        import io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            old = sys.stdin
+            sys.stdin = io.StringIO(stdin)
+            try:
+                self.assertEqual(guard.main(), 0)
+            finally:
+                sys.stdin = old
+                guard._deadline = None
+        return json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"] if out.getvalue().strip() else None
+
+    def test_error_on_any_command_asks(self):
+        def boom(*a, **kw):
+            raise RuntimeError("bug")
+        orig = guard.evaluate
+        guard.evaluate = boom
+        try:
+            payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "zfs destroy tank/x"}, "cwd": "/"})
+            self.assertEqual(self.run_main(payload), "ask")
+        finally:
+            guard.evaluate = orig
+
+    def test_unreadable_input_asks(self):
+        self.assertEqual(self.run_main("{not json"), "ask")
+        self.assertEqual(self.run_main("[1, 2]"), "ask")
+
+    def test_time_budget(self):
+        import time
+        guard._deadline = time.monotonic()
+        try:
+            with self.assertRaises(guard.OutOfTime):
+                guard.time_left(60)
+        finally:
+            guard._deadline = None
+        self.assertEqual(guard.time_left(60), 60)
+
+    def test_broken_install_asks(self):
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "hooks").mkdir()
+            shutil.copy(ROOT / "hooks" / "guard.py", d / "hooks" / "guard.py")
+            scripts = d / "skills" / "homelab-manager" / "scripts"
+            scripts.mkdir(parents=True)
+            (scripts / "hmlib.py").write_text("def broken(:\n")
+            run = lambda tool: subprocess.run(   # noqa: E731
+                [sys.executable, str(d / "hooks" / "guard.py")], capture_output=True, text=True, timeout=60,
+                input=json.dumps({"tool_name": tool, "tool_input": {"command": "ls"}, "cwd": str(d)}))
+            r = run("Bash")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"], "ask")
+            self.assertEqual(run("Read").stdout.strip(), "")
+        finally:
+            shutil.rmtree(d)
+
+
 class KeychainCommandTests(unittest.TestCase):
     def test_argument_order(self):
         seen = {}

@@ -10,8 +10,8 @@ even if Claude gets it wrong. It returns one of:
 
 It also scans the contents of scripts that a command executes, so wrapping a
 dangerous command in a generated script does not bypass approval.
-Fails closed: if the hook itself errors on a command that looks infrastructure
-related, it asks.
+Fails closed: if the hook itself errors (a broken install, unreadable input, a bug, its time budget used up),
+it asks.
 """
 from __future__ import annotations
 
@@ -20,15 +20,53 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT / "skills" / "homelab-manager" / "scripts"))
-import hmlib  # noqa: E402
+try:
+    import hmlib  # noqa: E402
+except Exception as _e:  # noqa: BLE001 — a broken install must not let commands run unguarded: main() asks
+    hmlib = None
+    HMLIB_ERROR: Exception | None = _e
+else:
+    HMLIB_ERROR = None
 
 DENY, ASK = "deny", "ask"
+# One time budget for everything a single hook run starts (yq, tofu show, git): hooks.json kills the hook at
+# 90 s and Claude Code then runs the command unguarded, so the hook must answer well before that.
+BUDGET_S = 45
+_deadline: float | None = None   # set by main(); None (tests, imports) = no budget
+
+
+class OutOfTime(Exception):
+    """The hook's time budget is used up: main() asks."""
+
+
+def time_left(cap: float) -> float:
+    """Timeout for the next subprocess: at most cap, and never past the hook's budget."""
+    if _deadline is None:
+        return cap
+    left = _deadline - time.monotonic()
+    if left < 2:
+        raise OutOfTime()
+    return min(cap, left)
+
+
+_configs: dict[str, dict] = {}
+
+
+def load_config(root) -> dict:
+    """hmlib.load_config once per repository and hook run (each call starts yq)."""
+    key = str(root)
+    if key not in _configs:
+        time_left(20)
+        _configs[key] = hmlib.load_config(root)
+    return _configs[key]
 ISSUES_SEND = "Sends skill issues from skill_issues.md to the plugin's public GitHub repository (gh issue create / comment)."
 
 # (regex, decision, reason). Applied to the command text and to executed script contents.
@@ -138,7 +176,6 @@ UNKNOWN = "__hm_runtime_value__"
 # Python calls that run a program: subprocess.*, os.system/popen/exec*/spawn*, asyncio subprocesses
 PY_EXEC_CALLS = re.compile(r"^(run|call|check_call|check_output|Popen|getoutput|getstatusoutput|system|popen"
                            r"|exec[lv]p?e?|spawn[lv]p?e?|create_subprocess_exec|create_subprocess_shell)$")
-INFRA_HINT = re.compile(r"\b(tofu|terraform|packer|ansible|ansible-playbook|nmap|qm|pct|pvesh|ssh|security)\b")
 
 
 HEREDOC_RUNNERS = SCRIPT_RUNNERS | {"ssh", "eval", "xargs", "osascript"}
@@ -400,7 +437,7 @@ def check_nmap(argv: list[str], cwd: str, label: str = "nmap") -> list[tuple[str
     if not root:
         return [(ASK, f"{label} outside a homelab-infrastructure repo: no homelab.yaml, so no authorized ranges to check against.")]
     try:
-        cfg = hmlib.load_config(root)
+        cfg = load_config(root)
         problems += (hmlib.check_targets(targets, cfg) if targets else
                      ["no scan targets found" + (": give them, or --site NAME to scan that site's authorized ranges"
                                                  if label == "nmap_scan.py" else "")])
@@ -429,7 +466,7 @@ def check_site_scan(site: str, cwd: str) -> list[tuple[str, str]]:
         return [(ASK, "nmap_scan.py outside a homelab-infrastructure repo: no homelab.yaml, so no authorized ranges "
                       "to check against.")]
     try:
-        targets, _ = hmlib.site_scan_ranges(hmlib.load_config(root), site)
+        targets, _ = hmlib.site_scan_ranges(load_config(root), site)
     except hmlib.ConfigError as e:
         return [(DENY, f"Scan refused: {e}")]
     return [] if targets else [(DENY, f"Scan refused: no range of site {site} is inside network.authorized_ranges"
@@ -447,7 +484,7 @@ def check_tofu_apply(tok: list[str], cwd: str) -> list[tuple[str, str]]:
         return [(ASK, "`tofu apply` without a saved, reviewed plan file.")]
     workdir = Path(cwd, chdir) if chdir else Path(cwd)
     try:
-        res = subprocess.run([tok[0], "show", "-json", plan], cwd=workdir, capture_output=True, text=True, timeout=60)
+        res = subprocess.run([tok[0], "show", "-json", plan], cwd=workdir, capture_output=True, text=True, timeout=time_left(60))
         data = json.loads(res.stdout)
     except Exception:
         return [(ASK, f"Could not inspect plan {plan} — approve only if you have reviewed it.")]
@@ -513,7 +550,8 @@ def check_gh_language(tok: list[str], cwd: str) -> list[tuple[str, str]]:
             texts.append(val)
     if repo is None:
         try:
-            r = subprocess.run(["git", "-C", cwd, "remote", "get-url", "origin"], capture_output=True, text=True, timeout=5)
+            r = subprocess.run(["git", "-C", cwd, "remote", "get-url", "origin"], capture_output=True, text=True,
+                               timeout=time_left(5))
             m = GH_REPO_RE.search(r.stdout.strip())
             repo = m.group(1) if m else None
         except (OSError, subprocess.TimeoutExpired):
@@ -656,6 +694,8 @@ def evaluate_python(content: str, cwd: str, depth: int) -> list[tuple[str, str]]
 
 
 def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
+    if depth == 0:
+        _configs.clear()   # a new command: homelab.yaml may have changed since the last one
     sh = Shell(command)
     findings = check_text(sh.rule_text)
     if depth < 3:
@@ -716,7 +756,7 @@ def auto_send(cwd: str) -> bool:
     issues without this hook asking; raw `gh issue` writes still ask."""
     try:
         root = hmlib.find_repo_root(cwd)
-        return bool(root) and hmlib.get(hmlib.load_config(root), "issues.auto_send") is True
+        return bool(root) and hmlib.get(load_config(root), "issues.auto_send") is True
     except Exception:   # noqa: BLE001 — unreadable config: keep asking
         return False
 
@@ -740,19 +780,31 @@ def decide(findings: list[tuple[str, str]]) -> dict | None:
                                    "permissionDecisionReason": "homelab-manager guard: " + " | ".join(reasons)}}
 
 
-def main() -> int:
-    try:
-        payload = json.load(sys.stdin)
-    except Exception:
-        return 0
+def check_payload(payload) -> dict | None:
+    if not isinstance(payload, dict):
+        raise ValueError("hook input is not a JSON object")
     if payload.get("tool_name") != "Bash":
-        return 0
+        return None
+    if HMLIB_ERROR is not None:
+        raise HMLIB_ERROR
     command = (payload.get("tool_input") or {}).get("command", "")
+    if not isinstance(command, str):
+        raise ValueError("command is not a string")
     cwd = payload.get("cwd") or os.getcwd()
+    return decide(opted_in(evaluate(command, cwd), cwd))
+
+
+def main() -> int:
+    """Fails closed: any error, including a plugin install that cannot import hmlib, unreadable input or a used-up
+    time budget, asks the user instead of letting the command run unchecked."""
+    global _deadline
+    _deadline = time.monotonic() + BUDGET_S
     try:
-        out = decide(opted_in(evaluate(command, cwd), cwd))
-    except Exception as e:  # fail closed for anything infra-shaped
-        out = decide([(ASK, f"guard error ({type(e).__name__}); review this command manually.")]) if INFRA_HINT.search(command) else None
+        out = check_payload(json.load(sys.stdin))
+    except OutOfTime:
+        out = decide([(ASK, "the guard ran out of time checking this command; review it manually.")])
+    except Exception as e:  # noqa: BLE001
+        out = decide([(ASK, f"guard error ({type(e).__name__}: {str(e)[:120]}); review this command manually.")])
     if out:
         print(json.dumps(out))
     return 0
