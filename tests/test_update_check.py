@@ -57,6 +57,11 @@ class UpdateCheckTests(unittest.TestCase):
         self.assertEqual((r.returncode, r.stdout), (0, ""))
         self.assertIn("failed", self.run_hook("--force").stdout)
 
+    def test_remote_url_must_be_a_plain_url(self):
+        for url in ("ext::sh -c touch% /tmp/hm-x", "--upload-pack=touch /tmp/hm-x", "-x"):
+            self.env["HM_UPDATE_URL"] = url
+            self.assertIn("is not an https, ssh or local URL", self.run_hook("--force").stdout, url)
+
     def test_old_repo_gets_suggestions_in_session_context(self):
         self.tag(self.have)
         repo = self.d / "repo"

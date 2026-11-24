@@ -57,10 +57,17 @@ def remote_url() -> str | None:
     return r.stdout.strip() or None if r.returncode == 0 else None
 
 
+# https://, ssh://, scp-like git@host:path, file:// and absolute local paths; never an option or a remote helper
+# such as ext:: (which runs a command)
+SAFE_URL_RE = re.compile(r"(https://|ssh://|file://)[^\s]+|git@[\w.-]+:[^\s]+|/[^\s]*")
+
+
 def latest_tag(url: str) -> str:
+    if not SAFE_URL_RE.fullmatch(url or ""):
+        raise RuntimeError(f"plugin Git remote {url[:80]!r} is not an https, ssh or local URL")
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0",
-           "GIT_SSH_COMMAND": "ssh -o BatchMode=yes -o ConnectTimeout=5"}
-    r = subprocess.run(["git", "ls-remote", "--tags", "--refs", url], capture_output=True, text=True,
+           "GIT_SSH_COMMAND": "ssh -o BatchMode=yes -o ConnectTimeout=5 -o ForwardAgent=no"}
+    r = subprocess.run(["git", "ls-remote", "--tags", "--refs", "--", url], capture_output=True, text=True,
                        timeout=15, env=env)
     if r.returncode != 0:
         raise RuntimeError((r.stderr.strip().splitlines() or ["git ls-remote failed"])[-1][:200])
