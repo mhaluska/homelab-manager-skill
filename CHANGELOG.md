@@ -4,9 +4,11 @@
 - `security_audit.py` reads each VM's EFI disk and reports `pve-efi-ms-cert-<vmid>` when Secure Boot keys are
   pre-enrolled but not the Microsoft 2023 certificates (`ms-cert=2023k`; `2023` and `2023w` are partial). The fix is
   `qm enroll-efi-keys <vmid>` with the VM shut down, after suspending BitLocker in Windows guests; a template's
-  clones are enrolled one by one. `references/proxmox.md` describes the procedure (GitHub issue #145).
+  clones are enrolled one by one. `references/proxmox.md` describes the procedure
+  ([#145](https://github.com/mhaluska/homelab-manager-skill/issues/145)).
 - `references/patching.md`: after patching a Proxmox node, re-check it with `check-updates.yml -e target=<node>`;
-  `ssh_probe.py` is for onboarding unknown hosts and skips managed ones (GitHub issue #144).
+  `ssh_probe.py` is for onboarding unknown hosts and skips managed ones
+  ([#144](https://github.com/mhaluska/homelab-manager-skill/issues/144)).
 
 ## 0.54.0 — 2026-11-24
 - Proxmox endpoints over plain `http://` are refused unless that site sets `allow_http: true` (the API token would

@@ -3550,6 +3550,18 @@ class FixedIssuesTests(unittest.TestCase):
         refs = self.m.changelog_refs()
         self.assertEqual((refs[9][0], refs[5][0], refs[1][0]), ("0.11.0", "0.10.0", "0.7.0"))
         self.assertNotIn("0.5.0", refs.get(12, []))   # 0.5.0 says "fix GitHub issue #12" in prose
+        self.assertEqual(refs[145], ["0.55.0"])        # GitHub issue #146: 0.55.0 linked its fixes in plain text
+
+    def test_changelog_links_every_issue(self):
+        """GitHub issue #146: `issues.py fixed` counts only linked issues, so a section from 0.50.0 on must link
+        every issue it names (`[#N](…/issues/N)`). Older sections keep deliberate bare mentions (examples, and
+        0.49.0's partial fix of #139)."""
+        text = (ROOT / "CHANGELOG.md").read_text()
+        for m in re.finditer(r"^## (\d+\.\d+\.\d+)\b.*?(?=^## |\Z)", text, re.M | re.S):
+            if self.m.vtuple(m.group(1)) < (0, 50, 0):
+                continue
+            body = re.sub(r"\[#\d+\]\([^)]*/issues/\d+\)", "", m.group(0))
+            self.assertEqual(re.findall(r"(?<![\w/&])#\d{1,6}\b", body), [], f"unlinked issue in {m.group(1)}")
 
     def test_prose_mention_in_older_release_ignored(self):
         """#13: a bare #N in an older section must not hide the release that links N."""
