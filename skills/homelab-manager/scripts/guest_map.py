@@ -237,7 +237,7 @@ def main() -> int:
         return 0
     out = Path(a.out) if a.out else root / "discovery" / "guest-map.md"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(text)
+    hmlib.atomic_write(out, text)
     n = text.split("## Findings (", 1)[1].split(")", 1)[0]
     print(f"Wrote {out.relative_to(root) if out.is_relative_to(root) else out}: {n} finding(s)", file=sys.stderr)
     return 0

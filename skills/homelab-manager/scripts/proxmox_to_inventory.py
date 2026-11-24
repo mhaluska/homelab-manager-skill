@@ -151,7 +151,7 @@ def main():
     text = to_yaml(hosts, skipped, a.group, f"{rel} ({inv.get('collected_at', '?')})",
                    hmlib.SITE_GROUP_PREFIX + site["name"] if site["name"] else "")
     if a.out:
-        Path(a.out).write_text(text)
+        hmlib.atomic_write(Path(a.out), text)
         print(f"Wrote {a.out}: {len(hosts)} host(s), {len(skipped)} skipped", file=sys.stderr)
     else:
         sys.stdout.write(text)

@@ -1714,7 +1714,7 @@ def main():
     if a.out == "-":
         sys.stdout.write(text)
         return 0
-    target.write_text(text)
+    hmlib.atomic_write(target, text)
     print(f"Wrote {target.relative_to(root) if target.is_relative_to(root) else target}")
     return 0
 

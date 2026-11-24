@@ -587,7 +587,7 @@ def main():
     text = "\n".join(L) + "\n"
     out = Path(a.out) if a.out else root / "discovery" / "drift.md"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(text)
+    hmlib.atomic_write(out, text)
     print(text)
     return 0
 

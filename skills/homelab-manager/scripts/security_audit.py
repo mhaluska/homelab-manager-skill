@@ -1293,11 +1293,11 @@ def main(argv=None):
             full.setdefault("audits", {})[scope_key] = {"date": today.isoformat(), "report": str(out.relative_to(root)),
                                                         "findings": record}
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(full, indent=2, sort_keys=True) + "\n")
+        hmlib.atomic_write(f, json.dumps(full, indent=2, sort_keys=True) + "\n")
         print(f"Wrote the findings into {f.relative_to(root)}", file=sys.stderr)
     if a.report:
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(text)
+        hmlib.atomic_write(out, text)
         print(f"Wrote {out.relative_to(root)} (a draft: add evidence from the checks still done by hand)", file=sys.stderr)
         if hmlib.get(cfg, "overview.redact", False) is True:
             print("security_audit: this repo is shared or public (overview.redact): ask the user before committing "

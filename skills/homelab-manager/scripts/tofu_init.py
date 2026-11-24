@@ -94,7 +94,7 @@ def ensure_backend_tf(env_dir: Path, kind: str) -> bool:
     if current == kind:
         return False
     hint = "" if kind == "local" else "   (under with_secrets.py <state secret>)"
-    f.write_text(BACKEND_TF.format(kind=kind, hint=hint))
+    hmlib.atomic_write(f, BACKEND_TF.format(kind=kind, hint=hint))
     print(f"backend.tf: {current or 'none'} → {kind}" + ("  (if the old backend already holds state: re-run with -- -migrate-state, needs approval)"
                                                         if current else ""), file=sys.stderr)
     return True

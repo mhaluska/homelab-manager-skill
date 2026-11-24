@@ -557,7 +557,7 @@ def inventory_site(cfg: dict, px: dict, a) -> None:
         if a.out:
             out = Path(a.out)
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(json.dumps(inv, indent=2) + "\n")
+            hmlib.atomic_write(out, json.dumps(inv, indent=2) + "\n")
         else:
             out = hmlib.proxmox_snapshot_file(cfg["_root"])
             if not a.details:

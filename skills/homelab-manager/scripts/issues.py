@@ -221,7 +221,7 @@ def render(items: list[dict], marker: str | None = None) -> str:
 
 
 def save(path: Path, items, marker: str | None = None):
-    path.write_text(render(items, marker or read_marker(path)))
+    hmlib.atomic_write(path, render(items, marker or read_marker(path)))
 
 
 def find(items, ident: str) -> dict:
@@ -1242,7 +1242,7 @@ def migrate(root: Path, dry_run: bool) -> list[str]:
             "kept for reference only.\n\n")
         with archive.open("a") as f:
             f.write(head + f"_Archived {today()}._\n\n" + "\n".join(render_archived(i) for i in old) + "\n")
-    path.write_text(render([i for i in items if "kind" in i], marker or lost))
+    hmlib.atomic_write(path, render([i for i in items if "kind" in i], marker or lost))
     return msgs
 
 

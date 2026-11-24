@@ -411,7 +411,7 @@ def edit_file(path: Path, ops: list[tuple], dry_run: bool = False) -> str:
     diff = "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True),
                                         f"a/{path.name}", f"b/{path.name}"))
     if diff and not dry_run:
-        path.write_text(new)
+        hmlib.atomic_write(path, new)
     return diff
 
 
