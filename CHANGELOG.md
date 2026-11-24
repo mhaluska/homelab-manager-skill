@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.57.0 — 2026-11-25
+- The guard checks a program an interpreter reads from stdin: `bash < x.sh` and `python3 < x.py` are checked like
+  `bash x.sh`, and an interpreter reading its program from a pipe (`cat x.sh | bash`) asks. A heredoc piped into an
+  interpreter is still checked as code.
+- After `cd ~/.ssh`, bare key names (`cat id_ed25519`, `id_*`) and archiving the directory (`tar czf k.tgz .`) are
+  denied like the full paths.
+- `nmap -iL` reads only a regular file up to 1 MiB: a device or named pipe (`/dev/zero`) blocked the hook until its
+  timeout; it is now refused. Comments in a target list no longer count as targets.
+- New "ask" rules: package upgrades and removals run directly (`apt-get dist-upgrade`, `dnf upgrade`, `zypper dup`,
+  `pveupgrade`, over `ssh` or `ansible -m shell`), `pveum` writes, `qmrestore` and `pct restore`, removing volumes
+  or file systems (`lvremove`, `vgremove`, `wipefs`, `mkfs`, `sgdisk --zap`, `dd of=/dev/…`, `diskutil erase…`), a
+  recursive `rm` over `ssh` or in a guest (`pct exec`, `docker exec`, …), RouterOS `reset-configuration` and
+  `/system backup load`. Force pushes are recognised with `git -C` and as `+branch`, `:branch`, `--delete`,
+  `--mirror` and `--prune`.
+
 ## 0.56.0 — 2026-11-24
 - Fewer permission prompts ([#147](https://github.com/mhaluska/homelab-manager-skill/issues/147)): with the new homelab.yaml key `permissions.auto_allow_readonly: true`
   the guard lets this plugin's read-only scripts run without a prompt (`issues.py list|show|template|fixed`,
