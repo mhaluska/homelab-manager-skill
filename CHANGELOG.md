@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.56.0 — 2026-11-24
+- Fewer permission prompts ([#147](https://github.com/mhaluska/homelab-manager-skill/issues/147)): with the new homelab.yaml key `permissions.auto_allow_readonly: true`
+  the guard lets this plugin's read-only scripts run without a prompt (`issues.py list|show|template|fixed`,
+  `issues.py report --dry-run`, `check_env.py`, `upgrade_notes.py`, `init_repo.py --sync-managed --dry-run`,
+  `overview.py --check`, `drift_report.py --stale`, `update_check.py --force`). Only scripts of the running plugin
+  version, only as one simple command, with arguments matched exactly; any guard finding still wins. Off by
+  default; the guard asks before it is turned on. Setup and an upgrade note offer it.
+- The template's `.claude/settings.json` allows `git add` and `git commit` (also as `git -C <repo>`);
+  `--sync-managed` adds the rules to existing repos. `git push` keeps asking.
+- SKILL.md and the references ask for simple commands that permission rules can match: one script per Bash call
+  with the skill path written out, no `HM=…;`, `cd … &&`, pipes into `tail`/`head` or heredocs, `git -C <repo>`.
+  `references/security.md` has a new "Permission prompts" section.
+- The guard no longer takes `issues.py list --status open` for a send.
+- `issues.py fixed` missed the issues 0.55.0 fixed: its changelog named them without links. They are linked now,
+  and a test keeps every issue in the changelog linked ([#146](https://github.com/mhaluska/homelab-manager-skill/issues/146)).
+
 ## 0.55.0 — 2026-11-24
 - `security_audit.py` reads each VM's EFI disk and reports `pve-efi-ms-cert-<vmid>` when Secure Boot keys are
   pre-enrolled but not the Microsoft 2023 certificates (`ms-cert=2023k`; `2023` and `2023w` are partial). The fix is
