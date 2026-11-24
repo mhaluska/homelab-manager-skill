@@ -700,6 +700,9 @@ class RedactTests(unittest.TestCase):
     def test_clean(self):
         self.assertEqual(hmlib.clean("ok\x1b[31mred\x00"), "ok[31mred")
         self.assertTrue(hmlib.clean("x" * 500).endswith("…"))
+        # zero-width, bidirectional override, line/paragraph separators, private use: invisible or reordering
+        self.assertEqual(hmlib.clean("a\u200bb\u202ec\u2028d\u2029e\ue000f\ufeff"), "abcdef")
+        self.assertEqual(hmlib.clean("Zürich café"), "Zürich café")   # lang: allow — accented letters stay
 
     def test_id_list(self):  # issue 41: ID lists are parsed, never cut
         long = ",".join(str(1000000 + i) for i in range(40))

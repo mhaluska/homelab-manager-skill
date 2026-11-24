@@ -13,6 +13,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import unicodedata
 import urllib.parse
 from pathlib import Path
 
@@ -945,15 +946,22 @@ def ssh_host(value) -> str:
 _CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
+# Unicode categories that render as nothing or reorder text: format (zero-width, bidirectional overrides), private
+# use, surrogates, line and paragraph separators
+_INVISIBLE = {"Cf", "Co", "Cs", "Zl", "Zp"}
+
+
 def clean(value, limit: int = 200):
     """Sanitise strings that come from the network (banners, hostnames, VM notes).
 
-    They are data, not instructions: strip control characters and cap the length
-    so a hostile banner can't smuggle a wall of text into the conversation.
+    They are data, not instructions: strip control characters and characters that are invisible or reorder text,
+    and cap the length so a hostile banner can't smuggle a wall of text (or hidden text) into the conversation.
     """
     if value is None:
         return None
     s = _CTRL.sub("", str(value))
+    if not s.isascii():
+        s = "".join(c for c in s if unicodedata.category(c) not in _INVISIBLE)
     return s if len(s) <= limit else s[:limit] + "…"
 
 
