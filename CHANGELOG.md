@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+- `pve_snapshot.py`: `create` and `delete` go on after a guest that fails and report every failure at the end
+  (a guest stopped for a `--mode stop` snapshot is started again); `prune --older-than 30d [--prefix P]` deletes
+  old snapshots; `--dry-run` shows what any write would do using the read-only token; `restore` is an alias of
+  `rollback`. A status read that fails is retried.
+- `lxd_snapshot.py`: the same `prune`, `--dry-run` and failure handling; `restore`/`rollback` are both accepted.
+  The guard asks before prune, restore and rollback in both scripts and lets `--dry-run` run.
+- `proxmox_inventory.py`: a node or guest that answers an error, times out or returns broken JSON no longer ends
+  the run; the snapshot is written with a "Not read" section. Nodes and guests are read in parallel (`--jobs`,
+  default 8): about three times faster on a three-node cluster.
+- Scripts write `homelab.yaml`, discovery files and generated docs atomically (a temporary file renamed into
+  place), and per-site discovery writes take a lock, so two sites scanned at once keep each other's data.
+- `nmap_scan.py`: service and OS scans give up on a host after 15 minutes (`--host-timeout`, `0` turns it off);
+  Ctrl-C stops nmap too.
+- Timeouts and a one-line error instead of a traceback for `yq`, `gh`, `tofu show` and `ansible-inventory`;
+  `ansible-inventory` runs once per script run.
+- `drift_report.py --out -` prints the report instead of writing a file named `-`.
+- `routeros_audit.py`: `--jobs` (default 8); a broken `discovery/routeros.json` is reported before connecting and
+  never replaced.
+- Maintainers: `.github/release.py` does a release but the push, `.github/validate_template.sh` checks the
+  scaffolded template with tofu, packer and ansible, and a GitHub workflow runs both test suites on every push.
+
 ## 0.57.0 — 2026-11-25
 - The guard checks a program an interpreter reads from stdin: `bash < x.sh` and `python3 < x.py` are checked like
   `bash x.sh`, and an interpreter reading its program from a pipe (`cat x.sh | bash`) asks. A heredoc piped into an
