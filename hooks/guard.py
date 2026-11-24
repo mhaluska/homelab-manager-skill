@@ -191,6 +191,10 @@ class Shell:
     code       — (language, body) of heredocs that a shell/interpreter executes (checked like commands);
                  language is "python" for a Python interpreter reading its program from stdin, else "shell"
     rule_text  — the command without data heredoc bodies (for the RULES regexes)
+    writes     — (target, body) of data heredocs written to a file (`cat > x.sh <<EOF`, `cat <<EOF | tee x.sh`), so
+                 a later `bash x.sh` in the same command is checked by that body
+    An unquoted heredoc delimiter makes the shell run $(…) and `…` inside the body even when the body is data:
+    those are commands of their own.
     """
 
     def __init__(self, command: str):
@@ -198,6 +202,7 @@ class Shell:
         self.segments: list[str] = []
         self.code: list[tuple[str, str]] = []
         self.data_spans: list[tuple[int, int]] = []
+        self.writes: list[tuple[str, str]] = []
         end = self.parse(0, None)
         while end < len(self.s):  # stray `)` or backtick at top level: keep going
             end = self.parse(end + 1, None)
@@ -250,8 +255,9 @@ class Shell:
         j += strip
         while j < n and s[j] in " \t":
             j += 1
-        k, word = j, []
+        k, word, quoted = j, [], False
         while k < n and s[k] not in " \t\n;&|<>()":
+            quoted = quoted or s[k] in "'\"\\"
             if s[k] in "'\"":
                 q = s.find(s[k], k + 1)
                 q = n if q < 0 else q
@@ -261,7 +267,7 @@ class Shell:
                 word.append(s[k].lstrip("\\"))
                 k += 1
         if word:
-            pending.append(("".join(word), strip))
+            pending.append(("".join(word), strip, quoted))
         buf.append(s[i:k])
         return k
 
@@ -272,7 +278,8 @@ class Shell:
         for seg in self.segments[line_start:]:
             lang = stdin_language(strip_prefix(tokens(seg)))
             runs = runs or lang
-        for word, strip in pending:
+        targets = [t for seg in self.segments[line_start:] for t in write_targets(tokens(seg))]
+        for word, strip, quoted in pending:
             start = i
             while i < n:
                 nl = s.find("\n", i)
@@ -288,8 +295,23 @@ class Shell:
                 self.code.append((runs, s[start:body_end]))
             else:
                 self.data_spans.append((start, body_end))
+                self.writes += [(t, s[start:body_end]) for t in targets]
+            if not quoted and runs != "shell":   # the shell expands the body: $(…) and `…` run
+                self.substitutions(start, body_end)
         pending.clear()
         return i
+
+    def substitutions(self, i: int, end: int):
+        s = self.s
+        while i < end:
+            if s[i] == "\\":
+                i += 2
+            elif s.startswith("$(", i) and not s.startswith("$((", i):
+                i = self.parse(i + 2, ")")
+            elif s[i] == "`":
+                i = self.parse(i + 1, "`")
+            else:
+                i += 1
 
     def parse(self, i: int, stop: str | None) -> int:
         s, n = self.s, len(self.s)
@@ -348,25 +370,123 @@ def tokens(segment: str) -> list[str]:
         return segment.split()
 
 
-def strip_prefix(tok: list[str]) -> list[str]:
-    """Drop env assignments, sudo/env/time/exec wrappers, and with_secrets.py wrappers."""
-    out = list(tok)
+STDOUT_REDIRECT_RE = re.compile(r"^(?:1|&)?(?:>>?|>\|)(.*)$")
+
+
+def write_targets(tok: list[str]) -> list[str]:
+    """Files a simple command writes its output to: `> f`, `>> f`, `>f`, `&> f`, `tee [-a] f…`, `cp/mv … f`."""
+    out = []
+    for i, t in enumerate(tok):
+        m = STDOUT_REDIRECT_RE.match(t)
+        if m:
+            target = m.group(1) or (tok[i + 1] if i + 1 < len(tok) else "")
+            if target and not target.startswith("&"):
+                out.append(target)
+    name = Path(tok[0]).name if tok else ""
+    if name == "tee":
+        out += [t for t in tok[1:] if not t.startswith("-") and not STDOUT_REDIRECT_RE.match(t)]
+    elif name in ("cp", "mv", "install", "ln") and len(tok) > 2 and not tok[-1].startswith("-"):
+        out.append(tok[-1])
+    elif name in ("curl", "wget"):   # curl -o FILE / --output FILE, wget -O FILE
+        opts = ("-o", "--output") if name == "curl" else ("-O", "--output-document")
+        out += [tok[i + 1] for i, t in enumerate(tok[:-1]) if t in opts]
+        out += [t.split("=", 1)[1] for t in tok if t.startswith(tuple(o + "=" for o in opts if o.startswith("--")))]
+    return out
+
+
+ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# programs that run the command given after their own options
+WRAPPERS = {"sudo", "doas", "env", "time", "exec", "nohup", "command", "builtin", "timeout", "gtimeout", "nice",
+            "caffeinate", "stdbuf", "arch", "xargs", "parallel"}
+# wrapper options whose next argument is a value, not the command (`sudo -u root nmap …`)
+_TIMEOUT_OPTS = {"-s", "-k", "--signal", "--kill-after"}
+WRAPPER_VALUE_OPTS = {
+    "sudo": {"-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U", "-T", "-R"},
+    "doas": {"-u", "-C"},
+    "env": {"-u", "-C", "-P", "--unset", "--chdir"},
+    "exec": {"-a"},
+    "nice": {"-n", "--adjustment"},
+    "timeout": _TIMEOUT_OPTS, "gtimeout": _TIMEOUT_OPTS,
+    "stdbuf": {"-i", "-o", "-e"},
+    "caffeinate": {"-t", "-w"},
+    "arch": {"-arch"},
+    "xargs": {"-I", "-J", "-L", "-n", "-P", "-s", "-E", "-d", "-a", "-R", "-S", "--max-args", "--max-procs",
+              "--delimiter", "--arg-file", "--max-lines", "--max-chars", "--eof", "--replace"},
+    "parallel": {"-j", "-S", "-a", "-I", "-d", "-n", "-N", "--jobs", "--sshlogin", "--arg-file", "--colsep",
+                 "--delimiter", "--max-args", "--max-replace-args"},
+}
+WRAPPER_POSITIONAL = {"timeout": 1, "gtimeout": 1}   # timeout DURATION command …
+STDIN_ARG_WRAPPERS = {"xargs", "parallel"}           # add arguments read from stdin to the command
+ROOT_WRAPPERS = {"sudo", "doas"}
+
+
+def unwrap(tok: list[str]) -> tuple[list[str], set[str]]:
+    """The command a segment runs: drop shell keywords, env assignments, wrappers with their options (sudo, env,
+    timeout, xargs, …) and with_secrets.py. Flags: "stdin_args" (xargs/parallel add arguments from stdin), "root"
+    (sudo/doas), "secrets" (run by with_secrets.py)."""
+    out, flags = list(tok), set()
     while out:
         t = out[0]
-        if t in SHELL_KEYWORDS:
+        name = Path(t).name
+        if t in SHELL_KEYWORDS or ASSIGNMENT_RE.match(t):
             out = out[1:]
             continue
-        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t) or t in ("sudo", "env", "time", "exec", "nohup", "command"):
+        if name in WRAPPERS and (name == t or "/" in t):
+            if name == "command" and len(out) > 1 and out[1] in ("-v", "-V"):
+                return [], flags   # `command -v nmap` looks a program up, it does not run it
+            values = WRAPPER_VALUE_OPTS.get(name, set())
             out = out[1:]
-            while out and out[0].startswith("-") and out[0] != "--":  # sudo -n, env -i, …
-                out = out[1:]
+            while out and out[0].startswith("-") and out[0] != "-":
+                opt = out[0]
+                if opt == "--":
+                    out = out[1:]
+                    break
+                if name == "env" and opt in ("-S", "--split-string") and len(out) > 1:
+                    out = tokens(out[1]) + out[2:]   # env -S 'cmd args': the string is the command
+                    break
+                out = out[2:] if opt in values and len(out) > 1 else out[1:]
+            out = out[WRAPPER_POSITIONAL.get(name, 0):]
+            flags |= {"stdin_args"} if name in STDIN_ARG_WRAPPERS else set()
+            flags |= {"root"} if name in ROOT_WRAPPERS else set()
             continue
-        if t.endswith("with_secrets.py") or (t in ("python3", "python") and len(out) > 1 and out[1].endswith("with_secrets.py")):
+        if t.endswith("with_secrets.py") or (PYTHON_RE.match(name) and len(out) > 1 and out[1].endswith("with_secrets.py")):
             idx = out.index("--") if "--" in out else len(out)
             out = out[idx + 1:]
+            flags.add("secrets")
             continue
         break
-    return out
+    return out, flags
+
+
+def strip_prefix(tok: list[str]) -> list[str]:
+    """The command a segment runs, without wrappers (see unwrap)."""
+    return unwrap(tok)[0]
+
+
+VAR_RE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+
+
+def expand(word: str, assigned: dict[str, str]) -> str:
+    """`~` and $VAR / ${VAR} the way the shell would see them: variables set earlier in the same command, then
+    the environment. $HM is this skill's base directory (SKILL.md) unless the command sets it. What stays
+    unknown is left as is, so a `$` in the result means "only known at run time"."""
+    def sub(m: re.Match) -> str:
+        name = m.group(1) or m.group(2)
+        if name in assigned:
+            return assigned[name]
+        if name in os.environ:
+            return os.environ[name]
+        if name == "HM":
+            return str(PLUGIN_ROOT / "skills" / "homelab-manager")
+        if name == "CLAUDE_PLUGIN_ROOT":
+            return str(PLUGIN_ROOT)
+        return m.group(0)
+    return VAR_RE.sub(sub, os.path.expanduser(word) if word.startswith("~") else word)
+
+
+def computed(word: str) -> bool:
+    """Only known at run time: an unexpanded variable, $(…), `…`."""
+    return "$" in word or "`" in word or "…" in word
 
 
 def stdin_language(tok: list[str]) -> str | None:
@@ -576,20 +696,125 @@ def is_python(script: Path, tok: list[str], content: str) -> bool:
     return script.suffix == ".py" if not first.startswith("#!") else "python" in first
 
 
-def script_path(tok: list[str], cwd: str) -> Path | None:
+SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
+# per interpreter: (options with a value, options whose value is the program text, options after which no script
+# file follows: a module or stdin)
+RUNNER_OPTS = {
+    "python": ({"-W", "-X", "-Q"}, {"-c"}, {"-m"}),
+    "shell": ({"-o", "-O", "+o", "+O", "--rcfile", "--init-file"}, {"-c"}, {"-s", "-i"}),
+    "perl": ({"-I", "-M", "-m"}, {"-e", "-E"}, set()),
+    "ruby": ({"-I", "-r", "-C", "-E"}, {"-e"}, set()),
+    "node": ({"-r", "--require", "--import", "--loader", "--input-type"}, {"-e", "--eval", "-p", "--print"}, set()),
+}
+REDIRECT_RE = re.compile(r"^\d*(<<?|>>?|&>|<>)")
+
+
+def runner_kind(name: str) -> str | None:
+    if PYTHON_RE.match(name):
+        return "python"
+    if name in SHELLS:
+        return "shell"
+    return {"perl": "perl", "ruby": "ruby", "node": "node"}.get(name)
+
+
+def runner_parse(tok: list[str]) -> tuple[str, str]:
+    """What an interpreter command runs: ("code", text) for -c/-e, ("script", operand), ("stdin", "") or
+    ("none", "") (a module, interactive). Interpreter options and their values are skipped, so
+    `bash -x x.sh` and `python3 -u x.py` find the script."""
+    name = Path(tok[0]).name
+    if name in ("source", "."):
+        return ("script", tok[1]) if len(tok) > 1 else ("none", "")
+    value_opts, code_opts, end_opts = RUNNER_OPTS[runner_kind(name)]
+    i = 1
+    while i < len(tok):
+        t = tok[i]
+        if t == "--":
+            i += 1
+            break
+        if t == "-":
+            return "stdin", ""
+        if REDIRECT_RE.match(t):
+            i += 1 + (REDIRECT_RE.fullmatch(t) is not None)   # `> file`: the file too
+            continue
+        if not t.startswith(("-", "+")):
+            break
+        if t.startswith("--"):
+            opt, eq, val = t.partition("=")
+            if opt in code_opts:
+                return "code", val if eq else (tok[i + 1] if i + 1 < len(tok) else "")
+            if opt in end_opts:
+                return ("stdin", "") if opt == "-s" else ("none", "")
+            i += 1 + (opt in value_opts and not eq)
+            continue
+        i += 1
+        for j in range(1, len(t)):   # a cluster of short options: -xc, -Ilib, -cCODE
+            o = t[0] + t[j]
+            if o in code_opts:
+                rest = t[j + 1:]
+                return "code", rest if rest else (tok[i] if i < len(tok) else "")
+            if o in end_opts:
+                return ("stdin", "") if o == "-s" else ("none", "")
+            if o in value_opts:
+                i += (j + 1 == len(t))   # the value is the next word unless it is attached
+                break
+    if i < len(tok):
+        return "script", tok[i]
+    return "stdin", ""
+
+
+SYSTEM_DIRS = ("/usr/", "/bin/", "/sbin/", "/opt/homebrew/", "/System/", "/Library/", "/Applications/", "/nix/")
+
+
+def is_text_file(p: Path) -> bool:
+    try:
+        with open(p, "rb") as f:
+            return b"\0" not in f.read(4096)
+    except OSError:
+        return False
+
+
+def script_target(tok: list[str], cwd: str | None, assigned: dict[str, str]) -> tuple[str | None, Path | str | None]:
+    """The script file a command runs, and its state:
+      ("file", path)        — exists: its content is checked
+      ("missing", path)     — does not exist (yet): created by this same command, or a typo
+      ("computed", word)    — its path is only known at run time ($VAR, $(…), a `cd` to such a directory)
+      (None, None)          — runs no script file (a binary, -c code, a module, stdin)
+    Interpreter options are skipped; a bare command name found in PATH outside the system directories is a script
+    too when it is a text file (a generated ~/bin/helper)."""
     if not tok:
-        return None
-    first = tok[0]
-    cand = None
-    if Path(first).name in SCRIPT_RUNNERS and len(tok) > 1 and not tok[1].startswith("-"):
-        cand = tok[1]
+        return None, None
+    first, name = tok[0], Path(tok[0]).name
+    if runner_kind(name) or name in ("source", "."):
+        kind, cand = runner_parse(tok)
+        if kind != "script":
+            return None, None
     elif "/" in first:
         cand = first
-    if not cand:
+    else:
+        found = shutil.which(expand(first, assigned))
+        if not found or found.startswith(SYSTEM_DIRS) or not is_text_file(Path(found)):
+            return None, None
+        return "file", Path(found)
+    word = expand(cand, assigned)
+    if computed(word):
+        return "computed", word
+    p = Path(word)
+    if not p.is_absolute():
+        if cwd is None:
+            return "computed", word
+        p = Path(cwd) / p
+    if p.is_file():
+        return "file", p
+    return (None, None) if p.exists() else ("missing", p)
+
+
+def interpreter_code(tok: list[str]) -> tuple[str, str] | None:
+    """(kind, program text) for `python3 -c CODE`, `bash -lc CODE`, `perl -e CODE`, …"""
+    kind = runner_kind(Path(tok[0]).name)
+    if not kind:
         return None
-    p = Path(os.path.expanduser(cand))
-    p = p if p.is_absolute() else Path(cwd) / p
-    return p if p.is_file() else None
+    what, text = runner_parse(tok)
+    return (kind, text) if what == "code" else None
 
 
 SSH_VALUE_OPTS = set("bcDEeFIiJLlmOoPpQRSWw")
@@ -598,8 +823,9 @@ SSH_VALUE_OPTS = set("bcDEeFIiJLlmOoPpQRSWw")
 def inner_command(tok: list[str]) -> str | None:
     """The command string that `bash -c STR`, `eval STR…` or `ssh [opts] host CMD…` runs."""
     name = Path(tok[0]).name
-    if name in ("bash", "sh", "zsh", "dash", "ksh") and "-c" in tok[1:-1]:
-        return tok[tok.index("-c") + 1]
+    if name in SHELLS:
+        code = interpreter_code(tok)
+        return code[1] if code else None
     if name == "eval":
         return " ".join(tok[1:])
     if name == "ssh":
@@ -693,6 +919,55 @@ def evaluate_python(content: str, cwd: str, depth: int) -> list[tuple[str, str]]
     return findings
 
 
+# programs that run a command given in their arguments (`find -exec nmap`, `watch nmap`, `docker exec c nmap`)
+CMD_RUNNERS = {"find", "watch", "script", "unbuffer", "proxychains", "proxychains4", "flock", "sg", "chroot",
+               "ionice", "taskset", "numactl", "sshpass", "docker", "podman", "nerdctl", "kubectl", "limactl", "orb"}
+SCAN_SCRIPTS = ("nmap_scan.py", "ssh_probe.py")
+# this plugin's own scripts: `python3 issues.py …` in the wrong directory only fails, so a missing one does not ask
+# unless something earlier in the same command writes a file of that name
+PLUGIN_SCRIPT_NAMES = {f.name for d in (PLUGIN_ROOT / "skills" / "homelab-manager" / "scripts", PLUGIN_ROOT / "hooks")
+                       if d.is_dir() for f in d.iterdir() if f.suffix == ".py"}
+
+
+def runner_nmap_at(tok: list[str]) -> int | None:
+    """Index of nmap run by a command runner: the program after find -exec/-execdir/-ok, else nmap anywhere."""
+    for i, t in enumerate(tok[1:], 1):
+        if Path(t).name == "nmap" and (Path(tok[0]).name != "find"
+                                       or tok[i - 1] in ("-exec", "-execdir", "-ok", "-okdir")):
+            return i
+    return None
+
+
+def check_scan_script(script_name: str, tok: list[str], cwd: str) -> list[tuple[str, str]]:
+    """nmap_scan.py / ssh_probe.py: their targets must be inside the authorized ranges."""
+    value_opts = NMAP_SCAN_VALUE_OPTS if script_name == "nmap_scan.py" else SSH_PROBE_VALUE_OPTS
+    args = tok[tok.index(next(t for t in tok if t.endswith(script_name))) + 1:]
+    targets = [a for i, a in enumerate(args) if not a.startswith("-")
+               and (i == 0 or args[i - 1] not in value_opts)]
+    site = option_value(args, "--site")
+    if not targets and script_name == "nmap_scan.py" and option_value(args, "--forget-missing") is not None:
+        return []   # edits network.json, scans nothing; the script refuses targets with it (GitHub issue #127)
+    if not targets and site is not None and script_name == "nmap_scan.py":
+        return check_site_scan(site, cwd)  # the site's authorized ranges (GitHub issue #118)
+    if targets or script_name == "nmap_scan.py":  # ssh_probe.py without targets: hosts from network.json
+        return check_nmap(targets, cwd, label=script_name)
+    return []
+
+
+def check_script_content(script: Path, content: str, tok: list[str], depth: int) -> list[tuple[str, str]]:
+    if is_python(script, tok, content):
+        sub = evaluate_python(content, str(script.parent), depth + 1)
+    else:
+        sub = evaluate(content, str(script.parent), depth + 1)
+        if re.search(r"\bnmap\b", content):
+            sub.append((ASK, "runs nmap with targets this hook cannot verify."))
+    return [(d, f"script {script.name}: {r}") for d, r in sub]
+
+
+def same_file(a: str, b: Path, cwd: str) -> bool:
+    return os.path.normpath(os.path.join(cwd, os.path.expanduser(a))) == os.path.normpath(str(b))
+
+
 def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
     if depth == 0:
         _configs.clear()   # a new command: homelab.yaml may have changed since the last one
@@ -701,36 +976,78 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
     if depth < 3:
         for lang, body in sh.code:  # heredoc a shell or interpreter runs: same checks as a command
             findings += evaluate_python(body, cwd, depth + 1) if lang == "python" else evaluate(body, cwd, depth + 1)
+    cur: str | None = cwd          # follows `cd` in this command; None once it goes somewhere only known at run time
+    assigned: dict[str, str] = {}  # VAR=value set earlier in this command
+    produced: set[str] = set()     # names of files written earlier in this command (tofu plan -out, >, cp, tee)
     for seg in sh.segments:
-        tok = strip_prefix(tokens(seg))
+        raw = tokens(seg)
+        if raw and raw[0] in ("export", "local", "declare", "readonly", "typeset"):
+            raw = raw[1:]
+        if raw and all(ASSIGNMENT_RE.match(t) for t in raw):
+            for t in raw:
+                k, v = t.split("=", 1)
+                assigned[k] = expand(v, assigned)
+            continue
+        tok, flags = unwrap(raw)
         if not tok:
             continue
+        tok = [expand(t, assigned) for t in tok]
+        here = cur or cwd
+        if tok[0] in ("cd", "pushd", "popd"):
+            dest = next((t for t in tok[1:] if not t.startswith("-")), os.path.expanduser("~"))
+            unknown = computed(dest) or cur is None or tok[0] == "popd" or "-" in tok[1:]
+            cur = None if unknown else os.path.normpath(os.path.join(cur, dest))
+            continue
         name = Path(tok[0]).name
+        if computed(tok[0]):
+            findings.append((ASK, f"the program to run is computed at run time ({tok[0][:60]}); this hook cannot "
+                                  f"check what it does."))
+        findings += check_text(" ".join(tok))   # the command as the shell sees it: no quotes or backslashes
         inner = inner_command(tok)
         if inner and depth < 3:
-            findings += evaluate(inner, cwd, depth + 1)
+            findings += evaluate(inner, here, depth + 1)
+        code = interpreter_code(tok)
+        if code and code[0] == "python" and depth < 3:
+            findings += [(d, f"python3 -c: {r}") for d, r in evaluate_python(code[1], here, depth + 1)]
+        elif code and code[0] in ("perl", "ruby", "node"):
+            findings += check_text(code[1])
+            if re.search(r"\b(nmap|security|qm|pct|pvesh|tofu|terraform)\b", code[1]):
+                findings.append((ASK, f"{name} code runs commands this hook cannot check."))
         if name == "nmap":
-            findings += check_nmap(tok[1:], cwd)
+            if "stdin_args" not in flags or nmap_targets(tok[1:], here)[0]:   # xargs: targets may all come from stdin
+                findings += check_nmap(tok[1:], here)
+            if "stdin_args" in flags:
+                findings.append((ASK, "nmap gets further targets from input this hook cannot see (xargs/parallel)."))
+            if "root" in flags:
+                findings.append((ASK, "Runs nmap as root (OS detection). Root nmap can do anything on this Mac."))
+        elif name in CMD_RUNNERS and (at := runner_nmap_at(tok)):
+            findings += [f for f in check_nmap([t for t in tok[at + 1:] if t not in ("{}", ";", "+")], here)
+                         if f[0] == DENY]
+            findings.append((ASK, f"runs nmap through {name}; this hook cannot verify its targets."))
         elif name in ("tofu", "terraform"):
-            findings += check_tofu_apply(tok, cwd)
+            findings += check_tofu_apply(tok, here)
         elif name == "ansible-playbook":
             findings += check_ansible_playbook(tok)
         elif name == "gh":
-            findings += check_gh_language(tok, cwd)
-        script = script_path(tok, cwd)
-        if script and script.name in ("nmap_scan.py", "ssh_probe.py"):
-            value_opts = NMAP_SCAN_VALUE_OPTS if script.name == "nmap_scan.py" else SSH_PROBE_VALUE_OPTS
-            args = tok[tok.index(next(t for t in tok if t.endswith(script.name))) + 1:]
-            targets = [a for i, a in enumerate(args) if not a.startswith("-")
-                       and (i == 0 or args[i - 1] not in value_opts)]
-            site = option_value(args, "--site")
-            if not targets and script.name == "nmap_scan.py" and option_value(args, "--forget-missing") is not None:
-                pass   # edits network.json, scans nothing; the script refuses targets with it (GitHub issue #127)
-            elif not targets and site is not None and script.name == "nmap_scan.py":
-                findings += check_site_scan(site, cwd)  # the site's authorized ranges (GitHub issue #118)
-            elif targets or script.name == "nmap_scan.py":  # ssh_probe.py without targets: hosts from network.json
-                findings += check_nmap(targets, cwd, label=script.name)
-        elif script and depth < 2:
+            findings += check_gh_language(tok, here)
+        state, script = script_target(tok, cur, assigned)
+        script_name = Path(str(script)).name if script else ""
+        if script_name in SCAN_SCRIPTS:
+            findings += check_scan_script(script_name, tok, here)
+        if state == "computed" and script_name not in SCAN_SCRIPTS:
+            findings.append((ASK, f"runs a script whose path is only known at run time ({str(script)[:80]}); "
+                                  f"this hook cannot check it."))
+        elif state == "missing":
+            written = [body for target, body in sh.writes if same_file(expand(target, assigned), script, cwd)
+                       or (cur and same_file(expand(target, assigned), script, cur))]
+            if written and depth < 2:
+                for body in written:
+                    findings += check_script_content(script, body, tok, depth)
+            elif not written and script_name not in SCAN_SCRIPTS and (script_name not in PLUGIN_SCRIPT_NAMES
+                                                                      or script_name in produced):
+                findings.append((ASK, f"runs {script_name}, which does not exist yet (written by this same command?) "
+                                      f"or not at {script}; this hook cannot check it."))
+        elif state == "file" and script_name not in SCAN_SCRIPTS and depth < 2:
             try:
                 plugin_owned = script.resolve().is_relative_to(PLUGIN_ROOT)
             except OSError:
@@ -740,14 +1057,8 @@ def evaluate(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]]:
                     content = script.read_text(errors="replace")[:500_000]
                 except OSError:
                     content = ""
-                if is_python(script, tok, content):
-                    sub = evaluate_python(content, str(script.parent), depth + 1)
-                else:
-                    sub = evaluate(content, str(script.parent), depth + 1)
-                    if re.search(r"\bnmap\b", content):
-                        sub.append((ASK, "runs nmap with targets this hook cannot verify."))
-                for decision, reason in sub:
-                    findings.append((decision, f"script {script.name}: {reason}"))
+                findings += check_script_content(script, content, tok, depth)
+        produced.update(Path(t).name for t in write_targets(tok))
     return findings
 
 
