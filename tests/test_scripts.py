@@ -82,7 +82,8 @@ class InitComponentsTests(unittest.TestCase):
         self.assertIn("Read(~/.ssh/id_*)", d["permissions"]["deny"])
         self.assertEqual(d["permissions"]["deny"].count("Read(**/*.tfstate)"), 1)
         self.assertIn("Bash(tofu apply:*)", d["permissions"]["ask"])
-        self.assertEqual(d["permissions"]["allow"], ["Bash(ls:*)"])          # user's rules kept
+        self.assertEqual(d["permissions"]["allow"][0], "Bash(ls:*)")        # user's rules kept, first
+        self.assertIn("Bash(git add *)", d["permissions"]["allow"])
         self.assertTrue(d["enabledPlugins"]["homelab-manager@homelab-manager-skill"])
         r = run("init_repo.py", self.d, "--add-components", "discovery", cwd=self.d)
         self.assertNotIn("Merged", r.stdout)                                  # idempotent
