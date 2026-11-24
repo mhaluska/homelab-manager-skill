@@ -207,6 +207,61 @@ class PveSnapshotTests(unittest.TestCase):  # issue 37
             return "UPID:pve1:1"
         self.pve.get = get
 
+    def test_multi_guest_create_goes_on_after_a_failure(self):
+        orig = self.pve.get
+
+        def get(path, _method="GET", **params):
+            if _method == "POST" and "/101/" in path:
+                raise self.s.PveError("Proxmox API refused POST /nodes/pve1/qemu/101/snapshot (500): storage full")
+            return orig(path, _method, **params)
+        self.pve.get = get
+        gs = self.s.find_guests(self.pve, ["web01", "dns"])
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
+            problems = self.s.apply(self.pve, "create", gs, "prepatch-1")
+        self.assertEqual(len(problems), 1)
+        self.assertIn("101 web01: Proxmox API refused", problems[0])
+        self.assertIn("901 dns: create 'prepatch-1' done", out.getvalue())
+        self.assertIn("create: done for 1, failed for 1", out.getvalue())
+
+    def test_wait_retries_a_transient_status_error(self):
+        answers = [self.s.PveError("timed out"), self.s.PveError("595"), {"status": "running"},
+                   {"status": "stopped", "exitstatus": "OK"}]
+
+        def status(path, **_):
+            a = answers.pop(0)
+            if isinstance(a, BaseException):
+                raise a
+            return a
+        self.pve.get = status
+        self.s.wait(self.pve, "pve1", "UPID", "create", sleep=lambda _: None)
+        self.assertEqual(answers, [])
+        self.pve.get = lambda path, **_: (_ for _ in ()).throw(self.s.PveError("down"))
+        with self.assertRaises(SystemExit) as e:
+            self.s.wait(self.pve, "pve1", "UPID", "create", sleep=lambda _: None)
+        self.assertIn("cannot read the task status", str(e.exception))
+
+    def test_prune_and_dry_run(self):
+        day = 86400
+        now = 100 * day
+        snaps = [{"name": "prepatch-a", "snaptime": now - 40 * day}, {"name": "prepatch-b", "snaptime": now - 2 * day},
+                 {"name": "manual", "snaptime": now - 90 * day}, {"name": "prepatch-c", "snaptime": now - 31 * day}]
+        self.assertEqual(self.s.prunable(snaps, "prepatch-", 30, now), ["prepatch-a", "prepatch-c"])
+        self.assertEqual(self.s.prunable(snaps, "prepatch-", 50, now), [])
+        self.snaps[101] = [{"name": "current"}, {"name": "prepatch-old", "snaptime": 1}, {"name": "keep", "snaptime": 1}]
+        g = self.s.find_guests(self.pve, ["web01"])
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.s.prune(self.pve, g, "prepatch-", 30, dry_run=True), [])
+        self.assertIn("would delete prepatch-old", out.getvalue())
+        self.assertFalse([c for c in self.calls if c[0] != "GET"])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.s.dry_run(self.pve, "rollback", g, "missing"), 1)
+            self.assertEqual(self.s.dry_run(self.pve, "create", g, "prepatch-new"), 0)
+        self.assertFalse([c for c in self.calls if c[0] != "GET"])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.s.prune(self.pve, g, "prepatch-", 30), [])
+        self.assertEqual([c[:2] for c in self.calls if c[0] != "GET"],
+                         [("DELETE", "/nodes/pve1/qemu/101/snapshot/prepatch-old")])
+
     def test_infer_site(self):  # issue 83
         cfg = {"_root": "/nonexistent", "proxmox": {"endpoint": "https://pve1.example:8006"},
                "sites": [{"name": "home"}, {"name": "offsite", "ranges": ["192.0.2.0/24"],
@@ -425,6 +480,22 @@ class LxdSnapshotTests(unittest.TestCase):  # issue 44
         self.assertEqual(self.writes[0][0][-1], "/share/CACHEDEV1_DATA/.qpkg/container-station/bin/lxc")
         with self.assertRaises(self.l.LxdError):
             self.l.apply(api, "restore", "missing")
+
+    def test_prune_and_dry_run(self):
+        import datetime as dt
+        now = dt.datetime(2026, 3, 1, tzinfo=dt.timezone.utc)
+        snaps = [{"name": "prepatch-a", "created_at": "2026-01-01T00:00:00Z"},
+                 {"name": "prepatch-b", "created_at": "2026-02-28T00:00:00.123456789Z"},
+                 {"name": "manual", "created_at": "2025-01-01T00:00:00Z"}, {"name": "prepatch-x", "created_at": "?"}]
+        self.assertEqual(self.l.prunable(snaps, "prepatch-", 30, now), ["prepatch-a"])
+        found, _ = self.l.targets(self.hosts, ["app1"])
+        api = self.l.Api(found["app1"], self.run)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertTrue(self.l.dry_run(api, "delete", "old"))
+            self.assertFalse(self.l.dry_run(api, "restore", "missing"))
+            self.assertTrue(self.l.dry_run(api, "create", "prepatch-new"))
+        self.assertIn("would delete snapshot 'old'", out.getvalue())
+        self.assertEqual(self.writes, [])
 
     def test_restore_zfs_refuses_with_newer(self):
         self.snaps["app1"].append({"name": "auto-1", "created_at": "2026-02-01T00:00:00Z"})
