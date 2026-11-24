@@ -4,3 +4,4 @@ __pycache__/
 # eval run output
 *-workspace/
 skills/homelab-manager/evals/results/
+.ansible/
