@@ -16,7 +16,7 @@ import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from helpers import ROOT, SCRIPTS, run, yq  # noqa: E402,F401
+from helpers import ROOT, SCRIPTS, closed_http_error, run, yq  # noqa: E402,F401
 
 sys.path.insert(0, str(ROOT / "hooks"))
 import guard  # noqa: E402,F401
@@ -120,6 +120,67 @@ class TokenAclTests(unittest.TestCase):
         self.assertEqual(new.count("Both tokens use privilege separation"), 1)
         self.assertLess(new.index("Both tokens"), new.index("## Read-only"))
         self.assertIn("Up to date", run("init_repo.py", str(self.d), "--sync-managed", cwd=self.d).stdout)
+
+
+class InventoryErrorTests(unittest.TestCase):
+    """One node or guest failing (HTTP 500/595, a timeout, broken JSON) must not lose the rest of the snapshot."""
+
+    def test_failing_node_and_guest_are_recorded(self):
+        import socket
+        import urllib.error
+        sys.path.insert(0, str(SCRIPTS))
+        import proxmox_inventory as inv
+        pve = inv.PVE("https://pve.example:8006", "homelab@pve!ro=s3cret", None)
+        resources = [{"type": "node", "node": n, "status": "online", "maxcpu": 4, "cpu": 0.1, "maxmem": 2 ** 33,
+                      "mem": 2 ** 32} for n in ("pve1", "pve2")]
+        resources += [{"type": t, "vmid": v, "name": f"g{v}", "node": n, "status": "running", "maxcpu": 1,
+                       "maxmem": 2 ** 30, "maxdisk": 2 ** 33}
+                      for t, v, n in (("qemu", 101, "pve1"), ("qemu", 102, "pve2"), ("lxc", 201, "pve1"))]
+
+        def fake(path, **_):
+            if path == "/version":
+                return {"version": "9.0.3"}
+            if path == "/cluster/resources":
+                return resources
+            if path.startswith("/nodes/pve2/network"):
+                raise closed_http_error(path, 500, "Internal Server Error", {}, None)
+            if path.startswith("/nodes/pve2/status"):
+                raise socket.timeout("timed out")
+            if path.endswith("/qemu/102/config"):
+                raise ValueError("Expecting value")
+            if path.endswith("/config"):
+                return {"net0": "virtio=BC:24:11:00:00:01,bridge=vmbr0"}
+            if path.startswith("/nodes/pve1/status"):
+                return {"pveversion": "pve-manager/9.0.3"}
+            return [] if not path.endswith(("/subscription", "/current")) else {}
+        pve._get = fake
+        snap = inv.collect(pve, details=True)
+        self.assertEqual([n["node"] for n in snap["nodes"]], ["pve1", "pve2"])
+        self.assertEqual([g["vmid"] for g in snap["guests"]], [101, 102, 201])
+        self.assertIn("config", snap["guests"][0])
+        self.assertNotIn("config", snap["guests"][1])
+        self.assertEqual(snap["nodes"][0]["pveversion"], "pve-manager/9.0.3")
+        errs = "\n".join(snap["errors"])
+        self.assertIn("node pve2 network: Proxmox API refused /nodes/pve2/network (500)", errs)
+        self.assertIn("node pve2 status: Proxmox API /nodes/pve2/status: timed out", errs)
+        self.assertIn("guest 102 config: Proxmox API /nodes/pve2/qemu/102/config: the answer is not valid JSON", errs)
+        self.assertEqual(len(snap["errors"]), 3)
+        text = inv.summary(snap)
+        self.assertIn("Not read (3 API call(s) failed", text)
+
+    def test_unreachable_is_a_pve_error(self):
+        import urllib.error
+        sys.path.insert(0, str(SCRIPTS))
+        import proxmox_inventory as inv
+        pve = inv.PVE("https://pve.example:8006", "homelab@pve!ro=s3cret", None)
+
+        def down(path, **_):
+            raise urllib.error.URLError(ConnectionRefusedError(61, "Connection refused"))
+        pve._get = down
+        with self.assertRaises(inv.PveError) as e:
+            pve.get("/version")
+        self.assertIn("Cannot reach Proxmox", str(e.exception))
+        self.assertIsInstance(e.exception, SystemExit)   # scripts that don't catch it still end with the message
 
 
 class PveSnapshotTests(unittest.TestCase):  # issue 37
@@ -637,7 +698,7 @@ class ProxmoxTlsAndPermissionTests(unittest.TestCase):
         def fake(path, **_):
             if path == "/access/permissions":
                 return perms
-            raise urllib.error.HTTPError(path, 403, "Forbidden", {}, None)
+            raise closed_http_error(path, 403, "Forbidden", {}, None)
         pve._get = fake
         return pve
 
