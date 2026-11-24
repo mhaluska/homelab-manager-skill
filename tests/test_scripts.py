@@ -636,6 +636,8 @@ class SettingsUpgradeTests(unittest.TestCase):
             self.assertIn("Read(~/secret)", have["permissions"]["deny"])
             self.assertIn("Read(~/.kube/config)", have["permissions"]["deny"])
             self.assertIn("Bash(packer build:*)", have["permissions"]["ask"])
+            self.assertIn("Bash(git commit *)", have["permissions"]["allow"])   # GitHub issue #147
+            self.assertNotIn("push", json.dumps(have["permissions"]["allow"]))
             self.assertEqual(have["model"], "x")
             p.write_text("{oops")                                       # the user's broken file: left alone
             self.assertNotIn("settings.json", run("init_repo.py", str(d), "--sync-managed", "--dry-run", cwd=d).stdout)

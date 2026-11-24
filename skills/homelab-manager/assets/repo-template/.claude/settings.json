@@ -1,5 +1,11 @@
 {
   "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git -C * add *)",
+      "Bash(git -C * commit *)"
+    ],
     "deny": [
       "Read(~/.ssh/id_*)",
       "Read(~/.ssh/*key*)",

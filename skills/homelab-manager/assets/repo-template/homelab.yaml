@@ -137,6 +137,9 @@ issues:
   file: skill_issues.md            # problems with / ideas for the homelab-manager skill itself (not the homelab)
   report: true               # offer to report them to the plugin's GitHub repository (sanitised, asks first)
 
+permissions:
+  auto_allow_readonly: false # true: the skill's read-only scripts run without a prompt (references/security.md)
+
 upgrades:
   reviewed: ""               # upgrade notes reviewed up to this plugin version (init_repo.py --sync-managed)
 
