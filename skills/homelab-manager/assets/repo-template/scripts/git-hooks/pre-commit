@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
-# Refuse commits that contain state files, private keys or tokens.
+# Refuse commits that contain state files, private keys or tokens (the same names .gitignore keeps out).
 set -euo pipefail
 fail=0
-files=$(git diff --cached --name-only --diff-filter=ACM)
-for f in $files; do
+while IFS= read -r -d '' f; do   # NUL-separated: names with spaces or newlines stay whole
+  base=${f##*/}
   case "$f" in
-    *.tfstate|*.tfstate.*|*.tfplan|*/.terraform/*|*.pem|*.key|*.p12|.env|*/id_rsa|*/id_ed25519|*/id_ecdsa)
+    .terraform/*|*/.terraform/*)
+      echo "pre-commit: refusing to commit $f (OpenTofu working directory)"; fail=1; continue ;;
+  esac
+  case "$base" in
+    *.pub) ;;
+    *.tfstate|*.tfstate.*|*.tfplan|*.tfplan.json|*.pem|*.key|*.p12|*.pfx|id_*|.env|.env.*|*.secret.*|.vault_pass*|vault-password*)
       echo "pre-commit: refusing to commit $f (state/key/secret file)"; fail=1 ;;
   esac
-done
+done < <(git diff --cached --name-only -z --diff-filter=ACMR)
 # The hook's own folder is skipped: its patterns would otherwise match themselves.
-if git diff --cached -U0 --diff-filter=ACM -- . ':(exclude)scripts/git-hooks' | grep -nE \
+if git diff --cached -U0 --diff-filter=ACMR -- . ':(exclude)scripts/git-hooks' | grep -nE \
   -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' \
   -e 'PVEAPIToken[=]' \
   -e '[A-Za-z0-9._-]+@[A-Za-z0-9.-]+![A-Za-z0-9._-]+=[0-9a-f]{8}-[0-9a-f]{4}-' \
   -e '(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}' \
   -e 'github_pat_[A-Za-z0-9_]{40,}' \
-  -e 'AKIA[0-9A-Z]{16}' \
+  -e '(AKIA|ASIA)[0-9A-Z]{16}' \
   -e 'ansible_(ssh_)?(become_)?pass(word)?:[[:space:]]*[^{[:space:]]' >/dev/null; then
   echo "pre-commit: staged changes look like they contain a secret (private key, Proxmox/GitHub/S3 token or password)."
   echo "            Move it to the keychain and reference it via homelab.yaml secrets."

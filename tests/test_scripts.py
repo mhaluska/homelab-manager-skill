@@ -3596,6 +3596,36 @@ class FixedIssuesTests(unittest.TestCase):
         self.assertEqual(self.m.find(self.m.load(self.path), "SKILL-005")["last_seen_version"], have)
 
 
+class PreCommitHookTests(unittest.TestCase):
+    HOOK = SCRIPTS.parent / "assets" / "repo-template" / "scripts" / "git-hooks" / "pre-commit"
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        subprocess.run(["git", "init", "-q"], cwd=self.d, check=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.d)
+
+    def staged(self, name, text="x\n"):
+        p = self.d / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+        subprocess.run(["git", "add", "-f", "--", name], cwd=self.d, check=True)
+        r = subprocess.run(["bash", str(self.HOOK)], cwd=self.d, capture_output=True, text=True)
+        subprocess.run(["git", "rm", "-q", "--cached", "-f", "--", name], cwd=self.d, check=True)
+        p.unlink()
+        return r.returncode
+
+    def test_refuses_secret_files_and_tokens(self):
+        for name in ["state/x.tfstate", "a b/id_ed25519", "keys/id_rsa_backup", "cert.pfx", ".env.local",
+                     "site.secret.pkrvars.hcl", "tofu/.terraform/x", "my key.pem", "ansible/.vault_pass"]:
+            self.assertEqual(self.staged(name), 1, name)
+        self.assertEqual(self.staged("notes.md", "aws ASIA" + "ABCDEFGHIJKLMNOP\n"), 1)
+        self.assertEqual(self.staged("notes.md", "key AKIA" + "ABCDEFGHIJKLMNOP\n"), 1)
+        for name in ["keys/id_ed25519.pub", "README.md", "tofu/.terraform.lock.hcl", "docs/id-card.md"]:
+            self.assertEqual(self.staged(name), 0, name)
+
+
 class ProxmoxTlsAndPermissionTests(unittest.TestCase):
     def setUp(self):
         sys.path.insert(0, str(SCRIPTS))
