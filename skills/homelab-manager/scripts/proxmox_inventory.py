@@ -25,6 +25,7 @@ backup volumes, which need VM.Backup, but reads task logs with Sys.Audit).
 from __future__ import annotations
 
 import argparse
+import concurrent.futures as cf
 import datetime as dt
 import json
 import re
@@ -40,6 +41,22 @@ import hmlib  # noqa: E402
 from hmlib import clean, id_list  # noqa: E402
 
 
+class PveError(SystemExit):
+    """A Proxmox API call failed (HTTP error, timeout, unreachable, not JSON). A SystemExit, so a script that does
+    not catch it ends with the message; collect() records it per node and guest and goes on."""
+
+
+def body_and_close(e: urllib.error.HTTPError) -> bytes:
+    """The body of an error response (kept on the error, so it can be read again), then close it."""
+    if not hasattr(e, "hm_body"):
+        try:
+            e.hm_body = e.read() or b""
+        except (OSError, ValueError):
+            e.hm_body = b""
+        e.close()
+    return e.hm_body
+
+
 class PVE:
     def __init__(self, endpoint: str, token: str, ctx: ssl.SSLContext):
         self.base = endpoint.rstrip("/") + "/api2/json"
@@ -50,8 +67,12 @@ class PVE:
     def _get(self, path: str, **params):
         url = self.base + path + (("?" + urllib.parse.urlencode(params)) if params else "")
         req = urllib.request.Request(url, headers=self.headers, method="GET")
-        with urllib.request.urlopen(req, context=self.ctx, timeout=30) as r:
-            return json.load(r).get("data")
+        try:
+            with urllib.request.urlopen(req, context=self.ctx, timeout=30) as r:
+                return json.load(r).get("data")
+        except urllib.error.HTTPError as e:
+            body_and_close(e)   # an open error response would leak its connection
+            raise
 
     def _write(self, method: str, path: str, **params):
         data = urllib.parse.urlencode(params).encode() if params else None
@@ -68,27 +89,31 @@ class PVE:
         try:
             return self._get(path, **params) if _method == "GET" else self._write(_method, path, **params)
         except urllib.error.HTTPError as e:
+            body = body_and_close(e)
             if e.code == 401:
-                raise SystemExit(f"Proxmox API refused {path} (401): the token {self.token_id!r} or its secret is "
-                                 "wrong, or the token was removed/expired. Check the keychain item (check_env.py).")
+                raise PveError(f"Proxmox API refused {path} (401): the token {self.token_id!r} or its secret is "
+                               "wrong, or the token was removed/expired. Check the keychain item (check_env.py).")
             if e.code == 403 and _method != "GET":
-                raise SystemExit(f"Proxmox API refused {_method} {path} (403): the token {self.token_id!r} lacks the "
-                                 "privilege (HomelabProvisioner role in docs/proxmox-tokens.md, granted to the token "
-                                 "and its user).")
+                raise PveError(f"Proxmox API refused {_method} {path} (403): the token {self.token_id!r} lacks "
+                               "the privilege (HomelabProvisioner role in docs/proxmox-tokens.md, granted to the "
+                               "token and its user).")
             if e.code == 403:
-                raise SystemExit(f"Proxmox API refused {path} (403). " + self.permission_hint())
-            if _method != "GET":
-                try:
-                    detail = json.loads(e.read() or b"{}")
-                except ValueError:
-                    detail = {}
-                msg = detail.get("errors") or detail.get("message") or e.reason
-                raise SystemExit(f"Proxmox API refused {_method} {path} ({e.code}): {msg}")
-            raise
+                raise PveError(f"Proxmox API refused {path} (403). " + self.permission_hint())
+            try:
+                detail = json.loads(body or b"{}")
+            except ValueError:
+                detail = {}
+            msg = clean(str(detail.get("errors") or detail.get("message") or e.reason), 200)
+            raise PveError(f"Proxmox API refused {'' if _method == 'GET' else _method + ' '}{path} ({e.code}): "
+                           f"{msg}")
         except urllib.error.URLError as e:
             hint = (" — run check_env.py: it tells whether the CA is trusted only in the macOS keychain"
                     if isinstance(e.reason, ssl.SSLCertVerificationError) else "")
-            raise SystemExit(f"Cannot reach Proxmox at {self.base}: {e.reason}{hint}")
+            raise PveError(f"Cannot reach Proxmox at {self.base}: {e.reason}{hint}")
+        except (TimeoutError, OSError) as e:   # a read timeout or a dropped connection after it was established
+            raise PveError(f"Proxmox API {path}: {e or type(e).__name__}")
+        except ValueError:
+            raise PveError(f"Proxmox API {path}: the answer is not valid JSON")
 
     def permission_hint(self) -> str:
         """Explain a 403 using the token's effective permissions (GET /access/permissions needs no privilege)."""
@@ -322,7 +347,7 @@ def subscription(pve: PVE, node: str) -> dict | None:
             if sub.get(src)}
 
 
-def collect(pve: PVE, details: bool) -> dict:
+def collect(pve: PVE, details: bool, jobs: int = 8) -> dict:
     version = pve.get("/version") or {}
     status = pve.get("/cluster/status") or []
     cluster = next((s for s in status if s.get("type") == "cluster"), None)
@@ -347,18 +372,21 @@ def collect(pve: PVE, details: bool) -> dict:
                             "shared": bool(r.get("shared")), "content": r.get("content"), "status": r.get("status"),
                             "size_gib": gib(r.get("maxdisk")), "used_gib": gib(r.get("disk"))})
 
-    networks = {}
-    for n in nodes:
-        if n["status"] != "online":
-            continue
+    errors: list[str] = []   # calls that failed: the snapshot is partial, the rest is still read
+
+    def get(path: str, what: str, default):
         try:
-            nets = pve.get(f"/nodes/{n['node']}/network") or []
-        except SystemExit:
-            nets = []
-        try:  # GitHub issue #97: the node's own Proxmox VE version and running kernel (Sys.Audit, PVEAuditor)
-            ns = pve.get(f"/nodes/{n['node']}/status") or {}
-        except SystemExit:
-            ns = {}
+            return pve.get(path) or default
+        except PveError as e:
+            errors.append(f"{what}: {e}")
+            return default
+
+    networks = {}
+
+    def read_node(n: dict):
+        nets = get(f"/nodes/{n['node']}/network", f"node {n['node']} network", [])
+        # GitHub issue #97: the node's own Proxmox VE version and running kernel (Sys.Audit, PVEAuditor)
+        ns = get(f"/nodes/{n['node']}/status", f"node {n['node']} status", {})
         n["pveversion"] = clean(ns.get("pveversion"))
         n["kernel"] = clean((ns.get("current-kernel") or {}).get("release") or ns.get("kversion"))
         sub = subscription(pve, n["node"])
@@ -372,10 +400,12 @@ def collect(pve: PVE, details: bool) -> dict:
                                 "vlan_aware": bool(x.get("bridge_vlan_aware")), "active": bool(x.get("active"))}
                                for x in nets]
 
-    try:  # where each network storage lives (GitHub issue #89): an NFS/CIFS/PBS server is a dependency
-        servers = {s.get("storage"): s for s in pve.get("/storage") or []}
-    except SystemExit:
-        servers = {}
+    # nodes and guests are read in parallel: a hung guest agent or a slow node no longer holds up the others
+    with cf.ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
+        list(ex.map(read_node, [n for n in nodes if n["status"] == "online"]))
+
+    # where each network storage lives (GitHub issue #89): an NFS/CIFS/PBS server is a dependency
+    servers = {s.get("storage"): s for s in get("/storage", "storage configuration", [])}
     for s in storage:
         conf = servers.get(s["storage"]) or {}
         for key in ("server", "export", "datastore", "share"):
@@ -389,20 +419,24 @@ def collect(pve: PVE, details: bool) -> dict:
                         "pool": clean(j.get("pool")), "node": clean(j.get("node")),
                         "comment": clean(j.get("comment"))}
                        for j in (pve.get("/cluster/backup") or [])]
-    except SystemExit:
+    except PveError as e:
+        errors.append(f"backup jobs: {e}")
         backup_jobs = None
 
     ip_sources = {"agent": "not queried", "lxc": "not queried"}
     if details:  # per-guest config: network, disks, cloud-init, agent — still read-only
-        for g in guests:
+        def read_guest(g: dict):
             kind = "qemu" if g["type"] == "vm" else "lxc"
             try:
                 conf = pve.get(f"/nodes/{g['node']}/{kind}/{g['vmid']}/config") or {}
-            except SystemExit:
-                continue
+            except PveError as e:
+                errors.append(f"guest {g['vmid']} config: {e}")
+                return
             g["config"] = guest_config(conf)
             if g["status"] == "running":
                 g["ips"] = guest_ips(pve, g, kind, conf, ip_sources)
+        with cf.ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
+            list(ex.map(read_guest, guests))
         backups, how = last_backups(pve, nodes, guests)
         ip_sources["backups"] = how
         for g in guests:
@@ -416,8 +450,11 @@ def collect(pve: PVE, details: bool) -> dict:
             "nodes": sorted(nodes, key=lambda x: x["node"] or ""),
             "guests": sorted(guests, key=lambda x: x["vmid"] or 0),
             "storage": sorted(storage, key=lambda x: (x["node"] or "", x["storage"] or "")),
-            "networks": networks, "backup_jobs": backup_jobs,
-            **({"guest_ip_sources": ip_sources} if details else {}), **({"warnings": warnings} if warnings else {})}
+            # sorted: nodes answer in any order, and Proxmox lists interfaces in a varying order
+            "networks": {k: sorted(v, key=lambda x: x["iface"] or "") for k, v in sorted(networks.items())},
+            "backup_jobs": backup_jobs,
+            **({"guest_ip_sources": ip_sources} if details else {}), **({"warnings": warnings} if warnings else {}),
+            **({"errors": sorted(errors)} if errors else {})}
 
 
 def keep_details(old: dict | None, new: dict) -> dict:
@@ -499,6 +536,9 @@ def summary(inv: dict, cfg: dict | None = None) -> str:
         lines.append(f"\nGuest config kept from the --details run of {inv['details_at']} (refresh with --details).")
     for w in inv.get("warnings") or []:
         lines.append(f"\nWarning: {w}.")
+    if inv.get("errors"):
+        lines.append(f"\nNot read ({len(inv['errors'])} API call(s) failed; the rest of the snapshot is complete):")
+        lines += [f"  - {e}" for e in inv["errors"]]
     return "\n".join(lines)
 
 
@@ -507,6 +547,7 @@ def main():
     ap.add_argument("--secret", help="secret name (default: proxmox.tokens.read_only)")
     ap.add_argument("--out", help="write the snapshot alone to this file (default: its site in discovery/proxmox.json)")
     ap.add_argument("--details", action="store_true", help="also fetch each guest's config")
+    ap.add_argument("--jobs", type=int, default=8, help="API calls in parallel (nodes, guests; default 8)")
     ap.add_argument("--summary", action="store_true", help="print the human summary only, write nothing")
     ap.add_argument("--next-vmid", choices=["vms", "lxc", "templates", "base_images"],
                     help="print the VMID for a new guest of this kind (no API call)")
@@ -550,7 +591,7 @@ def inventory_site(cfg: dict, px: dict, a) -> None:
     s = hmlib.site(cfg, px["_site"])
     ctx = hmlib.proxmox_ssl_context(cfg, px)
     token = hmlib.read_secret(cfg, a.secret or hmlib.proxmox_token_name(px, "read_only"))
-    inv = collect(PVE(hmlib.pick_endpoint(px), token, ctx), a.details)
+    inv = collect(PVE(hmlib.pick_endpoint(px), token, ctx), a.details, a.jobs)
     if s["name"]:
         inv = {"site": s["name"], **inv}
     if not a.summary:
