@@ -788,6 +788,36 @@ class PerSiteScanTests(unittest.TestCase):  # GitHub #72, #66: scans know their 
         return subprocess.run([sys.executable, str(self.runner), *args], cwd=self.d, env={**self.env, **env},
                               capture_output=True, text=True)
 
+    def test_host_timeout(self):
+        for args, want in [((), ["--host-timeout", "15m"]), (("--host-timeout", "5m"), ["--host-timeout", "5m"]),
+                           (("--host-timeout", "0"), [])]:
+            r = self.nmap("10.0.0.0/24", "--site", "home", "--profile", "services", *args)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            argv = json.loads(self.log.read_text().splitlines()[-1])
+            got = argv[argv.index("--host-timeout"):argv.index("--host-timeout") + 2] if "--host-timeout" in argv else []
+            self.assertEqual(got, want, args)
+        r = self.nmap("10.0.0.0/24", "--site", "home", "--tcp")    # a ping sweep has no per-host timeout
+        self.assertNotIn("--host-timeout", json.loads(self.log.read_text().splitlines()[-1]))
+
+    def test_ctrl_c_stops_nmap(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import nmap_scan
+        slow = self.d / "slow.py"
+        slow.write_text("import time\nprint('Stats: 0:00:01 elapsed', flush=True)\ntime.sleep(60)\n")
+        procs = []
+        real_popen = subprocess.Popen
+
+        def popen(*a, **kw):
+            procs.append(real_popen(*a, **kw))
+            return procs[-1]
+
+        def interrupt(*a, **kw):
+            raise KeyboardInterrupt
+        with unittest.mock.patch.object(nmap_scan.subprocess, "Popen", popen), \
+                unittest.mock.patch("builtins.print", interrupt), self.assertRaises(KeyboardInterrupt):
+            nmap_scan.run_nmap([sys.executable, str(slow)])
+        self.assertIsNotNone(procs[0].poll())   # the child is gone, not left running
+
     def scan(self, *args):
         r = self.nmap("10.0.0.0/24", "--tcp", *args)
         self.assertEqual(r.returncode, 0, r.stderr)

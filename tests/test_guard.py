@@ -70,6 +70,7 @@ class ScopeTests(unittest.TestCase):
 class GuardNmapTests(unittest.TestCase):
     def test_nmap_in_scope_allowed(self):
         with Repo() as r:
+            self.assertIsNone(decision("python3 nmap_scan.py 10.0.10.0/24 --profile services --host-timeout 5m", r))
             self.assertIsNone(decision("nmap -sn 10.0.10.0/24", r))
             self.assertIsNone(decision("nmap -sT -p 22,80 -oX out.xml 10.0.10.5 10.0.21.7", r))
 
