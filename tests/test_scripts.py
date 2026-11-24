@@ -5436,3 +5436,34 @@ class SecretRedactionTests(unittest.TestCase):
         import hmlib
         self.assertEqual(hmlib.redact("abc and more", ["abc"]), "abc and more")
         self.assertEqual(hmlib.redact("nothing secret here", ["s3cr3t-value"]), "nothing secret here")
+
+
+class SshSafetyTests(unittest.TestCase):
+    """Every ssh the scripts start forwards nothing, offers no password and takes the host after `--`."""
+
+    def test_ssh_host(self):
+        import hmlib
+        self.assertEqual(hmlib.ssh_host(" pve1.home.arpa "), "pve1.home.arpa")
+        for bad in ("-oProxyCommand=touch x", "", None, "a b", "host\n-o x"):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                hmlib.ssh_host(bad)
+
+    def test_probe_command(self):
+        import hmlib
+        import ssh_probe
+        cmd = ssh_probe.ssh_command("10.0.10.5", "root", 22, 5, "/tmp/kh")
+        self.assertEqual(cmd[cmd.index("--") + 1:], ["10.0.10.5", "sh", "-s"])
+        for opt in ("ForwardAgent=no", "ClearAllForwardings=yes", "PasswordAuthentication=no"):
+            self.assertIn(opt, cmd)
+        opts = [x for x in hmlib.SSH_SAFE_OPTS if x != "-o"]
+        self.assertEqual(opts, [x for x in cmd if x in opts])
+
+    def test_inventory_host_never_an_option(self):
+        import lxd_snapshot
+        import routeros_audit
+        with unittest.mock.patch("subprocess.run") as run_:
+            self.assertEqual(lxd_snapshot.ssh_run({"address": "-oProxyCommand=x"}, "true", 5)[0], 255)
+            ok, why = routeros_audit.ssh_run("-oProxyCommand=x", "admin", 22, 5, "/system/resource/print")
+            self.assertFalse(ok)
+            self.assertIn("not a host name", why)
+            run_.assert_not_called()

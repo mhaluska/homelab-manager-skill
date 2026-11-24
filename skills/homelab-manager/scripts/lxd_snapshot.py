@@ -50,9 +50,13 @@ class LxdError(Exception):
 
 
 def ssh_run(t: dict, command: str, timeout: int) -> tuple[int, str, str]:
+    try:
+        host = hmlib.ssh_host(t["address"])
+    except ValueError as e:
+        return 255, "", str(e)
     cmd = [shutil.which("ssh") or "/usr/bin/ssh", "-T", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={SSH_TIMEOUT}",
-           "-o", "LogLevel=ERROR", *(["-p", str(t["port"])] if t.get("port") else []),
-           *(["-l", t["user"]] if t.get("user") else []), t["address"], command]
+           "-o", "LogLevel=ERROR", *hmlib.SSH_SAFE_OPTS, *(["-p", str(t["port"])] if t.get("port") else []),
+           *(["-l", t["user"]] if t.get("user") else []), "--", host, command]
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:

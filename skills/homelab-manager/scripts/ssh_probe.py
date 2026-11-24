@@ -138,7 +138,8 @@ def ssh_command(ip: str, user: str | None, port: int, timeout: int, known_hosts:
     return [shutil.which("ssh") or "/usr/bin/ssh", "-T", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={timeout}",
             "-o", "StrictHostKeyChecking=accept-new", "-o", f"UserKnownHostsFile={known_hosts}",
             "-o", "GlobalKnownHostsFile=/dev/null", "-o", "ControlMaster=no", "-o", "ControlPath=none",
-            "-o", "LogLevel=ERROR", "-p", str(port), *(["-l", user] if user else []), ip, "sh", "-s"]
+            "-o", "LogLevel=ERROR", *hmlib.SSH_SAFE_OPTS, "-p", str(port), *(["-l", user] if user else []),
+            "--", hmlib.ssh_host(ip), "sh", "-s"]
 
 
 NO_KEY_HINT = "ssh-add --apple-use-keychain ~/.ssh/<key>"
@@ -162,8 +163,9 @@ def has_key(ip: str, user: str | None, port: int, agents: dict) -> bool:
     one, or an identity file it would try exists on disk (GitHub issue #122). `ssh -G` only reads the config."""
     try:
         r = subprocess.run([shutil.which("ssh") or "/usr/bin/ssh", "-G", "-p", str(port),
-                            *(["-l", user] if user else []), ip], capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
+                            *(["-l", user] if user else []), "--", hmlib.ssh_host(ip)], capture_output=True, text=True,
+                           timeout=10)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         return True
     if r.returncode != 0:
         return True

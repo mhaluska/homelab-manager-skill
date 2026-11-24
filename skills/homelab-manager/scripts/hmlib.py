@@ -923,6 +923,23 @@ def redact(text: str, secrets: list[str]) -> str:
     return text
 
 
+# --------------------------------------------------------------------------- ssh
+
+# Options for every ssh the scripts start: a host reached on an authorized network may still be hostile, so nothing
+# of this Mac's is forwarded to it (an agent forwarded by a `Host *` ForwardAgent yes would let it use the keys)
+# and no password is ever offered.
+SSH_SAFE_OPTS = ["-o", "ForwardAgent=no", "-o", "ForwardX11=no", "-o", "ClearAllForwardings=yes",
+                 "-o", "PermitLocalCommand=no", "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no"]
+
+
+def ssh_host(value) -> str:
+    """A host name or address for ssh's command line; ValueError for one ssh would read as an option or split."""
+    h = str(value or "").strip()
+    if not h or h.startswith("-") or any(c.isspace() or ord(c) < 32 for c in h):
+        raise ValueError(f"{str(value)[:80]!r} is not a host name or address for ssh")
+    return h
+
+
 # --------------------------------------------------------------------------- untrusted data
 
 _CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
