@@ -5,6 +5,8 @@ YAML is read through `yq`, which the skill installs as a prerequisite.
 """
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import ipaddress
 import json
 import os
@@ -13,6 +15,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import unicodedata
 import urllib.parse
 from pathlib import Path
@@ -434,14 +437,48 @@ def site_part(f: Path, st: dict, rerun: str = "") -> dict | None:
     return parts.get(DEFAULT_SITE_KEY) if st["default"] else None
 
 
+def atomic_write(path, text: str) -> None:
+    """Replace a file's content all at once: a temporary file in the same directory, then os.replace. An interrupted
+    run leaves the old file whole instead of a truncated one. An existing file keeps its permissions."""
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        if path.exists():
+            os.chmod(tmp, path.stat().st_mode & 0o7777)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
+
+
+@contextlib.contextmanager
+def file_lock(path):
+    """Hold an exclusive lock for a read-modify-write of `path`, so two runs (one per site) don't lose each other's
+    data. The lock file lives in the temporary directory, not in the repository."""
+    import fcntl
+    key = hashlib.sha1(str(Path(path).resolve()).encode()).hexdigest()[:16]
+    with open(Path(tempfile.gettempdir()) / f"homelab-manager-{key}.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 def write_site_part(f: Path, st: dict, data: dict, sort_keys: bool = False) -> None:
     """Store site st's data in a per-site discovery file; the other sites' data stays."""
-    parts = site_parts(f)
-    if st["default"]:
-        parts.pop(DEFAULT_SITE_KEY, None)
-    parts[site_key(st)] = data
     f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps({"sites": parts}, indent=2, sort_keys=sort_keys) + "\n")
+    with file_lock(f):
+        parts = site_parts(f)
+        if st["default"]:
+            parts.pop(DEFAULT_SITE_KEY, None)
+        parts[site_key(st)] = data
+        atomic_write(f, json.dumps({"sites": parts}, indent=2, sort_keys=sort_keys) + "\n")
 
 
 def _snapshots(cfg: dict, kind: str, rerun: str) -> list[tuple[dict, dict]]:
