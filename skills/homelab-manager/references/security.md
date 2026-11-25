@@ -34,7 +34,10 @@ never values). Run it after setup, after macOS updates, and whenever a secret re
 Read-only by default; report findings with severity and a proposed fix, change nothing until approved.
 1. **Linux hosts**: `ansible-playbook playbooks/security-audit.yml [-e target=site_<name>]` (reads only, also in
    `--check`) writes `discovery/security.json`: `sshd -T`, accounts with a password or none (names only), NOPASSWD
-   sudo, host firewall, automatic updates, listeners, Samba shares, NFS exports, containers, tunnel clients.
+   sudo, host firewall, automatic updates, listeners, Samba shares, NFS exports, containers, tunnel clients; on a
+   Proxmox Backup Server its ACL, user and token ids with their enable flags and the datastore names; on a Proxmox
+   node which `pbs` storages have an encryption key (the names of `/etc/pve/priv/storage/*.enc`, never their content).
+   It runs on the `linux` and `proxmox_nodes` groups; a Backup Server outside them: `-e target=<host>`.
 2. **Fresh joins** (optional, they make the report complete): `routeros_audit.py --group routeros` (port forwards,
    the routers' findings), `check-updates.yml` (pending security updates), `nmap_scan.py --site <name> --profile
    services` (services on devices the playbook doesn't reach).
@@ -50,8 +53,16 @@ Read-only by default; report findings with severity and a proposed fix, change n
    counts them) and prints the report. `--report` saves it as `docs/security-audit-<date>[-<site>].md`, never
    replacing an existing one (`--force`), and records the findings: the next report lists what is new and what is
    gone since. FileVault off with auto-login is the known trade-off: tell the user, don't change it.
-4. **By hand** (the report's "Still to check by hand"), adding evidence to the draft: PBS users and ACL
-   (`DatastoreBackup`, not `DatastoreAdmin`) and client-side encryption; the repo: no secrets in Git history
+   **Backups**: a `@pbs` user that is not an administrator, or an API token, with `DatastoreAdmin` or `Admin` on a
+   datastore is medium (`pbs-datastore-admin-<user>-<datastore>`; `DatastorePowerUser`, which prunes its own
+   backups, is low): its credential sits on every Proxmox node that backs up there, so a compromised node can delete
+   the backups. Fix with the user's yes: `DatastoreBackup` for the client and the retention in a PBS prune job, taken
+   off the Proxmox storage and backup jobs (they prune with the client's rights). A token counts with its user's
+   rights. A `pbs` storage in discovery/proxmox.json with no encryption key on the site's nodes is low, medium when
+   its PBS is on another site or outside the site's ranges (`pbs-no-encryption-<storage>`; accepted per site). A new
+   key encrypts the next backups only; the user keeps a copy of it outside the cluster, or nothing can be restored.
+4. **By hand** (the report's "Still to check by hand"), adding evidence to the draft: a PBS outside the inventory
+   (`proxmox-backup-manager acl list`); the repo: no secrets in Git history
    (`scripts/git-hooks/pre-commit --history`: the hook's checks over every commit), `.gitignore` covers
    state/keys, pre-commit hook active (`git config core.hooksPath`).
 
