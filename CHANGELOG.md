@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.61.0 — 2026-11-25
 - `init_repo.py --sync-managed` no longer adds the template's `permissions.allow` rules back to `.claude/settings.json`
   after the user removed them: `--sync-managed`, and `--components`/`--add-components` on an existing repo, merge only
   `deny` and `ask` rules. A new repo still gets the git `add`/`commit` allow rules at setup; repos set up before
