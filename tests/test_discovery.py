@@ -173,7 +173,7 @@ class DriftExtraIpsTests(unittest.TestCase):
         self.assertIn("- 10.0.30.1 → `router1` (secondary)", unmanaged)
 
     def test_stale(self):
-        self.assertEqual(run("drift_report.py", "--stale", cwd=self.d).returncode, 2)
+        self.assertEqual(run("drift_report.py", "--stale", cwd=self.d).returncode, 1)
         run("drift_report.py", "--no-tofu", cwd=self.d)
         drift = Path(self.d, "discovery/drift.md")
         os.utime(drift, (time.time() + 60, time.time() + 60))

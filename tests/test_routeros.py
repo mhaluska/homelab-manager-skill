@@ -473,7 +473,7 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
 
     def test_all_unreachable(self):
         r = self.audit("10.0.0.9", "--no-write")
-        self.assertEqual(r.returncode, 2)
+        self.assertEqual(r.returncode, 4)
         self.assertFalse((self.d / "discovery/routeros.json").exists())
 
 

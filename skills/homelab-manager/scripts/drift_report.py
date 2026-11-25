@@ -285,8 +285,8 @@ def main():
     if a.stale:
         report = Path(a.out) if a.out else root / "discovery" / "drift.md"
         if not report.is_file():
-            print(f"{report.relative_to(root)} missing — run drift_report.py")
-            return 2
+            print(f"stale: {report.relative_to(root)} missing — run drift_report.py")
+            return 1   # missing or stale: regenerate either way (GitHub #156)
         newer = newest_inputs(root, report.stat().st_mtime)
         print(f"stale: changed since the report: {', '.join(newer)} — regenerate it before using it" if newer
               else "fresh: no input changed since the report")

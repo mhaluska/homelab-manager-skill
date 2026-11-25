@@ -1007,7 +1007,7 @@ def main():
         unknown = [(ip, h) for ip, h in unknown_addresses(cfg, inventory) if in_scope(ip, nets)]
         sys.stdout.write(proposal_report(proposals(devs, unknown), len(unknown),
                                          any("leases" in d for d in devs), unread_tables(devs), scope))
-    return 0 if any(d.get("reachable") for d in devs) else 2
+    return 0 if any(d.get("reachable") for d in devs) else 4   # could not run: no device answered (GitHub #156)
 
 
 if __name__ == "__main__":
