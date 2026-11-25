@@ -9,8 +9,35 @@ resource "proxmox_virtual_environment_container" "this" {
   start_on_boot = var.on_boot
   protection    = var.protection
 
-  features {
-    nesting = var.nesting
+  # features = false: no features line at all (an imported privileged container without one; Proxmox lets only
+  # root@pam change a privileged container's features).
+  dynamic "features" {
+    for_each = var.features ? [1] : []
+    content {
+      nesting = var.nesting
+      keyctl  = var.keyctl
+      fuse    = var.fuse
+      mknod   = var.mknod
+      mount   = var.mount_types
+    }
+  }
+
+  dynamic "startup" {
+    for_each = var.startup == null ? [] : [var.startup]
+    content {
+      order      = startup.value.order
+      up_delay   = startup.value.up_delay
+      down_delay = startup.value.down_delay
+    }
+  }
+
+  dynamic "console" {
+    for_each = var.console_mode == null && var.tty_count == null && var.console == null ? [] : [1]
+    content {
+      type      = var.console_mode
+      tty_count = var.tty_count
+      enabled   = var.console
+    }
   }
 
   cpu {
@@ -27,11 +54,31 @@ resource "proxmox_virtual_environment_container" "this" {
     size         = var.disk_gib
   }
 
+  # mp0, mp1, ... in list order: a volume on a storage (volume = the storage, size_gib) or a bind mount of a host
+  # directory (volume = its path; adding one needs root@pam).
+  dynamic "mount_point" {
+    for_each = var.mount_points
+    content {
+      volume        = mount_point.value.volume
+      path          = mount_point.value.path
+      size          = mount_point.value.size_gib == null ? null : "${mount_point.value.size_gib}G"
+      backup        = mount_point.value.backup
+      read_only     = mount_point.value.read_only
+      mount_options = mount_point.value.mount_options
+      acl           = mount_point.value.acl
+      quota         = mount_point.value.quota
+      replicate     = mount_point.value.replicate
+      shared        = mount_point.value.shared
+    }
+  }
+
   network_interface {
     name        = "eth0"
     bridge      = var.bridge
     vlan_id     = var.vlan_id
     mac_address = var.mac_address
+    firewall    = var.firewall
+    mtu         = var.mtu
   }
 
   operating_system {

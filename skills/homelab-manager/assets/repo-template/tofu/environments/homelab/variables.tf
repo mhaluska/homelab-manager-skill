@@ -75,7 +75,16 @@ variable "vms" {
     cores          = optional(number, 2)
     memory_mib     = optional(number, 2048)
     disk_gib       = optional(number, 20)
-    extra_disks    = optional(list(object({ interface = string, size_gib = number, datastore = optional(string) })), [])
+    extra_disks = optional(list(object({
+      interface = string
+      size_gib  = number
+      datastore = optional(string)
+      discard   = optional(string) # empty: on
+      iothread  = optional(bool)   # empty: true
+      ssd       = optional(bool)
+      cache     = optional(string)
+      backup    = optional(bool) # false: backups skip the disk
+    })), [])
     datastore      = optional(string)
     bridge         = optional(string)
     vlan_id        = optional(number)
@@ -98,6 +107,28 @@ variable "vms" {
     # PCI passthrough by resource mapping (Datacenter → Resource Mappings); the VM then needs an explicit node
     pci_devices = optional(list(object({ mapping = string, pcie = optional(bool, false), rombar = optional(bool), xvga = optional(bool) })), [])
     machine     = optional(string) # e.g. q35 (pcie devices need it); empty: as before
+    # settings an imported VM keeps (tofu_import_plan.py; references/opentofu.md "Entry attributes");
+    # empty: as before
+    os_type             = optional(string) # empty: l26 (Linux)
+    sockets             = optional(number)
+    numa                = optional(bool)
+    cpu_flags           = optional(list(string)) # e.g. ["+aes"]
+    memory_floating_mib = optional(number)       # ballooning minimum
+    startup             = optional(object({ order = optional(number), up_delay = optional(number), down_delay = optional(number) }))
+    scsi_hardware       = optional(string) # empty: virtio-scsi-single
+    disk_cache          = optional(string) # root disk; empty: none
+    disk_discard        = optional(string) # empty: on
+    disk_iothread       = optional(bool)   # empty: true
+    disk_ssd            = optional(bool)   # empty: true
+    disk_backup         = optional(bool)   # false: backups skip the root disk
+    tablet_device       = optional(bool)
+    agent_trim          = optional(bool) # guest agent fstrim_cloned_disks
+    firewall            = optional(bool) # the NIC's
+    mtu                 = optional(number)
+    queues              = optional(number)
+    cloud_init_drive    = optional(bool)   # false: none (an imported VM); empty: true
+    serial_socket       = optional(bool)   # false: no serial0 (an imported VM); empty: true
+    cdrom               = optional(string) # on ide2: "none" or an ISO file ID; needs cloud_init_drive = false
   }))
   default = {}
   validation {
@@ -160,6 +191,31 @@ variable "containers" {
     started          = optional(bool, true)
     on_boot          = optional(bool, true)
     protection       = optional(bool, false) # Proxmox refuses to remove the container while it is set
+    # settings an imported container keeps (tofu_import_plan.py; references/opentofu.md "Entry attributes");
+    # empty: as before
+    features    = optional(bool) # false: no features line at all (nesting ignored); empty: true
+    keyctl      = optional(bool)
+    fuse        = optional(bool)
+    mknod       = optional(bool)
+    mount_types = optional(list(string)) # e.g. ["nfs", "cifs"]
+    mount_points = optional(list(object({
+      volume        = string           # a storage (new volume) or a volume ID; a host path: bind mount
+      path          = string           # inside the container
+      size_gib      = optional(number) # volumes only
+      backup        = optional(bool)
+      read_only     = optional(bool)
+      mount_options = optional(list(string))
+      acl           = optional(bool)
+      quota         = optional(bool)
+      replicate     = optional(bool)
+      shared        = optional(bool)
+    })), [])
+    startup      = optional(object({ order = optional(number), up_delay = optional(number), down_delay = optional(number) }))
+    console_mode = optional(string) # tty, console or shell
+    tty_count    = optional(number)
+    console      = optional(bool)
+    firewall     = optional(bool) # the interface's
+    mtu          = optional(number)
   }))
   default = {}
   validation {

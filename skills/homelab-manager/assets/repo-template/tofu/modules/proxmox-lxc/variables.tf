@@ -124,3 +124,85 @@ variable "protection" {
   nullable    = false
   description = "Proxmox protection flag: the guest and its disks can't be removed until it is turned off again."
 }
+
+# Settings an imported container keeps (tofu_import_plan.py). Each default plans what earlier versions planned.
+variable "features" {
+  type        = bool
+  default     = true
+  nullable    = false
+  description = "false: no features line (nesting and the other flags ignored), as on a privileged container without one."
+}
+variable "keyctl" {
+  type    = bool
+  default = null
+}
+variable "fuse" {
+  type    = bool
+  default = null
+}
+variable "mknod" {
+  type    = bool
+  default = null
+}
+variable "mount_types" {
+  type        = list(string)
+  default     = null
+  description = "File systems the container may mount (features mount=), e.g. [\"nfs\", \"cifs\"]."
+}
+variable "startup" {
+  type = object({
+    order      = optional(number)
+    up_delay   = optional(number)
+    down_delay = optional(number)
+  })
+  default     = null
+  description = "Start order and delays in seconds (Proxmox startup: order, up, down); null: none."
+}
+variable "console_mode" {
+  type        = string
+  default     = null
+  description = "tty, console or shell (Proxmox cmode); with tty_count and console null: no console block."
+  validation {
+    condition     = var.console_mode == null || contains(["tty", "console", "shell"], coalesce(var.console_mode, "tty"))
+    error_message = "console_mode must be tty, console or shell."
+  }
+}
+variable "tty_count" {
+  type    = number
+  default = null
+}
+variable "console" {
+  type        = bool
+  default     = null
+  description = "Attach /dev/console (Proxmox console)."
+}
+variable "mount_points" {
+  type = list(object({
+    volume        = string           # a storage (a new volume) or its volume ID, or a host path (bind mount)
+    path          = string           # inside the container
+    size_gib      = optional(number) # volume mount points only
+    backup        = optional(bool)
+    read_only     = optional(bool)
+    mount_options = optional(list(string))
+    acl           = optional(bool)
+    quota         = optional(bool)
+    replicate     = optional(bool)
+    shared        = optional(bool)
+  }))
+  default  = []
+  nullable = false
+  validation {
+    condition     = alltrue([for m in var.mount_points : startswith(m.path, "/") && m.volume != ""])
+    error_message = "mount_points: each needs a volume (a storage or a host path) and an absolute path inside the container."
+  }
+}
+variable "firewall" {
+  type        = bool
+  default     = null
+  description = "The interface's Proxmox firewall flag; null: the provider's default (off)."
+}
+variable "mtu" {
+  type        = number
+  default     = null
+  description = "The interface's MTU; null: the bridge's."
+}

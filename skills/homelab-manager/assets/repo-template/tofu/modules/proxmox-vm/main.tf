@@ -17,26 +17,43 @@ resource "proxmox_virtual_environment_vm" "this" {
 
   agent {
     enabled = true
+    trim    = var.agent_trim
   }
 
   cpu {
-    cores = var.cores
-    type  = var.cpu_type
+    cores   = var.cores
+    sockets = var.sockets
+    type    = var.cpu_type
+    flags   = var.cpu_flags
+    numa    = var.numa
   }
 
   memory {
     dedicated = var.memory_mib
+    floating  = var.memory_floating_mib
   }
 
-  scsi_hardware = "virtio-scsi-single"
+  dynamic "startup" {
+    for_each = var.startup == null ? [] : [var.startup]
+    content {
+      order      = startup.value.order
+      up_delay   = startup.value.up_delay
+      down_delay = startup.value.down_delay
+    }
+  }
+
+  scsi_hardware = var.scsi_hardware
+  tablet_device = var.tablet_device
 
   disk {
     datastore_id = var.datastore
     interface    = "scsi0"
     size         = var.disk_gib
-    discard      = "on"
-    iothread     = true
-    ssd          = true
+    discard      = var.disk_discard
+    iothread     = var.disk_iothread
+    ssd          = var.disk_ssd
+    cache        = var.disk_cache
+    backup       = var.disk_backup
   }
 
   dynamic "disk" {
@@ -45,9 +62,21 @@ resource "proxmox_virtual_environment_vm" "this" {
       datastore_id = coalesce(disk.value.datastore, var.datastore)
       interface    = disk.value.interface
       size         = disk.value.size_gib
-      discard      = "on"
-      iothread     = true
+      discard      = disk.value.discard
+      iothread     = disk.value.iothread
+      ssd          = disk.value.ssd
+      cache        = disk.value.cache
+      backup       = disk.value.backup
       file_format  = "raw"
+    }
+  }
+
+  # An imported VM may keep its CD-ROM drive on ide2 (then without the cloud-init drive, which uses ide2).
+  dynamic "cdrom" {
+    for_each = var.cdrom == null ? [] : [var.cdrom]
+    content {
+      interface = "ide2"
+      file_id   = cdrom.value
     }
   }
 
@@ -56,13 +85,19 @@ resource "proxmox_virtual_environment_vm" "this" {
     vlan_id     = var.vlan_id
     model       = "virtio"
     mac_address = var.mac_address
+    firewall    = var.firewall
+    mtu         = var.mtu
+    queues      = var.queues
   }
 
   operating_system {
-    type = "l26"
+    type = var.os_type
   }
 
-  serial_device {}
+  dynamic "serial_device" {
+    for_each = var.serial_socket ? [1] : []
+    content {}
+  }
 
   # PCI passthrough through resource mappings (Datacenter → Resource Mappings) only: raw device IDs need root@pam.
   machine = var.machine
@@ -77,36 +112,41 @@ resource "proxmox_virtual_environment_vm" "this" {
     }
   }
 
-  initialization {
-    datastore_id = var.datastore
-    ip_config {
-      ipv4 {
-        address = var.ipv4_address
-        gateway = var.ipv4_address == "dhcp" ? null : var.ipv4_gateway
-      }
-      dynamic "ipv6" {
-        for_each = var.ipv6_address == null ? [] : [1]
-        content {
-          address = var.ipv6_address
-          gateway = contains(["dhcp", "auto"], var.ipv6_address) ? null : var.ipv6_gateway
+  # The cloud-init drive (ide2): addresses, DNS and the admin user at first boot. An imported VM without one keeps
+  # none (cloud_init_drive = false): its settings then come from the guest itself.
+  dynamic "initialization" {
+    for_each = var.cloud_init_drive ? [1] : []
+    content {
+      datastore_id = var.datastore
+      ip_config {
+        ipv4 {
+          address = var.ipv4_address
+          gateway = var.ipv4_address == "dhcp" ? null : var.ipv4_gateway
+        }
+        dynamic "ipv6" {
+          for_each = var.ipv6_address == null ? [] : [1]
+          content {
+            address = var.ipv6_address
+            gateway = contains(["dhcp", "auto"], var.ipv6_address) ? null : var.ipv6_gateway
+          }
         }
       }
-    }
-    dns {
-      servers = length(var.dns_servers) > 0 ? var.dns_servers : null
-      domain  = var.dns_domain
-    }
-    # A user-data snippet replaces the built-in user data (the provider refuses both), so it must create the
-    # admin user and keys itself. Vendor data merges with it.
-    dynamic "user_account" {
-      for_each = var.cloud_init_user_snippet == null ? [1] : []
-      content {
-        username = var.admin_user
-        keys     = var.ssh_public_keys
+      dns {
+        servers = length(var.dns_servers) > 0 ? var.dns_servers : null
+        domain  = var.dns_domain
       }
+      # A user-data snippet replaces the built-in user data (the provider refuses both), so it must create the
+      # admin user and keys itself. Vendor data merges with it.
+      dynamic "user_account" {
+        for_each = var.cloud_init_user_snippet == null ? [1] : []
+        content {
+          username = var.admin_user
+          keys     = var.ssh_public_keys
+        }
+      }
+      vendor_data_file_id = try(proxmox_virtual_environment_file.cloud_init["vendor"].id, null)
+      user_data_file_id   = try(proxmox_virtual_environment_file.cloud_init["user"].id, null)
     }
-    vendor_data_file_id = try(proxmox_virtual_environment_file.cloud_init["vendor"].id, null)
-    user_data_file_id   = try(proxmox_virtual_environment_file.cloud_init["user"].id, null)
   }
 
   lifecycle {
@@ -117,6 +157,10 @@ resource "proxmox_virtual_environment_vm" "this" {
     precondition {
       condition     = !anytrue([for d in var.pci_devices : d.pcie]) || startswith(coalesce(var.machine, "pc"), "q35")
       error_message = "VM ${var.name}: pci_devices with pcie = true need machine = \"q35\"."
+    }
+    precondition {
+      condition     = var.cloud_init_drive ? var.cdrom == null : var.cloud_init_snippet == null && var.cloud_init_user_snippet == null
+      error_message = "VM ${var.name}: ${var.cloud_init_drive ? "a cdrom needs cloud_init_drive = false (both use ide2)" : "cloud-init snippets need the cloud-init drive (cloud_init_drive = true)"}."
     }
   }
 }

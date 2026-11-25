@@ -35,11 +35,25 @@ variable "disk_gib" {
   description = "Can grow in place; shrinking forces replacement."
 }
 variable "extra_disks" {
-  type    = list(object({ interface = string, size_gib = number, datastore = optional(string) }))
+  type = list(object({
+    interface = string
+    size_gib  = number
+    datastore = optional(string)
+    # options as for the root disk; the defaults are what extra disks have always had (no ssd flag, no cache)
+    discard  = optional(string, "on")
+    iothread = optional(bool, true)
+    ssd      = optional(bool)
+    cache    = optional(string)
+    backup   = optional(bool)
+  }))
   default = []
   validation {
     condition     = alltrue([for d in var.extra_disks : can(regex("^(scsi([1-9]|[12][0-9]|30)|virtio([0-9]|1[0-5])|sata[0-5])$", d.interface))])
     error_message = "extra_disks interface must be scsi1-scsi30, virtio0-virtio15 or sata0-sata5 (scsi0 is the root disk)."
+  }
+  validation {
+    condition     = alltrue([for d in var.extra_disks : contains(["on", "ignore"], d.discard) && contains(["none", "directsync", "writethrough", "writeback", "unsafe"], coalesce(d.cache, "none"))])
+    error_message = "extra_disks: discard must be on or ignore; cache none, directsync, writethrough, writeback or unsafe."
   }
 }
 variable "bridge" { type = string }
@@ -158,4 +172,131 @@ variable "snippets_datastore" {
   type        = string
   default     = null
   description = "Storage with snippets content the snippet files are uploaded to (over SSH, on var.node)."
+}
+
+# Settings an imported guest keeps (tofu_import_plan.py). Each default plans what earlier versions planned.
+variable "sockets" {
+  type        = number
+  default     = null
+  description = "CPU sockets (vCPUs = sockets x cores); null: the provider's 1."
+}
+variable "numa" {
+  type    = bool
+  default = null
+}
+variable "cpu_flags" {
+  type        = list(string)
+  default     = null
+  description = "CPU flags, e.g. [\"+aes\", \"-pcid\"]; null: none."
+}
+variable "memory_floating_mib" {
+  type        = number
+  default     = null
+  description = "Ballooning minimum (Proxmox balloon); null: none set."
+}
+variable "startup" {
+  type = object({
+    order      = optional(number)
+    up_delay   = optional(number)
+    down_delay = optional(number)
+  })
+  default     = null
+  description = "Start order and delays in seconds (Proxmox startup: order, up, down); null: none."
+}
+variable "disk_discard" {
+  type     = string
+  default  = "on"
+  nullable = false
+  validation {
+    condition     = contains(["on", "ignore"], var.disk_discard)
+    error_message = "disk_discard must be on or ignore."
+  }
+}
+variable "disk_iothread" {
+  type     = bool
+  default  = true
+  nullable = false
+}
+variable "disk_ssd" {
+  type     = bool
+  default  = true
+  nullable = false
+}
+variable "disk_cache" {
+  type        = string
+  default     = null
+  description = "Root disk cache mode; null: none."
+  validation {
+    condition     = contains(["none", "directsync", "writethrough", "writeback", "unsafe"], coalesce(var.disk_cache, "none"))
+    error_message = "disk_cache must be none, directsync, writethrough, writeback or unsafe."
+  }
+}
+variable "disk_backup" {
+  type        = bool
+  default     = null
+  description = "false: backups skip the root disk; null: the provider's default (included)."
+}
+variable "scsi_hardware" {
+  type     = string
+  default  = "virtio-scsi-single"
+  nullable = false
+  validation {
+    condition     = contains(["lsi", "lsi53c810", "virtio-scsi-pci", "virtio-scsi-single", "megasas", "pvscsi"], var.scsi_hardware)
+    error_message = "scsi_hardware must be lsi, lsi53c810, virtio-scsi-pci, virtio-scsi-single, megasas or pvscsi."
+  }
+}
+variable "tablet_device" {
+  type        = bool
+  default     = null
+  description = "USB tablet for the console pointer; null: the provider's default (on)."
+}
+variable "cloud_init_drive" {
+  type        = bool
+  default     = true
+  nullable    = false
+  description = "false: no cloud-init drive (an imported VM without one); addresses, DNS, admin user and snippets then don't apply."
+}
+variable "serial_socket" {
+  type        = bool
+  default     = true
+  nullable    = false
+  description = "A serial0 socket (the console of cloud images); false: no serial port (an imported VM without one)."
+}
+variable "cdrom" {
+  type        = string
+  default     = null
+  description = "CD-ROM drive on ide2: \"none\" (empty) or an ISO file ID; needs cloud_init_drive = false. null: no drive."
+  validation {
+    condition     = var.cdrom == null || try(var.cdrom == "none" || can(regex("^[A-Za-z0-9][A-Za-z0-9_.-]*:iso/.+$", var.cdrom)), false)
+    error_message = "cdrom must be \"none\" (an empty drive) or an ISO file ID, e.g. local:iso/debian-13.iso."
+  }
+}
+variable "firewall" {
+  type        = bool
+  default     = null
+  description = "The NIC's Proxmox firewall flag; null: the provider's default (off)."
+}
+variable "mtu" {
+  type        = number
+  default     = null
+  description = "The NIC's MTU; null: the bridge's."
+}
+variable "queues" {
+  type        = number
+  default     = null
+  description = "The NIC's multiqueue count (virtio); null: none."
+}
+variable "agent_trim" {
+  type        = bool
+  default     = null
+  description = "Guest agent fstrim after a disk move or clone (fstrim_cloned_disks); null: the provider's default (off)."
+}
+variable "os_type" {
+  type     = string
+  default  = "l26"
+  nullable = false
+  validation {
+    condition     = contains(["l24", "l26", "other", "solaris", "w2k", "w2k3", "w2k8", "win7", "win8", "win10", "win11", "wvista", "wxp"], var.os_type)
+    error_message = "os_type must be a Proxmox OS type: l26 (Linux), other, win10, win11, ..."
+  }
 }

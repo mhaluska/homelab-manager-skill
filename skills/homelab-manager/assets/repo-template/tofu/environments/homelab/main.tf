@@ -89,6 +89,28 @@ module "vm" {
 
   pci_devices = each.value.pci_devices
   machine     = each.value.machine
+
+  # settings an imported VM keeps (tofu_import_plan.py); null: the module's default, as before
+  os_type             = each.value.os_type
+  sockets             = each.value.sockets
+  numa                = each.value.numa
+  cpu_flags           = each.value.cpu_flags
+  memory_floating_mib = each.value.memory_floating_mib
+  startup             = each.value.startup
+  scsi_hardware       = each.value.scsi_hardware
+  disk_cache          = each.value.disk_cache
+  disk_discard        = each.value.disk_discard
+  disk_iothread       = each.value.disk_iothread
+  disk_ssd            = each.value.disk_ssd
+  disk_backup         = each.value.disk_backup
+  tablet_device       = each.value.tablet_device
+  agent_trim          = each.value.agent_trim
+  firewall            = each.value.firewall
+  mtu                 = each.value.mtu
+  queues              = each.value.queues
+  cloud_init_drive    = each.value.cloud_init_drive
+  serial_socket       = each.value.serial_socket
+  cdrom               = each.value.cdrom
 }
 
 module "lxc" {
@@ -122,4 +144,18 @@ module "lxc" {
   started          = each.value.started
   on_boot          = each.value.on_boot
   protection       = each.value.protection
+
+  # settings an imported container keeps (tofu_import_plan.py); null: the module's default, as before
+  features     = each.value.features
+  keyctl       = each.value.keyctl
+  fuse         = each.value.fuse
+  mknod        = each.value.mknod
+  mount_types  = each.value.mount_types
+  mount_points = each.value.mount_points
+  startup      = each.value.startup
+  console_mode = each.value.console_mode
+  tty_count    = each.value.tty_count
+  console      = each.value.console
+  firewall     = each.value.firewall
+  mtu          = each.value.mtu
 }
