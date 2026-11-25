@@ -206,7 +206,7 @@ Read the reference that matches the task (only that one):
 | Task | Read |
 |---|---|
 | Discover devices, scan or "fully scan" a network, Proxmox inventory, containers (Docker, NAS), drift, "compare against Git", OVERVIEW.md | `references/discovery.md` |
-| Create/clone/resize/start/stop/migrate VMs and LXC, cloud-init, import existing | `references/proxmox.md` |
+| Create/clone/resize/start/stop/migrate VMs and LXC, cloud-init, import existing (`tofu_import_plan.py`) | `references/proxmox.md` |
 | Build or update templates (Rocky, Debian, Ubuntu) | `references/templates.md` |
 | OpenTofu state, backend, modules, imports, plan review details | `references/opentofu.md` |
 | Ansible inventory, onboarding existing hosts, roles, playbooks, installing software (e.g. Zabbix Agent 2) | `references/ansible.md` |
