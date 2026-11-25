@@ -19,7 +19,9 @@ jobs:
           fetch-tags: true
 
       - name: Tools
-        run: brew install yq      # nmap is optional: the tests that need it skip without it
+        run: |                    # nmap is optional: the tests that need it skip without it
+          brew install yq
+          pipx install ansible-core   # ansible-inventory: drift, overview, ssh_probe and routeros tests read the inventory
 
       - name: Unit tests
         run: python3 -m unittest discover -s tests
@@ -32,7 +34,9 @@ jobs:
       - name: Tools
         run: |
           set -eu
-          sudo snap install yq
+          # the snap yq is confined and can't read the temp files the scripts hand it
+          sudo curl -fsSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.54.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
           sudo snap install --classic opentofu
           curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp.gpg
           echo "deb [signed-by=/usr/share/keyrings/hashicorp.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
