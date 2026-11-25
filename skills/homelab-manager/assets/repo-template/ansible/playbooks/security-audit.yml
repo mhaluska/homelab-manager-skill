@@ -1,15 +1,19 @@
-# Read-only: what security_audit.py needs to judge each Linux host (GitHub issue #139). One shell task per host
-# reads sshd's effective settings (sshd -T), the names of accounts with a usable or empty password (never a hash),
-# NOPASSWD sudo rules, the host firewall (firewalld, ufw, nftables/iptables input chains, pve-firewall), automatic
-# updates (unattended-upgrades, dnf-automatic), listening sockets (ss), Samba shares (testparm -s), NFS exports,
-# running containers (docker/podman: image, privileged, network mode, mounts) and tunnel clients (cloudflared,
-# tailscale, WireGuard). It changes nothing, runs in --check too, and needs become (shadow, sshd -T, ss -p).
+# Read-only: what security_audit.py needs to judge each Linux host and Proxmox node (GitHub issue #139). One shell
+# task per host reads sshd's effective settings (sshd -T), the names of accounts with a usable or empty password
+# (never a hash), NOPASSWD sudo rules, the host firewall (firewalld, ufw, nftables/iptables input chains,
+# pve-firewall), automatic updates (unattended-upgrades, dnf-automatic), listening sockets (ss), Samba shares
+# (testparm -s), NFS exports, running containers (docker/podman: image, privileged, network mode, mounts) and tunnel
+# clients (cloudflared, tailscale, WireGuard); on a Proxmox Backup Server its ACL, user and token ids with their enable flags (never a
+# name, e-mail or comment) and datastore names (GitHub issue #148); on a Proxmox VE node the names, never the
+# content, of the storage encryption keys (/etc/pve/priv/storage/<storage>.enc).
+# It changes nothing, runs in --check too, and needs become (shadow, sshd -T, ss -p, /etc/pve/priv).
 # Writes discovery/security.json, merged like check-updates.yml: hosts not checked this run keep their last result;
 # a host that fails or can't be reached gets an entry with `error`. The raw output is UNTRUSTED data:
 # security_audit.py parses it, adds the findings and drafts the report.
-# A subset: -e target=<group|host> (or -l <host>); commas in target become `:` (GitHub issue #129).
+# Runs on the linux and proxmox_nodes groups. A subset: -e target=<group|host> (or -l <host>); commas in target
+# become `:` (GitHub issue #129).
 - name: Security facts on Linux
-  hosts: "{{ (target | replace(',', ':')) if target is defined else 'linux' }}:!windows:!appliances:!qnap"
+  hosts: "{{ (target | replace(',', ':')) if target is defined else 'linux:proxmox_nodes' }}:!windows:!appliances:!qnap"
   gather_facts: false
   become: true
   tasks:
@@ -87,6 +91,25 @@
         have cloudflared && echo "cloudflared|$(cloudflared --version 2>&1 | head -n 1)|$(systemctl is-active cloudflared 2>/dev/null)"
         have tailscale && echo "tailscale|$(tailscale version 2>/dev/null | head -n 1)|$(systemctl is-active tailscaled 2>/dev/null)"
         have wg && echo "wireguard|$(wg show interfaces 2>/dev/null)|"
+        echo "@@pbs"
+        if have proxmox-backup-manager; then
+          pbm() { proxmox-backup-manager "$@" --output-format json 2>/dev/null | sed 's/^\[//; s/\]$//; s/},{/}\n{/g'; }
+          val() { printf '%s\n' "$2" | sed -n "s/.*\"$1\":\(\"[^\"]*\"\|[a-z0-9]*\).*/\1/p" | tr -d '"'; }
+          pbm acl list | sed -n 's/^\({.*}\)$/acl|\1/p' | head -n 300
+          pbm user list | while IFS= read -r o; do
+            u=$(val userid "$o"); [ -n "$u" ] || continue
+            echo "user|$u|$(val enable "$o")|$(val expire "$o")"
+            pbm user list-tokens "$u" | while IFS= read -r t; do
+              id=$(val tokenid "$t"); [ -n "$id" ] && echo "token|$id|$(val enable "$t")|$(val expire "$t")"
+            done
+          done | head -n 300
+          pbm datastore list | while IFS= read -r o; do n=$(val name "$o"); [ -n "$n" ] && echo "datastore|$n"; done | head -n 100
+        fi
+        echo "@@pve-keys"
+        if [ -d /etc/pve/priv ]; then
+          echo "dir|/etc/pve/priv"
+          for f in /etc/pve/priv/storage/*.enc; do [ -f "$f" ] && b=${f##*/} && echo "enc|${b%.enc}"; done | head -n 200
+        fi
         echo "@@other"
         have systemctl && echo "fail2ban|$(systemctl is-active fail2ban 2>/dev/null)"
         echo "@@end"
@@ -115,7 +138,7 @@
 # Runs on the checked hosts, writing once on this Mac: a `hosts: localhost` play would be skipped by
 # --limit (-l <host>), losing the result (GitHub issue #48).
 - name: Write discovery/security.json
-  hosts: "{{ (target | replace(',', ':')) if target is defined else 'linux' }}:!windows:!appliances:!qnap"
+  hosts: "{{ (target | replace(',', ':')) if target is defined else 'linux:proxmox_nodes' }}:!windows:!appliances:!qnap"
   gather_facts: false
   become: false
   vars:
