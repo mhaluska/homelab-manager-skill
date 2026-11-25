@@ -67,6 +67,7 @@ module "vm" {
   datastore       = coalesce(each.value.datastore, local.storage[local.vm_node[each.key]].vm)
   bridge          = coalesce(each.value.bridge, var.defaults.bridge)
   vlan_id         = each.value.vlan_id
+  mac_address     = each.value.mac_address
   ipv4_address    = each.value.ipv4_address
   ipv4_gateway    = each.value.ipv4_gateway != null ? each.value.ipv4_gateway : var.defaults.ipv4_gateway
   ipv6_address    = each.value.ipv6_address
@@ -106,6 +107,7 @@ module "lxc" {
   datastore        = coalesce(each.value.datastore, local.storage[local.ct_node[each.key]].lxc)
   bridge           = coalesce(each.value.bridge, var.defaults.bridge)
   vlan_id          = each.value.vlan_id
+  mac_address      = each.value.mac_address
   ipv4_address     = each.value.ipv4_address
   ipv4_gateway     = each.value.ipv4_gateway != null ? each.value.ipv4_gateway : var.defaults.ipv4_gateway
   ipv6_address     = each.value.ipv6_address

@@ -79,6 +79,7 @@ variable "vms" {
     datastore      = optional(string)
     bridge         = optional(string)
     vlan_id        = optional(number)
+    mac_address    = optional(string) # empty: Proxmox picks one (an imported VM keeps its own)
     ipv4_address   = optional(string, "dhcp")
     ipv4_gateway   = optional(string) # empty: defaults.ipv4_gateway
     ipv6_address   = optional(string) # empty: no IPv6 settings; "dhcp", "auto" (SLAAC) or CIDR
@@ -144,6 +145,7 @@ variable "containers" {
     datastore        = optional(string)
     bridge           = optional(string)
     vlan_id          = optional(number)
+    mac_address      = optional(string) # empty: Proxmox picks one (an imported container keeps its own)
     ipv4_address     = optional(string, "dhcp")
     ipv4_gateway     = optional(string)           # empty: defaults.ipv4_gateway
     ipv6_address     = optional(string)           # empty: no IPv6 settings; "dhcp", "auto" (SLAAC) or CIDR

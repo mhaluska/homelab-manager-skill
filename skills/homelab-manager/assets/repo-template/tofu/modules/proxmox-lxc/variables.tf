@@ -49,6 +49,15 @@ variable "vlan_id" {
     error_message = "vlan_id must be 1 to 4094, or null for no tag."
   }
 }
+variable "mac_address" {
+  type        = string
+  default     = null
+  description = "MAC address of the NIC; empty: Proxmox picks one. An imported guest keeps its own (tofu_import_plan.py)."
+  validation {
+    condition     = var.mac_address == null || can(regex("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$", var.mac_address))
+    error_message = "mac_address must be six hex pairs separated by colons, e.g. BC:24:11:0A:00:15."
+  }
+}
 variable "ipv4_address" {
   type        = string
   default     = "dhcp"

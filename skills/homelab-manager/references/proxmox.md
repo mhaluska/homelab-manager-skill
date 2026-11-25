@@ -116,8 +116,19 @@ removed; switch that container to the same file's `template_file_id` first (it i
 ## Importing existing resources
 
 For guests listed as "Not managed by OpenTofu" in the drift report:
-1. Read its real config (`proxmox_inventory.py --details`) and write a matching tfvars entry.
-2. Add an `import` block (preferred over the CLI — it shows in the plan):
+1. Refresh the snapshot (`proxmox_inventory.py --details [--site N]`), then
+   `tofu_import_plan.py [--site N] [--guest NAME|VMID ...]`. For each guest without a tfvars entry it prints an
+   `import {}` block and a `vms`/`containers` entry with what Proxmox has now (cores, memory, swap, disks and
+   datastores, `extra_disks`, bridge, VLAN tag, the NIC's `mac_address`, static address and gateway, LXC DNS, tags,
+   `cpu_type`, `on_boot`, `protection`, `description`, `started`, `unprivileged`, `nesting`). A comment above each
+   entry lists what the first plan will still change: settings the modules don't carry (sockets, NUMA, disk cache,
+   SSD/iothread flags, start order, a CD-ROM or missing cloud-init drive, LXC features other than nesting, ...).
+   Show the user that list; it is part of the import decision.
+   Guests it can't represent (passthrough, several NICs, a root disk other than `scsi0`, UEFI/TPM, a non-Linux OS
+   type, `q35`, LXC mount points) get no entry: leave them unmanaged and record why in `docs/decisions.md`.
+2. With the user's choice of guests: `--write` creates (or extends) `imports.tf` in the environment and adds the
+   entries inside the `vms`/`containers` maps of `homelab.auto.tfvars`; it never changes an existing entry. By hand
+   instead, the block is:
    ```hcl
    import {
      to = module.vm["name"].proxmox_virtual_environment_vm.this
@@ -125,11 +136,12 @@ For guests listed as "Not managed by OpenTofu" in the drift report:
    }
    ```
    (LXC: `module.lxc["name"].proxmox_virtual_environment_container.this`.)
-3. Plan. The goal is `1 to import, 0 to add, 0 to change, 0 to destroy`. Iterate on the
-   entry until updates are only cosmetic (tags) and there is **no replace**; copy `cpu_type`, `on_boot`,
-   `description` and `protection` from the real config (opentofu.md "Entry attributes").
-   `clone` is ignored after creation so imported VMs don't need a template.
-4. Approval, apply, remove the `import` block, commit.
+3. `tofu fmt`, then plan (the read-only token is enough). The goal is `N to import, 0 to add, 0 to destroy` and **no
+   replace**; each guest's updates must be the listed ones plus the tag `tofu`, the default description where it has
+   none, and import noise that sets nothing (`vm_id`, `timeout_start`, an LXC's `console`). Anything else: fix the
+   entry (opentofu.md "Entry attributes") and plan again. `clone` and the LXC `template_file_id` are ignored after
+   creation, so the entries name the guest itself and a placeholder.
+4. Approval, apply, remove the `import` blocks (or `imports.tf`), commit.
 Never import by recreating. If a guest can't be represented without replacement, leave it
 unmanaged and record why in `docs/decisions.md`.
 

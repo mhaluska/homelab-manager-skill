@@ -880,6 +880,12 @@ class PveNodePlanTests(unittest.TestCase):  # issue 23
         self.assertEqual(pinv.keep_details({**old, "details_at": "t0"}, {"guests": [{"vmid": 101, "type": "vm"}]})
                          ["details_at"], "t0")                  # still the original --details run
         self.assertNotIn("details_at", pinv.keep_details(None, {"guests": []}))
+        self.assertEqual(pinv.keep_details({**old, "config_version": 2}, {"guests": [{"vmid": 101, "type": "vm"}]})
+                         ["config_version"], 2)                 # what tofu_import_plan.py checks (issue #149)
+        self.assertNotIn("config_version", out)
+        self.assertEqual(pinv.guest_config({"cpu": "host", "protection": "1", "swap": "512", "serial0": "socket",
+                                            "lock": "backup"}),
+                         {"cpu": "host", "protection": "1", "swap": "512", "serial0": "socket"})
         plan, _ = self.p.make_plan({**self.inv, "details_at": "t1"}, "pve1")
         self.assertIn("guest config from t1", self.p.render(plan, []))
 

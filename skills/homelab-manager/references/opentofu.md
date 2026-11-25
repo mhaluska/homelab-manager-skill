@@ -10,7 +10,8 @@ holds `lxc_templates` (proxmox.md "LXC containers") and `backup_jobs` (`backup-j
 
 Optional per `vms`/`containers` entry (the default is what the template always did, so leaving them out changes
 nothing): `ipv4_gateway` (else `defaults.ipv4_gateway`; a guest on another VLAN needs its own), `on_boot` (true),
-`protection` (false), `description`; VMs also `cpu_type` (`x86-64-v2-AES`), `pci_devices` and `machine`
+`protection` (false), `description`, `mac_address` (else Proxmox picks one; an imported guest keeps its own);
+VMs also `cpu_type` (`x86-64-v2-AES`), `pci_devices` and `machine`
 (proxmox.md "PCI passthrough"); containers `dns_servers`/`dns_domain` (else the node's DNS). `protection = true` sets the Proxmox protection flag: Proxmox refuses to delete the guest or
 its disks, so a plan that destroys it fails at apply. Offer it for guests whose loss hurts (DNS, the NAS, the
 state bucket); turning it off is its own change and plan.

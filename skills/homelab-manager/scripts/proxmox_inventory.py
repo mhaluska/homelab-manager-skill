@@ -233,10 +233,15 @@ def no_guests_hint(pve: "PVE") -> str | None:
 
 
 CONFIG_PREFIXES = ("net", "scsi", "virtio", "sata", "ide", "rootfs", "mp", "ipconfig",  # network, disks
-                   "efidisk", "tpmstate", "unused", "hostpci", "usb", "dev")       # + what pins a guest to its node
+                   "efidisk", "tpmstate", "unused", "hostpci", "usb", "dev",       # + what pins a guest to its node
+                   "serial")
 CONFIG_KEYS = {"agent", "ostype", "ciuser", "sshkeys", "boot", "machine", "bios", "cores", "sockets", "memory",
                "onboot", "startup", "description",
-               "unprivileged", "features"}   # LXC: a privileged container with nesting is a security finding (#139)
+               "unprivileged", "features",   # LXC: a privileged container with nesting is a security finding (#139)
+               # what an OpenTofu entry copies (tofu_import_plan.py, GitHub issue #149)
+               "cpu", "protection", "balloon", "numa", "tablet", "swap", "hostname", "nameserver", "searchdomain",
+               "arch"}
+CONFIG_VERSION = 2   # 2: the config holds the keys tofu_import_plan.py copies (0.61.0)
 
 
 def guest_config(conf: dict) -> dict:
@@ -770,7 +775,8 @@ def collect(pve: PVE, details: bool, jobs: int = 8, pbs=None) -> dict:
             "backup_jobs": backup_jobs,
             "replication": repl, **({"ceph": ceph} if ceph else {}),
             **({"pbs_datastores": pbs_ds} if pbs_ds is not None else {}), "storage_health": health,
-            **({"guest_ip_sources": ip_sources} if details else {}), **({"warnings": warnings} if warnings else {}),
+            **({"guest_ip_sources": ip_sources, "config_version": CONFIG_VERSION} if details else {}),
+            **({"warnings": warnings} if warnings else {}),
             **({"errors": sorted(errors)} if errors else {})}
 
 
@@ -795,6 +801,8 @@ def keep_details(old: dict | None, new: dict) -> dict:
             kept += 1
     if kept:
         new["details_at"] = old.get("details_at") or old.get("collected_at")
+        if old.get("config_version"):
+            new["config_version"] = old["config_version"]
     return new
 
 

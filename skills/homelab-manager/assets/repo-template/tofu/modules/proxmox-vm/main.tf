@@ -52,9 +52,10 @@ resource "proxmox_virtual_environment_vm" "this" {
   }
 
   network_device {
-    bridge  = var.bridge
-    vlan_id = var.vlan_id
-    model   = "virtio"
+    bridge      = var.bridge
+    vlan_id     = var.vlan_id
+    model       = "virtio"
+    mac_address = var.mac_address
   }
 
   operating_system {
