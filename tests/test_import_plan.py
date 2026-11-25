@@ -231,6 +231,23 @@ class HclTests(unittest.TestCase):
         self.assertTrue({"template_file_id", "mac_address", "dns_servers", "swap_mib"} <= attrs["containers"])
         self.assertNotIn("datastore_id", attrs["vms"])
 
+    def test_ipv6(self):
+        ctx = {"defaults": {"ipv6_gateway": "fe80::1"}, "node_datastores": False}
+        def attrs(g):
+            e = tip.lxc_entry(g, ctx) if g["type"] == "lxc" else tip.vm_entry(g, ctx)
+            return dict(e.attrs), e.notes
+        a, _ = attrs(lxc(301, "v6a", net0=f"name=eth0,bridge=vmbr0,hwaddr={MAC2},ip=dhcp,ip6=auto,type=veth"))
+        self.assertEqual(a["ipv6_address"], "auto")
+        self.assertNotIn("ipv6_gateway", a)
+        a, _ = attrs(vm(302, "v6b", ipconfig0="ip=dhcp,ip6=fd00:10::21/64,gw6=fd00:10::1"))
+        self.assertEqual((a["ipv6_address"], a["ipv6_gateway"]), ("fd00:10::21/64", "fd00:10::1"))
+        a, notes = attrs(vm(303, "v6c", ipconfig0="ip=dhcp,ip6=fd00:10::22/64"))
+        self.assertNotIn("ipv6_gateway", a)
+        self.assertTrue(any("defaults.ipv6_gateway" in n for n in notes))
+        a, notes = attrs(lxc(304, "v6d", net0=f"name=eth0,bridge=vmbr0,hwaddr={MAC2},ip=dhcp,ip6=manual,type=veth"))
+        self.assertNotIn("ipv6_address", a)
+        self.assertTrue(any("ip6=manual" in n for n in notes))
+
     def test_sizes_and_options(self):
         self.assertEqual(tip.whole(tip.gib("32G")), 32)
         self.assertEqual(tip.whole(tip.gib("1T")), 1024)

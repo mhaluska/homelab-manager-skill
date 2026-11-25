@@ -242,8 +242,9 @@ def common(e: Entry, conf: dict):
         e.notes.append(f"startup {conf['startup']}: the modules set no start order, the plan removes it")
 
 
-def network(e: Entry, conf: dict, ctx: dict, nic: str, ip: str | None, gw: str | None, ip6: str | None):
-    """bridge, vlan_id, mac_address, ipv4_address, ipv4_gateway of the guest's one NIC."""
+def network(e: Entry, conf: dict, ctx: dict, nic: str, ip: str | None, gw: str | None, ip6: str | None,
+            gw6: str | None = None):
+    """bridge, vlan_id, mac_address, ipv4_* and ipv6_* of the guest's one NIC."""
     _, o = options(conf.get(nic))
     d = ctx["defaults"]
     bridge = o.get("bridge")
@@ -269,8 +270,15 @@ def network(e: Entry, conf: dict, ctx: dict, nic: str, ip: str | None, gw: str |
             e.notes.append("no gateway in Proxmox: the entry gets defaults.ipv4_gateway")
     elif ip == "manual":
         e.notes.append(f"{nic} ip=manual: the modules set dhcp")
-    if ip6:
-        e.notes.append(f"IPv6 {ip6}: the modules have no IPv6 setting yet, the plan removes it")
+    if ip6 == "manual":
+        e.notes.append(f"{nic} ip6=manual: the modules set no IPv6, the plan removes it")
+    elif ip6:   # "auto" (SLAAC), "dhcp" or address/prefix, as the modules take it
+        e.set("ipv6_address", ip6)
+        if ip6 not in ("auto", "dhcp"):
+            if gw6 and gw6 != d.get("ipv6_gateway"):
+                e.set("ipv6_gateway", gw6)
+            elif not gw6 and d.get("ipv6_gateway"):
+                e.notes.append("no IPv6 gateway in Proxmox: the entry gets defaults.ipv6_gateway")
 
 
 def vm_entry(g: dict, ctx: dict) -> Entry:
@@ -401,7 +409,7 @@ def vm_entry(g: dict, ctx: dict) -> Entry:
         _, ic = options(conf.get(f"ipconfig{idx}"))
         if n[0] != "net0":
             e.blockers.append(f"the only NIC is {n[0]}: the module's is net0")
-        network(e, conf, ctx, n[0], ic.get("ip"), ic.get("gw"), ic.get("ip6"))
+        network(e, conf, ctx, n[0], ic.get("ip"), ic.get("gw"), ic.get("ip6"), ic.get("gw6"))
         if cloudinit:
             servers = str(conf.get("nameserver") or "").split()
             if servers and servers != d.get("dns_servers"):
@@ -483,7 +491,7 @@ def lxc_entry(g: dict, ctx: dict) -> Entry:
             e.blockers.append(f"interface name {no.get('name')}: the module names it eth0")
         if n[0] != "net0":
             e.blockers.append(f"the only interface is {n[0]}: the module's is net0")
-        network(e, conf, ctx, n[0], no.get("ip"), no.get("gw"), no.get("ip6"))
+        network(e, conf, ctx, n[0], no.get("ip"), no.get("gw"), no.get("ip6"), no.get("gw6"))
     servers = str(conf.get("nameserver") or "").split()
     if servers:
         e.set("dns_servers", servers)
