@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Scaffold the repo template with every component into a temporary directory and validate it:
-# tofu fmt/validate, packer fmt/validate (each distro var file), ansible-playbook --syntax-check.
+# tofu fmt/validate/test (.github/tofu-tests), packer fmt/validate (each distro var file), ansible-playbook --syntax-check.
 #
 #     .github/validate_template.sh [--keep]
 #
@@ -22,10 +22,16 @@ python3 "$ROOT/skills/homelab-manager/scripts/init_repo.py" "$REPO" \
 
 step "OpenTofu"
 check tofu fmt -check -recursive "$REPO/tofu"
+# defaults, options and validations of the guest entries, planned against a mocked provider (`tofu test`, after
+# init: run blocks load the modules)
+mkdir -p "$REPO/tofu/environments/homelab/tests"
+cp "$ROOT"/.github/tofu-tests/*.tftest.hcl "$REPO/tofu/environments/homelab/tests/"
+check tofu fmt -check "$REPO/tofu/environments/homelab/tests"
 for env in "$REPO"/tofu/environments/*/; do
   check tofu -chdir="$env" init -backend=false -input=false >/dev/null
   check tofu -chdir="$env" validate
 done
+check tofu -chdir="$REPO/tofu/environments/homelab" test -no-color
 
 step "Packer"
 export PROXMOX_URL=https://192.0.2.10:8006/api2/json PROXMOX_USERNAME='ci@pve!ci' PROXMOX_TOKEN=00000000-0000-0000-0000-000000000000
