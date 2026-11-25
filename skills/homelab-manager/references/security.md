@@ -78,7 +78,10 @@ prompts to the steps that need a decision:
   version, only as one simple command, and any guard finding still wins. Offer it during setup and after the
   upgrade that brings it.
 - The template's `.claude/settings.json` allows `git add` and `git commit` (local; the pre-commit hook still
-  runs). `git push`, plugin updates and everything that writes elsewhere keep asking.
+  runs). `git push`, plugin updates and everything that writes elsewhere keep asking. A new repo gets these allow
+  rules at setup; an existing one only on the user's yes (upgrade note `settings-allow-git`).
+  `init_repo.py --sync-managed` and `--add-components` add only the template's `deny` and `ask` rules, never an
+  `allow` rule, so one the user removed stays removed.
 
 Rules can only match simple commands, so write them that way: one script per Bash call, its absolute path written
 out (`$HM` expanded, never `HM=…;`), `git -C <repo> …`, and no `cd … &&`, pipes into `tail`/`head` or heredocs
