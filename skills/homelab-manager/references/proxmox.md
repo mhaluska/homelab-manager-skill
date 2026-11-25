@@ -120,12 +120,15 @@ For guests listed as "Not managed by OpenTofu" in the drift report:
    `tofu_import_plan.py [--site N] [--guest NAME|VMID ...]`. For each guest without a tfvars entry it prints an
    `import {}` block and a `vms`/`containers` entry with what Proxmox has now (cores, memory, swap, disks and
    datastores, `extra_disks`, bridge, VLAN tag, the NIC's `mac_address`, static address and gateway, LXC DNS, tags,
-   `cpu_type`, `on_boot`, `protection`, `description`, `started`, `unprivileged`, `nesting`). A comment above each
-   entry lists what the first plan will still change: settings the modules don't carry (sockets, NUMA, disk cache,
-   SSD/iothread flags, start order, a CD-ROM or missing cloud-init drive, LXC features other than nesting, ...).
-   Show the user that list; it is part of the import decision.
-   Guests it can't represent (passthrough, several NICs, a root disk other than `scsi0`, UEFI/TPM, a non-Linux OS
-   type, `q35`, LXC mount points) get no entry: leave them unmanaged and record why in `docs/decisions.md`.
+   `cpu_type`, `on_boot`, `protection`, `description`, `started`, `unprivileged`, `nesting`, and the settings of
+   opentofu.md "Entry attributes" an imported guest keeps: sockets, NUMA, ballooning, disk options, start order, no
+   cloud-init drive or serial port, a CD-ROM, LXC features, mount points and console, ...). A comment above an
+   entry lists what the first plan will still change, the few settings the modules don't carry (disk I/O limits,
+   NIC rate limit, ...): show the user that list; it is part of the import decision. An older environment's
+   `variables.tf` lacks the newer attributes: they become such notes, or a blocker where the plan would remove or
+   rebuild something (mount points, a non-Linux OS type, `q35`); `init_repo.py --sync-managed` first.
+   Guests it can't represent (passthrough, several NICs, a root disk other than `scsi0`, UEFI/TPM, mount points
+   numbered with a gap) get no entry: leave them unmanaged and record why in `docs/decisions.md`.
 2. With the user's choice of guests: `--write` creates (or extends) `imports.tf` in the environment and adds the
    entries inside the `vms`/`containers` maps of `homelab.auto.tfvars`; it never changes an existing entry. By hand
    instead, the block is:
@@ -138,7 +141,7 @@ For guests listed as "Not managed by OpenTofu" in the drift report:
    (LXC: `module.lxc["name"].proxmox_virtual_environment_container.this`.)
 3. `tofu fmt`, then plan (the read-only token is enough). The goal is `N to import, 0 to add, 0 to destroy` and **no
    replace**; each guest's updates must be the listed ones plus the tag `tofu`, the default description where it has
-   none, and import noise that sets nothing (`vm_id`, `timeout_start`, an LXC's `console`). Anything else: fix the
+   none, and import noise that sets nothing on Proxmox (`vm_id`, `timeout_start`, `migrate`). Anything else: fix the
    entry (opentofu.md "Entry attributes") and plan again. `clone` and the LXC `template_file_id` are ignored after
    creation, so the entries name the guest itself and a placeholder.
 4. Approval, apply, remove the `import` blocks (or `imports.tf`), commit.

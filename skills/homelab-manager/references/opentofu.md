@@ -16,6 +16,24 @@ VMs also `cpu_type` (`x86-64-v2-AES`), `pci_devices` and `machine`
 its disks, so a plan that destroys it fails at apply. Offer it for guests whose loss hurts (DNS, the NAS, the
 state bucket); turning it off is its own change and plan.
 
+Settings an imported guest keeps (`tofu_import_plan.py` sets them from the snapshot; left out, the module plans what
+it always did). Both kinds: `startup = { order, up_delay, down_delay }` (seconds), the NIC's `firewall` and `mtu`.
+VMs: `os_type` (`l26`; e.g. `win11`, `other`), `sockets`, `numa`, `cpu_flags` (`["+aes"]`),
+`memory_floating_mib` (ballooning minimum), `scsi_hardware` (`virtio-scsi-single`), `tablet_device`, `agent_trim`
+(fstrim after a disk move), `queues` (NIC multiqueue); the root disk's `disk_cache` (none), `disk_discard` (`on`),
+`disk_iothread` (true), `disk_ssd` (true), `disk_backup` (false: backups skip it), and the same `cache`, `discard`,
+`iothread`, `ssd`, `backup` per `extra_disks` item (default: discard on, iothread, no ssd flag). A VM that never
+had cloud-init: `cloud_init_drive = false` (no drive; the address, DNS, admin user and snippets then don't apply,
+the guest keeps its own), `serial_socket = false` (no serial0), `cdrom` (its drive on ide2: `"none"` or an ISO
+file ID; only without the cloud-init drive, which uses ide2).
+Containers: `keyctl`, `fuse`, `mknod`, `mount_types` (`["nfs", "cifs"]`) next to `nesting`; `features = false`
+for no features line at all (a privileged container without one: Proxmox lets only root@pam change a privileged
+container's features); `console_mode` (`tty`), `tty_count`, `console`; `mount_points`, a list numbered mp0, mp1,
+... in order: `{ volume, path, size_gib, backup, read_only, mount_options, acl, quota, replicate, shared }`, where
+`volume` is a storage for a new volume, the volume ID of an existing one (`tank:subvol-202-disk-1`) or a host path
+for a bind mount (adding or changing one needs root@pam). Removing or reordering items changes the container's
+mount points, and a removed volume's data may go with it: treat it like a disk change (approval).
+
 IPv6 (both kinds): `ipv6_address` is `auto` (SLAAC), `dhcp` (DHCPv6) or address/prefix (`fd00:10::21/64`);
 `ipv6_gateway` (else `defaults.ipv6_gateway`, often the router's link-local `fe80::1`) is used only with a static
 address, since SLAAC and DHCPv6 take it from the router advertisement. Without `ipv6_address` the guest gets no
