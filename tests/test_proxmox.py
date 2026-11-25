@@ -819,6 +819,63 @@ class ProxmoxTlsAndPermissionTests(unittest.TestCase):
         self.assertIn("/pool/lab", str(e.exception))
         self.assertIn("pveum user token permissions homelab@pve ro", str(e.exception))
 
+    def test_token_expiry(self):  # GitHub issue #155: Proxmox has no token creation time, only `expire`
+        ce, now, day = self.check_env, 1_800_000_000, 86400
+        ids = {"read_only": "homelab@pve!ro", "provisioning": "homelab@pve!rw"}
+        users = [{"userid": "homelab@pve", "expire": 0,
+                  "tokens": [{"tokenid": "ro", "expire": now + 400 * day}, {"tokenid": "rw", "expire": now + 400 * day}]},
+                 {"userid": "root@pam", "tokens": [{"tokenid": "other", "expire": 0}]}]   # not the skill's: ignored
+        row = ce.token_expiry_row("proxmox:tokens", ids, users, now)
+        self.assertTrue(row["ok"], row)
+        self.assertIn("homelab@pve!ro in 400 days", row["detail"])
+        users[0]["tokens"][1]["expire"] = 0                                               # rw never expires
+        users[0]["tokens"][0]["expire"] = now + 10 * day                                  # ro soon
+        row = ce.token_expiry_row("proxmox:tokens", ids, users, now)
+        self.assertIsNone(row["ok"])
+        self.assertIn("expiring: homelab@pve!ro in 10 days", row["detail"])
+        self.assertIn("no expiry: homelab@pve!rw", row["detail"])
+        users[0]["expire"] = now + 5 * day                                                # the user's expiry counts too
+        self.assertIn("homelab@pve!rw in 5 days", ce.token_expiry_row("t", ids, users, now)["detail"])
+        users[0]["expire"] = now - day
+        row = ce.token_expiry_row("t", ids, users, now)
+        self.assertIs(row["ok"], False)
+        self.assertIn("expired: homelab@pve!ro, homelab@pve!rw", row["detail"])
+        row = ce.token_expiry_row("t", {"read_only": "homelab@pve!gone"}, users, now)
+        self.assertIn("not listed by Proxmox: homelab@pve!gone", row["detail"])
+
+        cfg = {"proxmox": {"endpoint": "https://pve1.example:8006"},
+               "secrets": {"proxmox-ro": {"service": "homelab/proxmox-ro"}, "proxmox-rw": {"service": "homelab/proxmox-rw"}}}
+        values = {"proxmox-ro": "homelab@pve!ro=s3cret-ro", "proxmox-rw": "homelab@pve!rw=s3cret-rw"}
+        calls = []
+
+        class Fake:
+            def get(self, path, **params):
+                calls.append((path, params))
+                return [{"userid": "homelab@pve", "tokens": [{"tokenid": "ro"}, {"tokenid": "rw", "expire": now + 99 * day}]}]
+
+        def connect(px, token):
+            self.assertEqual(token, "homelab@pve!ro=s3cret-ro")                         # the read-only token
+            return Fake()
+        with unittest.mock.patch.object(self.hmlib, "read_secret", side_effect=lambda c, n: values[n]):
+            rows = ce.check_token_expiry(cfg, now=now, connect=connect)
+        self.assertEqual(calls, [("/access/users", {"full": 1})])
+        self.assertEqual(rows[0]["check"], "proxmox:tokens")
+        self.assertIsNone(rows[0]["ok"])
+        self.assertIn("no expiry: homelab@pve!ro", rows[0]["detail"])
+        self.assertNotIn("s3cret", json.dumps(rows))
+
+        error = self.inv.PveError("Proxmox API refused /access/users (401): the token 'homelab@pve!ro' is wrong")
+
+        def refused(px, token):
+            class R:
+                def get(self, path, **_):
+                    raise error
+            return R()
+        with unittest.mock.patch.object(self.hmlib, "read_secret", side_effect=lambda c, n: values[n]):
+            self.assertIs(ce.check_token_expiry(cfg, now=now, connect=refused)[0]["ok"], False)
+        with unittest.mock.patch.object(self.hmlib, "read_secret", side_effect=self.hmlib.ConfigError("locked")):
+            self.assertIn("not readable", ce.check_token_expiry(cfg, now=now, connect=connect)[0]["detail"])
+
     def test_fallback_endpoints(self):  # GitHub issue 98
         from unittest import mock
         h, ce = self.hmlib, self.check_env

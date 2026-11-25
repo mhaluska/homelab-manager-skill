@@ -2,6 +2,7 @@
 """Check that this Mac is ready to manage the homelab.
 
     check_env.py              tools + SSH agent + config + configured keychain items + Proxmox TLS
+                              + the skill's Proxmox tokens without an expiry or expiring soon (read-only token)
                               + whether the repo is ahead of or behind its upstream (git.auto_push)
                               + Ansible targets whose Python the installed ansible-core can't use
     check_env.py --keychain   also run a keychain self-test (write, read, delete a dummy item)
@@ -42,6 +43,7 @@ TOOLS = {
 # a tool only a component uses: skipped while homelab.yaml disables that component (GitHub issue #120)
 TOOL_COMPONENT = {"tofu": "proxmox", "packer": "templates", "ansible": "ansible", "nmap": "discovery"}
 SELFTEST_SERVICE = "homelab/_selftest"
+TOKEN_EXPIRY_WARN_DAYS = 30   # a token (or its user) expiring this soon is a warning (GitHub issue #155)
 
 
 def run(cmd, timeout=15, input_text=None, cwd=None):
@@ -286,6 +288,87 @@ def _check_tls(cfg, px):
                        f"python3 $HM/scripts/config_set.py '{where}.ca_cert=~/.config/homelab/<ca>.pem'"}]
 
 
+def token_expiry_row(check: str, tokens: dict[str, str], users: list, now: float,
+                     days: int = TOKEN_EXPIRY_WARN_DAYS) -> dict:
+    """One site's verdict on the skill's tokens ({kind: user@realm!tokenid}) from GET /access/users?full=1.
+    Proxmox gives a token's `expire` (and its user's) but no creation time, so its age is unknown: a token without
+    an expiry is a warning (rotation is up to the user), one expiring within `days` too, an expired one a failure."""
+    listed = {}
+    for u in users or []:
+        if not isinstance(u, dict):
+            continue
+        for t in u.get("tokens") or []:
+            if isinstance(t, dict) and t.get("tokenid"):
+                ends = [int(x) for x in (t.get("expire"), u.get("expire")) if str(x or "").isdigit() and int(x) > 0]
+                listed[f"{u.get('userid')}!{t['tokenid']}"] = min(ends) if ends else 0
+    never, soon, gone, unknown, fine = [], [], [], [], []
+    for tid in dict.fromkeys(tokens.values()):
+        name = hmlib.clean(tid, 80)
+        if tid not in listed:
+            unknown.append(name)
+        elif not listed[tid]:
+            never.append(name)
+        elif listed[tid] <= now:
+            gone.append(name)
+        elif listed[tid] - now <= days * 86400:
+            soon.append(f"{name} in {max(1, int((listed[tid] - now) // 86400))} days")
+        else:
+            fine.append(f"{name} in {int((listed[tid] - now) // 86400)} days")
+    parts = []
+    if gone:
+        parts.append(f"expired: {', '.join(gone)} — create a new token (docs/proxmox-tokens.md) and update its keychain item")
+    if soon:
+        parts.append(f"expiring: {', '.join(soon)} — rotate it before then (references/security.md \"Tokens\")")
+    if never:
+        parts.append(f"no expiry: {', '.join(never)} — give each one when you next rotate it "
+                     "(pveum user token modify <user> <tokenid> --expire <epoch>, on a node)")
+    if unknown:
+        parts.append(f"not listed by Proxmox: {', '.join(unknown)} (removed, or the read-only token can't see its user)")
+    if not parts:
+        return {"check": check, "ok": True, "detail": "tokens expire: " + ", ".join(fine)}
+    return {"check": check, "ok": False if gone else None, "detail": "; ".join(parts)}
+
+
+def check_token_expiry(cfg, now: float | None = None, connect=None):
+    """The skill's Proxmox tokens (read_only, provisioning) of every site: expired, expiring within
+    TOKEN_EXPIRY_WARN_DAYS or without an expiry. One GET /access/users?full=1 per site with the read-only token
+    (PVEAuditor: Sys.Audit); the token IDs come from the keychain values, never their secrets."""
+    import time
+    from proxmox_inventory import PVE, PveError
+    if not cfg:
+        return []
+    try:
+        targets = hmlib.proxmox_sites(cfg)
+    except hmlib.ConfigError:
+        return []   # reported by the TLS check
+    now = time.time() if now is None else now
+    connect = connect or (lambda px, token: PVE(hmlib.pick_endpoint(px), token, hmlib.proxmox_ssl_context(cfg, px)))
+    out = []
+    for px in targets:
+        check = "proxmox:tokens" + (f":{px['_site']}" if px["_site"] and px["_where"] != "proxmox" else "")
+        values = {}
+        for kind in ("read_only", "provisioning"):
+            try:
+                values[kind] = hmlib.read_secret(cfg, hmlib.proxmox_token_name(px, kind))
+            except hmlib.ConfigError:
+                continue   # a missing or unreadable item is reported by its secret: row
+        if "read_only" not in values:
+            out.append({"check": check, "ok": None, "detail": "read-only token not readable: expiry not checked"})
+            continue
+        ids = {k: v.split("=", 1)[0] for k, v in values.items() if "!" in v.split("=", 1)[0]}
+        try:
+            users = connect(px, values["read_only"]).get("/access/users", full=1)
+        except PveError as e:
+            msg = hmlib.clean(str(e), 200)
+            out.append({"check": check, "ok": False if "(401)" in msg else None, "detail": f"expiry not checked: {msg}"})
+            continue
+        except hmlib.ConfigError as e:
+            out.append({"check": check, "ok": None, "detail": f"expiry not checked: {e}"})
+            continue
+        out.append(token_expiry_row(check, ids, users if isinstance(users, list) else [], now))
+    return out
+
+
 def check_tofu_sites(cfg):
     """Several sites: each site's OpenTofu environment refuses another site's token (site.tf), and the state
     settings keep the environments apart."""
@@ -491,7 +574,8 @@ def main(argv):
     results = check_tools(cfg) + check_ssh_agent() + check_gh() + check_keychain_unlocked()
     if "--keychain" in argv:
         results += check_keychain_selftest()
-    results += (cfg_results + check_proxmox_tls(cfg) + check_tofu_sites(cfg) + check_ansible_targets(cfg)
+    results += (cfg_results + check_proxmox_tls(cfg) + check_token_expiry(cfg) + check_tofu_sites(cfg)
+                + check_ansible_targets(cfg)
                 + check_site_ambiguity(cfg)
                 + check_git_upstream(cfg))
     if "--json" in argv:

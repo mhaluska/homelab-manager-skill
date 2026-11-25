@@ -219,7 +219,7 @@ Scripts (all in `$HM/scripts/`):
 | Script | Purpose | Writes |
 |---|---|---|
 | `init_repo.py --components … [--dry-run]` / `--add-components …` / `--sync-managed` / `--add-site N` | scaffold, extend, or update the repo after a plugin upgrade; scaffold a site | repo files |
-| `check_env.py [--keychain] [--json]` | tools, SSH agent, keychain self-test, secrets readable, Proxmox TLS, EL8 Python, unpushed commits | — |
+| `check_env.py [--keychain] [--json]` | tools, SSH agent, keychain self-test, secrets readable, Proxmox TLS, token expiry, EL8 Python, unpushed commits | — |
 | `with_secrets.py <names…> -- <cmd>` | run a command with keychain secrets in env, output redacted | — |
 | `proxmox_inventory.py [--details] [--site N\|--all-sites]` / `--next-vmid vms\|lxc [--ip --vlan --site]` | read-only Proxmox snapshot + summary table (`--details`: configs, guest IPs; other sites: references/proxmox.md "Several sites") / VMID for a new guest | `discovery/proxmox.json` |
 | `pve_snapshot.py list\|check\|create\|delete\|rollback\|prune <guest…> [--name N] [--dry-run]` | guest snapshots around patching (check: can they be; delete/rollback/prune: approval) | — |
