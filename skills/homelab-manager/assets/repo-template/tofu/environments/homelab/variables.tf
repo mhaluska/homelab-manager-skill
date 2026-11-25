@@ -48,6 +48,23 @@ variable "base_images" {
   }
 }
 
+variable "lxc_templates" {
+  description = "LXC templates downloaded to Proxmox storage; a container names one in its template attribute."
+  type = map(object({
+    url                = string                     # one dated build, e.g. http://download.proxmox.com/images/system/debian-13-standard_13.1-2_amd64.tar.zst
+    checksum           = string                     # required: sha512sum from Proxmox's aplinfo index, or the distribution's SHA256SUMS
+    checksum_algorithm = optional(string, "sha512") # sha256 for SHA256SUMS
+    file_name          = optional(string)           # empty: the url's file name
+    node               = optional(string)           # empty: defaults.node; the template must be on the container's node (or on shared storage)
+    datastore          = optional(string)           # needs vztmpl content; empty: the node's image datastore
+  }))
+  default = {}
+  validation {
+    condition     = length([for k, v in var.lxc_templates : k if !contains(["md5", "sha1", "sha224", "sha256", "sha384", "sha512"], v.checksum_algorithm)]) == 0
+    error_message = "lxc_templates ${join(", ", [for k, v in var.lxc_templates : k if !contains(["md5", "sha1", "sha224", "sha256", "sha384", "sha512"], v.checksum_algorithm)])}: checksum_algorithm must be md5, sha1, sha224, sha256, sha384 or sha512."
+  }
+}
+
 variable "vms" {
   description = "Virtual machines. The map key is the VM name — renaming a key needs a `moved` block, or it is a replacement."
   type = map(object({
@@ -116,7 +133,8 @@ variable "containers" {
   description = "LXC containers. The map key is the hostname."
   type = map(object({
     vm_id            = number
-    template_file_id = string
+    template_file_id = optional(string) # a template already on storage, e.g. local:vztmpl/…; or:
+    template         = optional(string) # a key of lxc_templates (downloaded by OpenTofu)
     os_type          = optional(string, "debian")
     node             = optional(string)
     cores            = optional(number, 1)
@@ -157,5 +175,9 @@ variable "containers" {
   validation {
     condition     = length([for k, v in var.containers : k if !(v.vm_id >= 100 && v.vm_id == floor(v.vm_id))]) == 0
     error_message = "containers ${join(", ", [for k, v in var.containers : k if !(v.vm_id >= 100 && v.vm_id == floor(v.vm_id))])}: vm_id must be a whole number of 100 or more."
+  }
+  validation {
+    condition     = length([for k, v in var.containers : k if(v.template == null) == (v.template_file_id == null)]) == 0
+    error_message = "containers ${join(", ", [for k, v in var.containers : k if(v.template == null) == (v.template_file_id == null)])}: set either template_file_id (a template on storage) or template (a key of lxc_templates)."
   }
 }

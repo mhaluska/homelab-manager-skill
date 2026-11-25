@@ -6,8 +6,9 @@ locals {
   vm_node = { for k, v in var.vms : k => coalesce(v.node, var.defaults.node) }
   ct_node = { for k, v in var.containers : k => coalesce(v.node, var.defaults.node) }
   bi_node = { for k, v in var.base_images : k => coalesce(v.node, var.defaults.node) }
+  lt_node = { for k, v in var.lxc_templates : k => coalesce(v.node, var.defaults.node) }
   nds     = var.defaults.node_datastores
-  storage = { for n in toset(concat(values(local.vm_node), values(local.ct_node), values(local.bi_node))) : n => {
+  storage = { for n in toset(concat(values(local.vm_node), values(local.ct_node), values(local.bi_node), values(local.lt_node))) : n => {
     vm    = try(local.nds[n].datastore, var.defaults.datastore)
     lxc   = try(coalesce(local.nds[n].lxc_datastore, local.nds[n].datastore), coalesce(var.defaults.lxc_datastore, var.defaults.datastore))
     image = coalesce(try(local.nds[n].image_datastore, null), var.defaults.image_datastore, try(local.nds[n].datastore, null), var.defaults.datastore)
@@ -32,6 +33,22 @@ module "base_image" {
   bridge             = var.defaults.bridge
 
   allow_unverified_image = each.value.allow_unverified_image
+}
+
+# LXC templates (vztmpl) downloaded by the node from the url, checked against the checksum. A container uses one
+# only at creation (template_file_id is ignored afterwards), so removing an entry deletes the file and nothing else.
+resource "proxmox_download_file" "lxc_template" {
+  for_each = var.lxc_templates
+
+  content_type        = "vztmpl"
+  node_name           = local.lt_node[each.key]
+  datastore_id        = coalesce(each.value.datastore, local.storage[local.lt_node[each.key]].image)
+  url                 = each.value.url
+  file_name           = each.value.file_name
+  checksum            = each.value.checksum
+  checksum_algorithm  = each.value.checksum_algorithm
+  overwrite           = false
+  overwrite_unmanaged = false
 }
 
 module "vm" {
@@ -80,7 +97,7 @@ module "lxc" {
   hostname         = each.key
   node             = local.ct_node[each.key]
   vm_id            = each.value.vm_id
-  template_file_id = each.value.template_file_id
+  template_file_id = each.value.template != null ? proxmox_download_file.lxc_template[each.value.template].id : each.value.template_file_id
   os_type          = each.value.os_type
   cores            = each.value.cores
   memory_mib       = each.value.memory_mib

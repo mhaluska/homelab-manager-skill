@@ -94,6 +94,17 @@ under HA unless every HA node has the device mapped.
 (`pveam available` / `pveam list <storage>` run by the user, or the snapshot `--details`).
 Unprivileged + nesting by default. Changing `template_file_id` later is ignored (no rebuild).
 
+A template not on storage yet: an `lxc_templates` entry (a dated file name as the key, `url`, `checksum`) and
+`template = "<key>"` in the container instead of `template_file_id`; OpenTofu has the node download and check it
+(`proxmox_download_file`, like base images). The checksum is required: Proxmox's own templates list their
+`sha512sum` in the index `pveam` reads (`aplinfo-pve-<major>.dat` on download.proxmox.com), others need
+`checksum_algorithm` for the distribution's file (e.g. `sha256` for SHA256SUMS). It lands on the default node's
+image storage unless the entry sets `node`/`datastore` (a storage with `vztmpl` content, see the snapshot): on
+local storage it must be on the container's node, on shared storage one entry serves every node. A file already
+on storage is refused (never overwritten): use its `template_file_id`, or import it
+(`id = "<node>/<storage>:vztmpl/<file>"`, opentofu.md "Imports"). An entry still named by a container can't be
+removed; switch that container to the same file's `template_file_id` first (it is ignored after creation anyway).
+
 ## Importing existing resources
 
 For guests listed as "Not managed by OpenTofu" in the drift report:

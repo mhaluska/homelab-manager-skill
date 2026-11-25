@@ -49,10 +49,18 @@ vms = {
   # }
 }
 
+lxc_templates = {
+  # "debian-13-standard-13.1-2" = {
+  #   url      = "http://download.proxmox.com/images/system/debian-13-standard_13.1-2_amd64.tar.zst"
+  #   checksum = "<sha512sum from Proxmox's aplinfo index>"   # required; checksum_algorithm (sha512) for others
+  #   # optional: node (else defaults), datastore (needs vztmpl content; else image_datastore), file_name
+  # }
+}
+
 containers = {
   # "dns01" = {
   #   vm_id            = 201
-  #   template_file_id = "local:vztmpl/debian-13-standard_13.1-2_amd64.tar.zst"
+  #   template_file_id = "local:vztmpl/debian-13-standard_13.1-2_amd64.tar.zst"   # or template = "<lxc_templates key>"
   #   ipv4_address     = "10.0.10.31/24"
   #   # optional: ipv4_gateway, vlan_id, dns_servers / dns_domain (else the node's), on_boot (true),
   #   # protection (false), description, cores, memory_mib, swap_mib, disk_gib, unprivileged, nesting,
