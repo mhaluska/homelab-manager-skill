@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+- Guests with more than one NIC: `vms` and `containers` entries take `extra_nics`, the NICs after the first (net1,
+  net2, … in order: bridge, VLAN, MAC, firewall, MTU, addresses and gateway; VMs also `model`, `queues`,
+  `disconnected` and cloud-init ipconfigN, containers the interface `name`). The entry's own NIC attributes stay
+  the first NIC's, so existing entries plan as before; `ipv4_gateway = ""` leaves the first NIC without a gateway
+  when another NIC has it. `tofu_import_plan.py` imports such guests (on a real site: 92 of 95 guests, up from 83)
+  and notes the provider defaults a first plan writes again. NICs or mount points numbered with a gap and VLAN
+  trunks stay unmanaged (`references/proxmox.md` says how to renumber). An upgrade note offers the module and
+  environment merge ([#149](https://github.com/mhaluska/homelab-manager-skill/issues/149)).
+
 ## 0.62.0 — 2026-11-25
 - Importing existing guests: the OpenTofu modules carry what an older guest has, so the first plan of a
   `tofu_import_plan.py` entry shows only the `tofu` tag and the description (on a real site: 83 of 95 guests,
