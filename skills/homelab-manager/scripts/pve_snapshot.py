@@ -326,4 +326,4 @@ def apply_one(pve: PVE, pve_guest, action: str, g: dict, name: str, description:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hmlib.exit_main(main))

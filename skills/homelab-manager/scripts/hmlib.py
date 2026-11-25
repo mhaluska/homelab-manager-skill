@@ -367,6 +367,22 @@ def pick_endpoint(px: dict, reachable=None) -> str:
     return eps[0]
 
 
+UNREACHABLE = 4   # exit code: the check could not run (API or host unreachable, data missing), GitHub #156
+
+
+def exit_main(main, *args) -> int:
+    """Run a script's main(). An API error raised as a SystemExit with a message and an `hm_exit` code (PveError)
+    prints the message and returns that code, not the 1 Python gives every message: 1 means "found something"."""
+    try:
+        return main(*args)
+    except SystemExit as e:
+        code = getattr(e, "hm_exit", None)
+        if code is None or e.code is None or isinstance(e.code, int):
+            raise
+        print(e.code, file=sys.stderr)
+        return code
+
+
 def proxmox_sites(cfg: dict) -> list[dict]:
     """The Proxmox block of every site that has one with an endpoint."""
     return [proxmox_site(cfg, s["name"]) for s in sites(cfg) if s["proxmox"] and endpoint_list(s["proxmox"].get("endpoint"))]

@@ -157,7 +157,7 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         Path(self.d, "OVERVIEW.md").write_text(md.replace("DMZ", "LAN"))
         self.assertEqual(run("overview.py", "--no-ansible", "--check", cwd=self.d).returncode, 1)
         Path(self.d, "OVERVIEW.md").unlink()
-        self.assertEqual(run("overview.py", "--no-ansible", "--check", cwd=self.d).returncode, 2)
+        self.assertEqual(run("overview.py", "--no-ansible", "--check", cwd=self.d).returncode, 1)
 
     def test_storage_health_and_pbs(self):  # GitHub issues #151, #152
         f = Path(self.d, "discovery/proxmox.json")

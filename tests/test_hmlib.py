@@ -85,5 +85,23 @@ class AtomicWriteTests(unittest.TestCase):
         self.assertEqual(found - allowed, set(), "use hmlib.atomic_write for files in the user's repository")
 
 
+
+class ExitCodeTests(unittest.TestCase):  # GitHub issue #156: 1 = found something, 4 = could not run
+    def test_exit_main(self):
+        import io
+        import contextlib
+        import proxmox_inventory
+        def fails():
+            raise proxmox_inventory.PveError("https://pve:8006: unreachable")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(hmlib.exit_main(fails), 4)
+        self.assertIn("unreachable", err.getvalue())
+        self.assertEqual(hmlib.exit_main(lambda a: a, 1), 1)
+        def plain():
+            raise SystemExit("not an API error")
+        with self.assertRaises(SystemExit):
+            hmlib.exit_main(plain)
+
 if __name__ == "__main__":
     unittest.main()

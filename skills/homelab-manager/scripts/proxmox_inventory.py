@@ -48,7 +48,9 @@ from hmlib import clean, id_list  # noqa: E402
 
 class PveError(SystemExit):
     """A Proxmox API call failed (HTTP error, timeout, unreachable, not JSON). A SystemExit, so a script that does
-    not catch it ends with the message; collect() records it per node and guest and goes on."""
+    not catch it ends with the message; collect() records it per node and guest and goes on. Run through
+    hmlib.exit_main, an uncaught one exits 4 (could not run), not 1."""
+    hm_exit = hmlib.UNREACHABLE
 
 
 def body_and_close(e: urllib.error.HTTPError) -> bytes:
@@ -939,7 +941,7 @@ def main():
                 return 3
             failed += 1
             print(f"proxmox_inventory: site {px['_site'] or 'default'}: {e}", file=sys.stderr)
-    return 1 if failed else 0
+    return hmlib.UNREACHABLE if failed else 0
 
 
 def pbs_opener(cfg: dict):
@@ -987,4 +989,4 @@ def inventory_site(cfg: dict, px: dict, a) -> None:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(hmlib.exit_main(main))

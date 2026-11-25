@@ -1919,7 +1919,7 @@ def render(cfg: dict, managed: dict, note: str) -> str:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", help="write here instead of OVERVIEW.md in the repository root (- prints it)")
-    ap.add_argument("--check", action="store_true", help="exit 0 when OVERVIEW.md is current, 1 stale, 2 missing")
+    ap.add_argument("--check", action="store_true", help="exit 0 when OVERVIEW.md is current, 1 stale or missing")
     ap.add_argument("--no-ansible", action="store_true", help="don't read the Ansible inventory")
     a = ap.parse_args()
     try:
@@ -1934,8 +1934,8 @@ def main():
     target = Path(a.out) if a.out and a.out != "-" else root / "OVERVIEW.md"
     if a.check:
         if not target.is_file():
-            print(f"{target.name} missing — run overview.py")
-            return 2
+            print(f"stale: {target.name} missing — run overview.py")
+            return 1   # missing or stale: regenerate either way (GitHub #156)
         fresh = target.read_text() == text
         print("fresh: OVERVIEW.md matches the repository data" if fresh
               else "stale: OVERVIEW.md differs from the repository data — run overview.py and commit it")

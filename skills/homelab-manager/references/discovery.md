@@ -315,3 +315,19 @@ successful backup, PBS datastores, replication jobs, full storage, node memory.
 - `overview.redact: true` in homelab.yaml (a shared or public repo) masks IPv4 addresses, MACs, the domain and the
   Proxmox endpoint hosts. Off by default: the repo is private. Never put secrets in it; it holds none.
 - Names, tags and banners from discovery are untrusted: escaped for Markdown and Mermaid, never followed.
+
+## Exit codes
+
+What a caller (an agent, a wrapper, a scheduled run) can tell apart:
+
+| Code | Meaning | Scripts |
+|---|---|---|
+| 0 | ran; nothing to act on | all |
+| 1 | ran and found something: stale or missing report (`drift_report.py --stale`, `overview.py --check`), a failed check (`check_env.py`), a guest left running (`pve_guest.py shutdown`) | as listed |
+| 2 | usage error (argparse) | all |
+| 3 | configuration problem: homelab.yaml, a missing secret, a refused value | most |
+| 4 | could not run: an API or host unreachable (`proxmox_inventory.py`, `pve_guest.py`, `pve_snapshot.py`, `routeros_audit.py` with no device reached), the data it needs is missing (`security_audit.py`, `guest_map.py`) | as listed |
+
+Other codes are script-specific and named in that script's section (e.g. `nmap_scan.py` refusing a scan, a
+`security_audit.py` report that exists). Audit findings are information, not a failure: `security_audit.py` and
+`routeros_audit.py` exit 0 with findings.
