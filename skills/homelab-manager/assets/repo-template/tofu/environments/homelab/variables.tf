@@ -39,6 +39,10 @@ variable "base_images" {
     node                   = optional(string)
   }))
   default = {}
+  validation {
+    condition     = length([for k, v in var.base_images : k if !contains(["md5", "sha1", "sha224", "sha256", "sha384", "sha512"], v.checksum_algorithm)]) == 0
+    error_message = "base_images ${join(", ", [for k, v in var.base_images : k if !contains(["md5", "sha1", "sha224", "sha256", "sha384", "sha512"], v.checksum_algorithm)])}: checksum_algorithm must be md5, sha1, sha224, sha256, sha384 or sha512."
+  }
 }
 
 variable "vms" {
@@ -56,11 +60,32 @@ variable "vms" {
     bridge         = optional(string)
     vlan_id        = optional(number)
     ipv4_address   = optional(string, "dhcp")
+    ipv4_gateway   = optional(string) # empty: defaults.ipv4_gateway
+    cpu_type       = optional(string) # empty: x86-64-v2-AES
+    description    = optional(string) # empty: "Managed by OpenTofu (homelab-infrastructure)"
     tags           = optional(list(string), [])
     ansible_groups = optional(list(string), [])
     started        = optional(bool, true)
+    on_boot        = optional(bool, true)
+    protection     = optional(bool, false) # Proxmox refuses to remove the guest while it is set
   }))
   default = {}
+  validation {
+    condition     = length([for k, v in var.vms : k if !(v.ipv4_address == "dhcp" || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$", v.ipv4_address)) && can(cidrhost(v.ipv4_address, 0)))]) == 0
+    error_message = "vms ${join(", ", [for k, v in var.vms : k if !(v.ipv4_address == "dhcp" || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$", v.ipv4_address)) && can(cidrhost(v.ipv4_address, 0)))])}: ipv4_address must be \"dhcp\" or an IPv4 address with its prefix length, e.g. 10.0.10.21/24."
+  }
+  validation {
+    condition     = length([for k, v in var.vms : k if v.vlan_id != null && !try(v.vlan_id >= 1 && v.vlan_id <= 4094 && v.vlan_id == floor(v.vlan_id), false)]) == 0
+    error_message = "vms ${join(", ", [for k, v in var.vms : k if v.vlan_id != null && !try(v.vlan_id >= 1 && v.vlan_id <= 4094 && v.vlan_id == floor(v.vlan_id), false)])}: vlan_id must be 1 to 4094 (leave it out for no tag)."
+  }
+  validation {
+    condition     = length([for k, v in var.vms : k if !(v.vm_id >= 100 && v.vm_id == floor(v.vm_id)) || !(v.template_vm_id >= 100 && v.template_vm_id == floor(v.template_vm_id))]) == 0
+    error_message = "vms ${join(", ", [for k, v in var.vms : k if !(v.vm_id >= 100 && v.vm_id == floor(v.vm_id)) || !(v.template_vm_id >= 100 && v.template_vm_id == floor(v.template_vm_id))])}: vm_id and template_vm_id must be whole numbers of 100 or more."
+  }
+  validation {
+    condition     = length([for k, v in var.vms : k if !alltrue([for d in v.extra_disks : can(regex("^(scsi([1-9]|[12][0-9]|30)|virtio([0-9]|1[0-5])|sata[0-5])$", d.interface))])]) == 0
+    error_message = "vms ${join(", ", [for k, v in var.vms : k if !alltrue([for d in v.extra_disks : can(regex("^(scsi([1-9]|[12][0-9]|30)|virtio([0-9]|1[0-5])|sata[0-5])$", d.interface))])])}: extra_disks interface must be scsi1-scsi30, virtio0-virtio15 or sata0-sata5 (scsi0 is the root disk)."
+  }
 }
 
 variable "containers" {
@@ -78,11 +103,29 @@ variable "containers" {
     bridge           = optional(string)
     vlan_id          = optional(number)
     ipv4_address     = optional(string, "dhcp")
+    ipv4_gateway     = optional(string)           # empty: defaults.ipv4_gateway
+    dns_servers      = optional(list(string), []) # empty: the node's DNS settings
+    dns_domain       = optional(string)
+    description      = optional(string) # empty: "Managed by OpenTofu (homelab-infrastructure)"
     unprivileged     = optional(bool, true)
     nesting          = optional(bool, true)
     tags             = optional(list(string), [])
     ansible_groups   = optional(list(string), [])
     started          = optional(bool, true)
+    on_boot          = optional(bool, true)
+    protection       = optional(bool, false) # Proxmox refuses to remove the container while it is set
   }))
   default = {}
+  validation {
+    condition     = length([for k, v in var.containers : k if !(v.ipv4_address == "dhcp" || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$", v.ipv4_address)) && can(cidrhost(v.ipv4_address, 0)))]) == 0
+    error_message = "containers ${join(", ", [for k, v in var.containers : k if !(v.ipv4_address == "dhcp" || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$", v.ipv4_address)) && can(cidrhost(v.ipv4_address, 0)))])}: ipv4_address must be \"dhcp\" or an IPv4 address with its prefix length, e.g. 10.0.10.31/24."
+  }
+  validation {
+    condition     = length([for k, v in var.containers : k if v.vlan_id != null && !try(v.vlan_id >= 1 && v.vlan_id <= 4094 && v.vlan_id == floor(v.vlan_id), false)]) == 0
+    error_message = "containers ${join(", ", [for k, v in var.containers : k if v.vlan_id != null && !try(v.vlan_id >= 1 && v.vlan_id <= 4094 && v.vlan_id == floor(v.vlan_id), false)])}: vlan_id must be 1 to 4094 (leave it out for no tag)."
+  }
+  validation {
+    condition     = length([for k, v in var.containers : k if !(v.vm_id >= 100 && v.vm_id == floor(v.vm_id))]) == 0
+    error_message = "containers ${join(", ", [for k, v in var.containers : k if !(v.vm_id >= 100 && v.vm_id == floor(v.vm_id))])}: vm_id must be a whole number of 100 or more."
+  }
 }

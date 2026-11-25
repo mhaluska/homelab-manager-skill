@@ -51,13 +51,17 @@ module "vm" {
   bridge          = coalesce(each.value.bridge, var.defaults.bridge)
   vlan_id         = each.value.vlan_id
   ipv4_address    = each.value.ipv4_address
-  ipv4_gateway    = var.defaults.ipv4_gateway
+  ipv4_gateway    = each.value.ipv4_gateway != null ? each.value.ipv4_gateway : var.defaults.ipv4_gateway
   dns_servers     = var.defaults.dns_servers
   dns_domain      = var.defaults.dns_domain
   admin_user      = var.defaults.admin_user
   ssh_public_keys = var.defaults.ssh_public_keys
+  cpu_type        = each.value.cpu_type
+  description     = each.value.description
   tags            = each.value.tags
   started         = each.value.started
+  on_boot         = each.value.on_boot
+  protection      = each.value.protection
 }
 
 module "lxc" {
@@ -77,10 +81,15 @@ module "lxc" {
   bridge           = coalesce(each.value.bridge, var.defaults.bridge)
   vlan_id          = each.value.vlan_id
   ipv4_address     = each.value.ipv4_address
-  ipv4_gateway     = var.defaults.ipv4_gateway
+  ipv4_gateway     = each.value.ipv4_gateway != null ? each.value.ipv4_gateway : var.defaults.ipv4_gateway
+  dns_servers      = each.value.dns_servers
+  dns_domain       = each.value.dns_domain
   unprivileged     = each.value.unprivileged
   nesting          = each.value.nesting
   ssh_public_keys  = var.defaults.ssh_public_keys
+  description      = each.value.description
   tags             = each.value.tags
   started          = each.value.started
+  on_boot          = each.value.on_boot
+  protection       = each.value.protection
 }

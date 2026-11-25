@@ -38,7 +38,17 @@ vms = {
   #   ipv4_address   = "10.0.10.21/24"
   #   tags           = ["rocky"]
   #   ansible_groups = ["rocky"]
+  #   # optional: ipv4_gateway (else defaults), vlan_id, cpu_type ("x86-64-v2-AES"), on_boot (true),
+  #   # protection (false; true: Proxmox refuses to delete it), description, started (true), extra_disks
   # }
 }
 
-containers = {}
+containers = {
+  # "dns01" = {
+  #   vm_id            = 201
+  #   template_file_id = "local:vztmpl/debian-13-standard_13.1-2_amd64.tar.zst"
+  #   ipv4_address     = "10.0.10.31/24"
+  #   # optional: ipv4_gateway, vlan_id, dns_servers / dns_domain (else the node's), on_boot (true),
+  #   # protection (false), description, cores, memory_mib, swap_mib, disk_gib, unprivileged, nesting
+  # }
+}
