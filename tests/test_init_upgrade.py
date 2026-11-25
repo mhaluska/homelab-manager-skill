@@ -567,8 +567,8 @@ class UpgradeNotesTests(unittest.TestCase):
         import upgrade_notes
         self.assertEqual(ids, ["inventory-guest-ips", "recheck-hidden-suggestions",   # the latter: any reviewed repo
                                "inventory-node-versions", "overview-recovery-proxmox",
-                               *(["storage-health"] if upgrade_notes.vtuple(upgrade_notes.installed_version())
-                                 >= (0, 61, 0) else [])])
+                               *(["storage-health", "scheduled-check"]
+                                 if upgrade_notes.vtuple(upgrade_notes.installed_version()) >= (0, 61, 0) else [])])
         ids = [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", "--all", cwd=self.d).stdout)]
         self.assertIn("proxmox-tls-check", ids)
         subprocess.run(["yq", "-i", ".components.proxmox = false", str(self.cfg)], check=True)
