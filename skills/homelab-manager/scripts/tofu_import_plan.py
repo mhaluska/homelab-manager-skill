@@ -10,10 +10,11 @@ disks (size, datastore, extra_disks), bridge, VLAN tag, MAC address, static addr
 cpu_type, on_boot, protection, description, started, unprivileged and nesting, and what an older guest has that a
 cloned one doesn't (0.62.0: sockets, NUMA, CPU flags, ballooning, disk cache/ssd/iothread/discard/backup, start
 order, OS type, machine, no cloud-init drive or serial port, a CD-ROM, NIC firewall/MTU/queues, LXC features, mount
-points and console; 0.63.0: further NICs as extra_nics). Above an entry a comment names what the first plan will
-still change (the few settings the modules don't carry, e.g. disk I/O limits). A guest the modules can't represent
-without a rebuild or lost hardware (passthrough, a root disk other than scsi0, UEFI, NICs or mount points numbered
-with a gap, VLAN trunks, ...) gets no entry: it stays unmanaged, with a line for docs/decisions.md.
+points and console; 0.63.0: further NICs as extra_nics; 0.64.0: UEFI firmware, EFI disk and TPM state, PCI
+devices passed through by resource mapping). Above an entry a comment names what the first plan will still change
+(the few settings the modules don't carry, e.g. disk I/O limits). A guest the modules can't represent without a
+rebuild or lost hardware (a raw PCI ID or USB passthrough, a root disk other than scsi0, NICs or mount points
+numbered with a gap, VLAN trunks, ...) gets no entry: it stays unmanaged, with a line for docs/decisions.md.
 
 Read-only by default (stdout). --write creates or extends imports.tf in the environment and adds the entries inside
 the `vms` / `containers` maps of homelab.auto.tfvars; it never changes an existing entry or import block. Then the
@@ -382,15 +383,12 @@ def vm_entry(g: dict, ctx: dict) -> Entry:
         e.notes.append(f"OS type other: {SAME_AGAIN}")
     if num(conf.get("memory"), 0) == 512 and str(conf.get("balloon") or "0") == "0" and not conf.get("hugepages"):
         e.notes.append(f"memory 512 MiB without ballooning: {SAME_AGAIN}")
-    if conf.get("bios") == "ovmf" or any(k.startswith("efidisk") for k in conf):
-        e.blockers.append("UEFI (bios ovmf, EFI disk): the module has no EFI disk")
-    if any(k.startswith("tpmstate") for k in conf):
-        e.blockers.append("TPM state disk: the module has none")
     if conf.get("machine"):
         e.set("machine", str(conf["machine"]))
-    passthrough = sorted(k for k in conf if re.fullmatch(r"(hostpci|usb)\d+", k))
-    if passthrough:
-        e.blockers.append("passthrough (" + ", ".join(passthrough) + "): the module has none")
+    pci_devices(e, conf)
+    usb = sorted(k for k in conf if re.fullmatch(r"usb\d+", k))
+    if usb:
+        e.blockers.append("USB passthrough (" + ", ".join(usb) + "): the module has none")
 
     # disks: scsi0 is the root disk, scsi1-30 / virtio / sata are extra_disks, IDE holds CD-ROM or cloud-init
     datastore = d.get("datastore")
@@ -445,6 +443,7 @@ def vm_entry(g: dict, ctx: dict) -> Entry:
         extra.append(disk)
     if extra:
         e.set("extra_disks", extra)
+    firmware(e, conf, datastore)
     if not cloudinit:
         e.set("cloud_init_drive", False)   # its network and DNS settings come from the guest
         if cdrom:
@@ -479,6 +478,80 @@ def vm_entry(g: dict, ctx: dict) -> Entry:
                 e.notes.append("cloud-init DNS servers differ from defaults.dns_servers, which the module sets")
     common(e, conf)
     return e
+
+
+PCI_OPTIONS = {"mapping", "pcie", "rombar", "romfile", "x-vga"}
+
+
+def pci_devices(e: Entry, conf: dict):
+    """hostpci0, hostpci1, ... as pci_devices (the module numbers them in list order). Only resource mappings: a raw
+    device ID needs root@pam, which the skill's tokens are not. A device pins the VM to its node: the entry names
+    it."""
+    keys = sorted((k for k in conf if re.fullmatch(r"hostpci\d+", k)), key=lambda k: int(k[7:]))
+    if not keys:
+        return
+    if keys != [f"hostpci{i}" for i in range(len(keys))]:
+        e.blockers.append(f"PCI devices {', '.join(keys)} have a gap: the module numbers them hostpci0, hostpci1, "
+                          "... in list order")
+        return
+    out = []
+    for k in keys:
+        first, o = options(conf[k])
+        if not o.get("mapping"):
+            e.blockers.append(f"{k} passes a raw PCI device ({o.get('host') or first}): the modules take only "
+                              "resource mappings (a raw ID needs root@pam). The user creates one in Proxmox "
+                              f"(Datacenter → Resource Mappings → PCI Devices), switches {k} to it and takes a new "
+                              "snapshot (references/proxmox.md \"PCI passthrough\")")
+            continue
+        if o.get("mdev"):
+            e.blockers.append(f"{k} mediated device {o['mdev']}: the module has none")
+            continue
+        dev = {"mapping": o["mapping"]}
+        if flag(o, "pcie"):
+            dev["pcie"] = True
+        if o.get("rombar", "1") != "0":
+            dev["rombar"] = True       # Proxmox's default; left out, the provider writes rombar=0
+        if o.get("romfile"):
+            dev["rom_file"] = o["romfile"]
+        if flag(o, "x-vga"):
+            dev["xvga"] = True
+        for opt in sorted(set(o) - PCI_OPTIONS):
+            e.notes.append(f"{k} {opt}={o[opt]}: the module doesn't set it (unchanged now; a later change of the "
+                           "device drops it)")
+        out.append(dev)
+    if len(out) == len(keys):
+        e.set("pci_devices", out)
+        if not any(n == "node" for n, _ in e.attrs):
+            e.attrs.insert(2, ("node", e.g["node"]))   # the variables refuse devices without the VM's node
+
+
+def firmware(e: Entry, conf: dict, datastore: str | None):
+    """bios, efi_disk and tpm_state as the provider reads them on import (an EFI disk without efitype is 2m, a TPM
+    state without version v2.0, the module's default); their storage only where it isn't the root disk's."""
+    bios = str(conf.get("bios") or "seabios")
+    if bios not in ("seabios", "ovmf"):
+        e.blockers.append(f"bios {bios}: the module knows seabios and ovmf")
+    elif bios == "ovmf":
+        e.set("bios", "ovmf")
+    for key, name in (("efidisk0", "efi_disk"), ("tpmstate0", "tpm_state")):
+        if key not in conf:
+            continue
+        vol, o = options(conf[key])
+        disk = {}
+        store = vol.split(":", 1)[0]
+        if store != datastore:
+            disk["datastore"] = store
+        if key == "efidisk0":
+            disk["type"] = o.get("efitype", "2m").lower()
+            if disk["type"] not in ("2m", "4m"):
+                e.blockers.append(f"{key} efitype={disk['type']}: the module knows 2m and 4m")
+            if flag(o, "pre-enrolled-keys"):
+                disk["pre_enrolled_keys"] = True
+        elif o.get("version"):
+            disk["version"] = o["version"]
+            if disk["version"] not in ("v1.2", "v2.0"):
+                e.blockers.append(f"{key} version={disk['version']}: the module knows v2.0 and v1.2")
+        e.set(name, disk)
 
 
 def disk_order(k: str):
@@ -641,7 +714,7 @@ def hcl(value) -> str:
     if isinstance(value, list):
         return "[" + ", ".join(hcl(v) for v in value) + "]"
     if isinstance(value, dict):
-        return "{ " + ", ".join(f"{k} = {hcl(v)}" for k, v in value.items()) + " }"
+        return "{ " + ", ".join(f"{k} = {hcl(v)}" for k, v in value.items()) + " }" if value else "{}"
     s = json.dumps(str(value), ensure_ascii=False)
     return s.replace("${", "$${").replace("%{", "%%{")   # no template sequences: Proxmox text stays literal
 
@@ -724,7 +797,8 @@ def plan(cfg: dict, site_name: str | None, wanted: list[str]) -> dict:
     text = tfvars.read_text()
     tv = read_tfvars(text)
     variables = env_dir / "variables.tf"
-    supported = entry_attributes(variables.read_text()) if variables.is_file() else {}
+    vtext = variables.read_text() if variables.is_file() else ""
+    supported = entry_attributes(vtext) if vtext else {}
     imports_file = env_dir / "imports.tf"
     imported = set(re.findall(r"^\s*to\s*=\s*(\S+)", imports_file.read_text(), re.M)) if imports_file.is_file() \
         else set()
@@ -756,11 +830,19 @@ def plan(cfg: dict, site_name: str | None, wanted: list[str]) -> dict:
                     for d in v:
                         for f in DISK_FIELDS:
                             d.pop(f, None)
+        if vtext and "rom_file" not in vtext and any("rom_file" in d for n, v in e.attrs if n == "pci_devices"
+                                                     for d in v):
+            e.blockers.append("pci_devices rom_file: not in this environment's variables.tf (older template; "
+                              "init_repo.py --sync-managed updates it), the plan would remove the ROM file")
         if unsupported:
             attrs = dict(e.attrs)
             for n in unsupported:   # what an older template would change for the worse: no entry then
                 why = {"mount_points": "the plan would remove them", "extra_nics": "the plan would remove the NICs",
                        "os_type": f"{attrs.get(n)} would become l26",
+                       "bios": "the plan would switch the VM to SeaBIOS",
+                       "efi_disk": "the plan would remove the EFI disk",
+                       "tpm_state": "the plan would remove the TPM state",
+                       "pci_devices": "the plan would remove the passed-through devices",
                        "machine": "the default i440fx changes the guest's PCI layout" if "q35" in str(
                            attrs.get(n)) else ""}.get(n)
                 if why:
