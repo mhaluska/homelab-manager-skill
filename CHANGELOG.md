@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.63.0 — 2026-11-25
 - Guests with more than one NIC: `vms` and `containers` entries take `extra_nics`, the NICs after the first (net1,
   net2, … in order: bridge, VLAN, MAC, firewall, MTU, addresses and gateway; VMs also `model`, `queues`,
   `disconnected` and cloud-init ipconfigN, containers the interface `name`). The entry's own NIC attributes stay
