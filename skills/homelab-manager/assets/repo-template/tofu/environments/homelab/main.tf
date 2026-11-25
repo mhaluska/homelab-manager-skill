@@ -108,6 +108,7 @@ module "vm" {
   firewall            = each.value.firewall
   mtu                 = each.value.mtu
   queues              = each.value.queues
+  extra_nics          = [for n in each.value.extra_nics : merge(n, { bridge = coalesce(n.bridge, var.defaults.bridge) })]
   cloud_init_drive    = each.value.cloud_init_drive
   serial_socket       = each.value.serial_socket
   cdrom               = each.value.cdrom
@@ -158,4 +159,8 @@ module "lxc" {
   console      = each.value.console
   firewall     = each.value.firewall
   mtu          = each.value.mtu
+  extra_nics = [for i, n in each.value.extra_nics : merge(n, {
+    name   = coalesce(n.name, "eth${i + 1}")
+    bridge = coalesce(n.bridge, var.defaults.bridge)
+  })]
 }

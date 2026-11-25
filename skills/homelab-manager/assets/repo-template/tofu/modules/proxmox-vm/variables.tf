@@ -286,6 +286,38 @@ variable "queues" {
   default     = null
   description = "The NIC's multiqueue count (virtio); null: none."
 }
+variable "extra_nics" {
+  type = list(object({
+    bridge       = string
+    vlan_id      = optional(number)
+    mac_address  = optional(string) # empty: Proxmox picks one
+    model        = optional(string, "virtio")
+    firewall     = optional(bool)
+    mtu          = optional(number)
+    queues       = optional(number)
+    disconnected = optional(bool) # link down
+    # cloud-init ipconfigN; null: no settings for the NIC. The gateway is the NIC's own (no defaults).
+    ipv4_address = optional(string)
+    ipv4_gateway = optional(string)
+    ipv6_address = optional(string)
+    ipv6_gateway = optional(string)
+  }))
+  default     = []
+  nullable    = false
+  description = "NICs after the first (net1, net2, ... in list order)."
+  validation {
+    condition = length(var.extra_nics) <= 31 && alltrue([for n in var.extra_nics : (
+      contains(["virtio", "e1000", "e1000e", "rtl8139", "vmxnet3"], n.model)
+      && (n.vlan_id == null || try(n.vlan_id >= 1 && n.vlan_id <= 4094 && n.vlan_id == floor(n.vlan_id), false))
+      && (n.mac_address == null || can(regex("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$", n.mac_address)))
+      && (n.ipv4_address == null || n.ipv4_address == "dhcp" || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$", n.ipv4_address)) && can(cidrhost(n.ipv4_address, 0)))
+      && (n.ipv4_gateway == null || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}$", n.ipv4_gateway)) && can(cidrhost("${n.ipv4_gateway}/32", 0)))
+      && (n.ipv6_address == null || try(contains(["dhcp", "auto"], n.ipv6_address) || strcontains(n.ipv6_address, ":") && can(regex("/\\d{1,3}$", n.ipv6_address)) && can(cidrhost(n.ipv6_address, 0)), false))
+      && (n.ipv6_gateway == null || try(strcontains(n.ipv6_gateway, ":") && can(cidrhost("${n.ipv6_gateway}/128", 0)), false))
+    )])
+    error_message = "extra_nics: at most 31; model virtio, e1000, e1000e, rtl8139 or vmxnet3; vlan_id 1 to 4094; mac_address six hex pairs; ipv4_address \"dhcp\" or CIDR, ipv4_gateway an address; ipv6_address \"dhcp\", \"auto\" or CIDR, ipv6_gateway an address."
+  }
+}
 variable "agent_trim" {
   type        = bool
   default     = null

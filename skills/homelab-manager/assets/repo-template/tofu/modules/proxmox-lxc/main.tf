@@ -81,6 +81,19 @@ resource "proxmox_virtual_environment_container" "this" {
     mtu         = var.mtu
   }
 
+  # net1, net2, ... in list order: the provider numbers interfaces by position (no gaps)
+  dynamic "network_interface" {
+    for_each = var.extra_nics
+    content {
+      name        = network_interface.value.name
+      bridge      = network_interface.value.bridge
+      vlan_id     = network_interface.value.vlan_id
+      mac_address = network_interface.value.mac_address
+      firewall    = network_interface.value.firewall
+      mtu         = network_interface.value.mtu
+    }
+  }
+
   operating_system {
     template_file_id = var.template_file_id
     type             = var.os_type
@@ -101,6 +114,24 @@ resource "proxmox_virtual_environment_container" "this" {
         }
       }
     }
+    # one per extra interface, in the same order. The provider pairs them by position among the interfaces that
+    # have an address, so each has IPv4 settings (dhcp by default).
+    dynamic "ip_config" {
+      for_each = var.extra_nics
+      content {
+        ipv4 {
+          address = ip_config.value.ipv4_address
+          gateway = ip_config.value.ipv4_address == "dhcp" ? null : ip_config.value.ipv4_gateway
+        }
+        dynamic "ipv6" {
+          for_each = ip_config.value.ipv6_address == null ? [] : [1]
+          content {
+            address = ip_config.value.ipv6_address
+            gateway = contains(["dhcp", "auto"], ip_config.value.ipv6_address) ? null : ip_config.value.ipv6_gateway
+          }
+        }
+      }
+    }
     dynamic "dns" {
       for_each = length(var.dns_servers) > 0 || var.dns_domain != null ? [1] : []
       content {
@@ -118,12 +149,21 @@ resource "proxmox_virtual_environment_container" "this" {
   }
 }
 
-# A warning in the plan, not an error: a container on an isolated network may have no gateway on purpose.
+locals {
+  extra_gateways = [for n in var.extra_nics : n.ipv4_gateway if n.ipv4_gateway != null && n.ipv4_address != null && n.ipv4_address != "dhcp"]
+}
+
+# Warnings in the plan, not errors: a container on an isolated network may have no gateway on purpose (a gateway on
+# an extra interface counts), and several default routes may be deliberate.
 check "static_address_gateway" {
   assert {
-    condition = var.ipv4_address == "dhcp" || try(
+    condition = var.ipv4_address == "dhcp" || length(local.extra_gateways) > 0 || try(
       cidrhost(var.ipv4_address, 0) == cidrhost("${var.ipv4_gateway}/${split("/", var.ipv4_address)[1]}", 0), false
     )
     error_message = "Container ${var.hostname}: static address ${var.ipv4_address} has ${var.ipv4_gateway == null ? "no gateway (defaults.ipv4_gateway)" : "gateway ${var.ipv4_gateway} outside its subnet"}, so it has no default route."
+  }
+  assert {
+    condition     = length(local.extra_gateways) + (var.ipv4_address != "dhcp" && var.ipv4_gateway != null ? 1 : 0) <= 1
+    error_message = "Container ${var.hostname}: an IPv4 gateway on more than one interface gives it several default routes."
   }
 }

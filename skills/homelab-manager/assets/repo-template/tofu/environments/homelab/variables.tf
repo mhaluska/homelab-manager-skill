@@ -85,6 +85,22 @@ variable "vms" {
       cache     = optional(string)
       backup    = optional(bool) # false: backups skip the disk
     })), [])
+    # NICs after the first (net1, net2, ... in list order; bridge, vlan_id, mac_address, ipv4_* and ipv6_* below,
+    # firewall, mtu and queues are the first NIC's, net0)
+    extra_nics = optional(list(object({
+      bridge       = optional(string) # empty: defaults.bridge
+      vlan_id      = optional(number)
+      mac_address  = optional(string) # empty: Proxmox picks one
+      model        = optional(string) # empty: virtio
+      firewall     = optional(bool)
+      mtu          = optional(number)
+      queues       = optional(number)
+      disconnected = optional(bool)   # link down
+      ipv4_address = optional(string) # cloud-init ipconfigN: "dhcp" or CIDR; empty: none
+      ipv4_gateway = optional(string) # the NIC's own (no defaults)
+      ipv6_address = optional(string) # "dhcp", "auto" (SLAAC) or CIDR; empty: none
+      ipv6_gateway = optional(string)
+    })), [])
     datastore      = optional(string)
     bridge         = optional(string)
     vlan_id        = optional(number)
@@ -159,6 +175,14 @@ variable "vms" {
     condition     = length([for k, v in var.vms : k if length(v.pci_devices) > 0 && (v.node == null || !alltrue([for d in v.pci_devices : can(regex("^[A-Za-z][A-Za-z0-9_.-]*$", d.mapping))]) || anytrue([for d in v.pci_devices : d.pcie]) && !startswith(coalesce(v.machine, "pc"), "q35"))]) == 0
     error_message = "vms ${join(", ", [for k, v in var.vms : k if length(v.pci_devices) > 0 && (v.node == null || !alltrue([for d in v.pci_devices : can(regex("^[A-Za-z][A-Za-z0-9_.-]*$", d.mapping))]) || anytrue([for d in v.pci_devices : d.pcie]) && !startswith(coalesce(v.machine, "pc"), "q35"))])}: pci_devices need the VM's node set (a device belongs to one node), each mapping named by its ID (e.g. gpu), and machine = \"q35\" for pcie = true."
   }
+  validation {
+    condition     = length([for k, v in var.vms : k if length(v.extra_nics) > 31 || !alltrue([for n in v.extra_nics : contains(["virtio", "e1000", "e1000e", "rtl8139", "vmxnet3"], coalesce(n.model, "virtio")) && (n.vlan_id == null || try(n.vlan_id >= 1 && n.vlan_id <= 4094 && n.vlan_id == floor(n.vlan_id), false)) && (n.mac_address == null || can(regex("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$", n.mac_address)))])]) == 0
+    error_message = "vms ${join(", ", [for k, v in var.vms : k if length(v.extra_nics) > 31 || !alltrue([for n in v.extra_nics : contains(["virtio", "e1000", "e1000e", "rtl8139", "vmxnet3"], coalesce(n.model, "virtio")) && (n.vlan_id == null || try(n.vlan_id >= 1 && n.vlan_id <= 4094 && n.vlan_id == floor(n.vlan_id), false)) && (n.mac_address == null || can(regex("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$", n.mac_address)))])])}: extra_nics: at most 31; model virtio, e1000, e1000e, rtl8139 or vmxnet3; vlan_id 1 to 4094; mac_address six hex pairs separated by colons, e.g. BC:24:11:0A:00:15."
+  }
+  validation {
+    condition     = length([for k, v in var.vms : k if !alltrue([for n in v.extra_nics : (n.ipv4_address == null || n.ipv4_address == "dhcp" || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$", n.ipv4_address)) && can(cidrhost(n.ipv4_address, 0))) && (n.ipv4_gateway == null || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}$", n.ipv4_gateway)) && can(cidrhost("${n.ipv4_gateway}/32", 0))) && (n.ipv6_address == null || try(contains(["dhcp", "auto"], n.ipv6_address) || strcontains(n.ipv6_address, ":") && can(regex("/\\d{1,3}$", n.ipv6_address)) && can(cidrhost(n.ipv6_address, 0)), false)) && (n.ipv6_gateway == null || try(strcontains(n.ipv6_gateway, ":") && can(cidrhost("${n.ipv6_gateway}/128", 0)), false))])]) == 0
+    error_message = "vms ${join(", ", [for k, v in var.vms : k if !alltrue([for n in v.extra_nics : (n.ipv4_address == null || n.ipv4_address == "dhcp" || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$", n.ipv4_address)) && can(cidrhost(n.ipv4_address, 0))) && (n.ipv4_gateway == null || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}$", n.ipv4_gateway)) && can(cidrhost("${n.ipv4_gateway}/32", 0))) && (n.ipv6_address == null || try(contains(["dhcp", "auto"], n.ipv6_address) || strcontains(n.ipv6_address, ":") && can(regex("/\\d{1,3}$", n.ipv6_address)) && can(cidrhost(n.ipv6_address, 0)), false)) && (n.ipv6_gateway == null || try(strcontains(n.ipv6_gateway, ":") && can(cidrhost("${n.ipv6_gateway}/128", 0)), false))])])}: extra_nics addresses: ipv4_address \"dhcp\" or an IPv4 address with its prefix length, ipv4_gateway an IPv4 address; ipv6_address \"dhcp\", \"auto\" or an IPv6 address with its prefix length, ipv6_gateway an IPv6 address."
+  }
 }
 
 variable "containers" {
@@ -191,6 +215,20 @@ variable "containers" {
     started          = optional(bool, true)
     on_boot          = optional(bool, true)
     protection       = optional(bool, false) # Proxmox refuses to remove the container while it is set
+    # interfaces after eth0 (net1, net2, ... in list order; bridge, vlan_id, mac_address, ipv4_*, ipv6_*,
+    # firewall and mtu are eth0's, net0)
+    extra_nics = optional(list(object({
+      name         = optional(string) # inside the container; empty: eth1, eth2, ... by position
+      bridge       = optional(string) # empty: defaults.bridge
+      vlan_id      = optional(number)
+      mac_address  = optional(string) # empty: Proxmox picks one
+      firewall     = optional(bool)
+      mtu          = optional(number)
+      ipv4_address = optional(string, "dhcp")
+      ipv4_gateway = optional(string) # the interface's own (no defaults)
+      ipv6_address = optional(string) # "dhcp", "auto" (SLAAC) or CIDR; empty: none
+      ipv6_gateway = optional(string)
+    })), [])
     # settings an imported container keeps (tofu_import_plan.py; references/opentofu.md "Entry attributes");
     # empty: as before
     features    = optional(bool) # false: no features line at all (nesting ignored); empty: true
@@ -237,5 +275,13 @@ variable "containers" {
   validation {
     condition     = length([for k, v in var.containers : k if(v.template == null) == (v.template_file_id == null)]) == 0
     error_message = "containers ${join(", ", [for k, v in var.containers : k if(v.template == null) == (v.template_file_id == null)])}: set either template_file_id (a template on storage) or template (a key of lxc_templates)."
+  }
+  validation {
+    condition     = length([for k, v in var.containers : k if length(v.extra_nics) > 31 || length(distinct(concat(["eth0"], [for i, n in v.extra_nics : coalesce(n.name, "eth${i + 1}")]))) != length(v.extra_nics) + 1 || !alltrue([for n in v.extra_nics : (n.name == null || can(regex("^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$", n.name))) && (n.vlan_id == null || try(n.vlan_id >= 1 && n.vlan_id <= 4094 && n.vlan_id == floor(n.vlan_id), false)) && (n.mac_address == null || can(regex("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$", n.mac_address)))])]) == 0
+    error_message = "containers ${join(", ", [for k, v in var.containers : k if length(v.extra_nics) > 31 || length(distinct(concat(["eth0"], [for i, n in v.extra_nics : coalesce(n.name, "eth${i + 1}")]))) != length(v.extra_nics) + 1 || !alltrue([for n in v.extra_nics : (n.name == null || can(regex("^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$", n.name))) && (n.vlan_id == null || try(n.vlan_id >= 1 && n.vlan_id <= 4094 && n.vlan_id == floor(n.vlan_id), false)) && (n.mac_address == null || can(regex("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$", n.mac_address)))])])}: extra_nics: at most 31, each with its own name (up to 15 letters, digits, _ . -; eth0 is the first interface's); vlan_id 1 to 4094; mac_address six hex pairs separated by colons, e.g. BC:24:11:0A:00:15."
+  }
+  validation {
+    condition     = length([for k, v in var.containers : k if !alltrue([for n in v.extra_nics : (n.ipv4_address == "dhcp" || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$", n.ipv4_address)) && can(cidrhost(n.ipv4_address, 0))) && (n.ipv4_gateway == null || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}$", n.ipv4_gateway)) && can(cidrhost("${n.ipv4_gateway}/32", 0))) && (n.ipv6_address == null || try(contains(["dhcp", "auto"], n.ipv6_address) || strcontains(n.ipv6_address, ":") && can(regex("/\\d{1,3}$", n.ipv6_address)) && can(cidrhost(n.ipv6_address, 0)), false)) && (n.ipv6_gateway == null || try(strcontains(n.ipv6_gateway, ":") && can(cidrhost("${n.ipv6_gateway}/128", 0)), false))])]) == 0
+    error_message = "containers ${join(", ", [for k, v in var.containers : k if !alltrue([for n in v.extra_nics : (n.ipv4_address == "dhcp" || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$", n.ipv4_address)) && can(cidrhost(n.ipv4_address, 0))) && (n.ipv4_gateway == null || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}$", n.ipv4_gateway)) && can(cidrhost("${n.ipv4_gateway}/32", 0))) && (n.ipv6_address == null || try(contains(["dhcp", "auto"], n.ipv6_address) || strcontains(n.ipv6_address, ":") && can(regex("/\\d{1,3}$", n.ipv6_address)) && can(cidrhost(n.ipv6_address, 0)), false)) && (n.ipv6_gateway == null || try(strcontains(n.ipv6_gateway, ":") && can(cidrhost("${n.ipv6_gateway}/128", 0)), false))])])}: extra_nics addresses: ipv4_address \"dhcp\" or an IPv4 address with its prefix length, ipv4_gateway an IPv4 address; ipv6_address \"dhcp\", \"auto\" or an IPv6 address with its prefix length, ipv6_gateway an IPv6 address."
   }
 }

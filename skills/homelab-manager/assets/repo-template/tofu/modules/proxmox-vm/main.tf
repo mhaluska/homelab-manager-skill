@@ -90,6 +90,21 @@ resource "proxmox_virtual_environment_vm" "this" {
     queues      = var.queues
   }
 
+  # net1, net2, ... in list order: the provider numbers network devices by position (no gaps)
+  dynamic "network_device" {
+    for_each = var.extra_nics
+    content {
+      bridge       = network_device.value.bridge
+      vlan_id      = network_device.value.vlan_id
+      model        = network_device.value.model
+      mac_address  = network_device.value.mac_address
+      firewall     = network_device.value.firewall
+      mtu          = network_device.value.mtu
+      queues       = network_device.value.queues
+      disconnected = network_device.value.disconnected
+    }
+  }
+
   operating_system {
     type = var.os_type
   }
@@ -128,6 +143,27 @@ resource "proxmox_virtual_environment_vm" "this" {
           content {
             address = var.ipv6_address
             gateway = contains(["dhcp", "auto"], var.ipv6_address) ? null : var.ipv6_gateway
+          }
+        }
+      }
+      # ipconfig1, ipconfig2, ... of the extra NICs by position, up to the last one with an address (Proxmox has
+      # no trailing empty ones)
+      dynamic "ip_config" {
+        for_each = slice(var.extra_nics, 0, local.extra_ip_configs)
+        content {
+          dynamic "ipv4" {
+            for_each = ip_config.value.ipv4_address == null ? [] : [1]
+            content {
+              address = ip_config.value.ipv4_address
+              gateway = ip_config.value.ipv4_address == "dhcp" ? null : ip_config.value.ipv4_gateway
+            }
+          }
+          dynamic "ipv6" {
+            for_each = ip_config.value.ipv6_address == null ? [] : [1]
+            content {
+              address = ip_config.value.ipv6_address
+              gateway = contains(["dhcp", "auto"], ip_config.value.ipv6_address) ? null : ip_config.value.ipv6_gateway
+            }
           }
         }
       }
@@ -193,12 +229,22 @@ resource "proxmox_virtual_environment_file" "cloud_init" {
   }
 }
 
-# A warning in the plan, not an error: a guest on an isolated network may have no gateway on purpose.
+locals {
+  extra_ip_configs = max(0, [for i, n in var.extra_nics : i + 1 if n.ipv4_address != null || n.ipv6_address != null]...)
+  extra_gateways   = [for n in var.extra_nics : n.ipv4_gateway if n.ipv4_gateway != null && n.ipv4_address != null && n.ipv4_address != "dhcp"]
+}
+
+# Warnings in the plan, not errors: a guest on an isolated network may have no gateway on purpose (a gateway on an
+# extra NIC counts), and several default routes may be deliberate.
 check "static_address_gateway" {
   assert {
-    condition = var.ipv4_address == "dhcp" || try(
+    condition = var.ipv4_address == "dhcp" || length(local.extra_gateways) > 0 || try(
       cidrhost(var.ipv4_address, 0) == cidrhost("${var.ipv4_gateway}/${split("/", var.ipv4_address)[1]}", 0), false
     )
     error_message = "VM ${var.name}: static address ${var.ipv4_address} has ${var.ipv4_gateway == null ? "no gateway (defaults.ipv4_gateway)" : "gateway ${var.ipv4_gateway} outside its subnet"}, so it has no default route."
+  }
+  assert {
+    condition     = length(local.extra_gateways) + (var.ipv4_address != "dhcp" && var.ipv4_gateway != null ? 1 : 0) <= 1
+    error_message = "VM ${var.name}: an IPv4 gateway on more than one NIC gives the guest several default routes."
   }
 }

@@ -196,6 +196,35 @@ variable "mount_points" {
     error_message = "mount_points: each needs a volume (a storage or a host path) and an absolute path inside the container."
   }
 }
+variable "extra_nics" {
+  type = list(object({
+    name         = string # inside the container, e.g. eth1
+    bridge       = string
+    vlan_id      = optional(number)
+    mac_address  = optional(string) # empty: Proxmox picks one
+    firewall     = optional(bool)
+    mtu          = optional(number)
+    ipv4_address = optional(string, "dhcp")
+    ipv4_gateway = optional(string) # the interface's own (no defaults)
+    ipv6_address = optional(string)
+    ipv6_gateway = optional(string)
+  }))
+  default     = []
+  nullable    = false
+  description = "Interfaces after eth0 (net1, net2, ... in list order)."
+  validation {
+    condition = length(var.extra_nics) <= 31 && alltrue([for n in var.extra_nics : (
+      can(regex("^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$", n.name))
+      && (n.vlan_id == null || try(n.vlan_id >= 1 && n.vlan_id <= 4094 && n.vlan_id == floor(n.vlan_id), false))
+      && (n.mac_address == null || can(regex("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$", n.mac_address)))
+      && (n.ipv4_address == "dhcp" || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$", n.ipv4_address)) && can(cidrhost(n.ipv4_address, 0)))
+      && (n.ipv4_gateway == null || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}$", n.ipv4_gateway)) && can(cidrhost("${n.ipv4_gateway}/32", 0)))
+      && (n.ipv6_address == null || try(contains(["dhcp", "auto"], n.ipv6_address) || strcontains(n.ipv6_address, ":") && can(regex("/\\d{1,3}$", n.ipv6_address)) && can(cidrhost(n.ipv6_address, 0)), false))
+      && (n.ipv6_gateway == null || try(strcontains(n.ipv6_gateway, ":") && can(cidrhost("${n.ipv6_gateway}/128", 0)), false))
+    )]) && length(distinct(concat(["eth0"], [for n in var.extra_nics : n.name]))) == length(var.extra_nics) + 1
+    error_message = "extra_nics: at most 31, each with its own name (up to 15 letters, digits, _ . -; not eth0); vlan_id 1 to 4094; mac_address six hex pairs; ipv4_address \"dhcp\" or CIDR, ipv4_gateway an address; ipv6_address \"dhcp\", \"auto\" or CIDR, ipv6_gateway an address."
+  }
+}
 variable "firewall" {
   type        = bool
   default     = null
