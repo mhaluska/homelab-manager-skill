@@ -15,6 +15,7 @@ packer init .
 with_secrets.py proxmox-rw -- packer build -var-file=distros/rocky9.pkrvars.hcl -var-file=site.pkrvars.hcl \
   -var base_vm_id=9000 -var vm_id=9051 -var build_date=20261116 .
 ```
-`site.pkrvars.hcl` (node, storage, build network) is generated from `homelab.yaml` by the skill.
+`site.pkrvars.hcl` (node, storage, build network, `sshd_hardening`, `unattended_updates`) is generated from
+`homelab.yaml` (`templates:`) by the skill.
 Another site (`sites:` in homelab.yaml) has its own `site-<name>.pkrvars.hcl` with `site = "<name>"`; build with
 that site's token (`with_secrets.py <its provisioning secret>`) — a token of another site makes the build fail.

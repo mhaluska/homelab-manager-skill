@@ -7,13 +7,15 @@ Two layers, both immutable:
 2. **Template** — Packer `proxmox-clone` of a base: updated packages, `qemu-guest-agent`,
    `cloud-init`, key-only SSH, cleaned and trimmed. Name `tpl-<distro><ver>-<date>`, VMIDs in `vmid_ranges.templates`.
 
-Packer variables (`-var`, or in `site.pkrvars.hcl` for every build): `sshd_hardening` (default true: a drop-in
+Build settings, `templates.sshd_hardening` and `templates.unattended_updates` in homelab.yaml (a site's own
+under `sites[].templates`), go into the site's pkrvars file (step 3): `sshd_hardening` (default true: a drop-in
 `/etc/ssh/sshd_config.d/01-homelab.conf` with `PasswordAuthentication no`, `PermitRootLogin prohibit-password`;
 cloud-init keys keep working) and `unattended_updates` (`distro` by default: as the image ships, which on Ubuntu
 installs security updates; `security`: automatic security updates on every distro, never a reboot; `off`: only
-the patch playbooks update). Ask the user before changing either for a site; record the choice in
-`docs/templates.md`. Templates built earlier keep what they had: say so when a VM from one shows up in a
-security audit with password logins.
+the patch playbooks update). Ask the user before changing either for a site and record the choice with
+`config_set.py` (`'templates.unattended_updates=off'`, `'sites[<site>].templates.sshd_hardening=false'`), not
+in `docs/templates.md`: the pkrvars files are gitignored and regenerated. Templates built earlier keep what
+they had: say so when a VM from one shows up in a security audit with password logins.
 
 VMs clone a specific template VMID; `clone` is ignored after creation, so a new template
 never rebuilds existing VMs.
@@ -43,8 +45,8 @@ Debian's SHA512SUMS): Proxmox refuses a tampered or truncated download. Fetch th
    entry (new name + VMID) → plan (`+2`: download + VM) → apply with approval.
    Otherwise reuse the existing base — package updates happen in Packer anyway.
 3. Generate `packer/linux/site.pkrvars.hcl` from `homelab.yaml` (node, storage,
-   `templates.build_network`). Build IP must be free: check `discovery/network.json` and
-   ping it first.
+   `templates.build_network`, `templates.sshd_hardening` and `templates.unattended_updates`, each its default
+   when unset). Build IP must be free: check `discovery/network.json` and ping it first.
 4. Next template VMID in range, `build_date=$(date +%Y%m%d)`. If a template with that name
    already exists (second build today), append `-2`; never use `-force`.
 5. ```bash
@@ -67,7 +69,8 @@ Templates are per Proxmox: a site with its own (proxmox.md "Several sites") buil
 (`base_images` in its environment's tfvars). Use that site everywhere above: its snapshot
 (its part of `discovery/proxmox.json`), VMIDs with `--next-vmid templates --site <site>`, its `templates.build_network`
 when the site entry sets one (a free IP in its ranges), its token. Generate `packer/linux/site-<site>.pkrvars.hcl`
-with `site = "<site>"` and the site's node, storage and build network, and pass it instead of `site.pkrvars.hcl`:
+with `site = "<site>"` and the site's node, storage, build network and build settings (`sites[].templates` keys
+override the top-level `templates` ones), and pass it instead of `site.pkrvars.hcl`:
 the build fails at once if the token is another site's. Record the site in the `docs/templates.md` row.
 
 ## A node with its own storage
