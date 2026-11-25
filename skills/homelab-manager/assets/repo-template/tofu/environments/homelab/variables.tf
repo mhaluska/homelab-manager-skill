@@ -121,7 +121,7 @@ variable "vms" {
     cloud_init_snippet      = optional(string)
     cloud_init_user_snippet = optional(string)
     # PCI passthrough by resource mapping (Datacenter → Resource Mappings); the VM then needs an explicit node
-    pci_devices = optional(list(object({ mapping = string, pcie = optional(bool, false), rombar = optional(bool), xvga = optional(bool) })), [])
+    pci_devices = optional(list(object({ mapping = string, pcie = optional(bool, false), rombar = optional(bool), rom_file = optional(string), xvga = optional(bool) })), [])
     machine     = optional(string) # e.g. q35 (pcie devices need it); empty: as before
     # UEFI (a Windows 11 VM: bios ovmf, efi_disk 4m with pre_enrolled_keys, tpm_state v2.0, machine q35); empty:
     # SeaBIOS, no EFI disk, no TPM. bios seabios or ovmf; efi_disk type 4m (empty) or 2m, tpm_state version v2.0

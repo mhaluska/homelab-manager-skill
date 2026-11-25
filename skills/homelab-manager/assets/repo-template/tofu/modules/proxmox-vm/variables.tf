@@ -156,16 +156,17 @@ variable "machine" {
 }
 variable "pci_devices" {
   type = list(object({
-    mapping = string                # a PCI resource mapping (Datacenter → Resource Mappings), not a raw ID
-    pcie    = optional(bool, false) # PCIe port: needs machine q35
-    rombar  = optional(bool)
-    xvga    = optional(bool) # primary GPU of the VM
+    mapping  = string                # a PCI resource mapping (Datacenter → Resource Mappings), not a raw ID
+    pcie     = optional(bool, false) # PCIe port: needs machine q35
+    rombar   = optional(bool)        # null: off (the provider writes rombar=0); Proxmox's own default is on
+    rom_file = optional(string)      # a ROM file under /usr/share/kvm/ on the node, e.g. vbios.rom
+    xvga     = optional(bool)        # primary GPU of the VM
   }))
   default  = []
   nullable = false
   validation {
-    condition     = length(var.pci_devices) <= 16 && alltrue([for d in var.pci_devices : can(regex("^[A-Za-z][A-Za-z0-9_.-]*$", d.mapping))])
-    error_message = "pci_devices: at most 16, each naming a PCI resource mapping by its ID, e.g. gpu."
+    condition     = length(var.pci_devices) <= 16 && alltrue([for d in var.pci_devices : can(regex("^[A-Za-z][A-Za-z0-9_.-]*$", d.mapping)) && (d.rom_file == null || can(regex("^[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*$", d.rom_file)))])
+    error_message = "pci_devices: at most 16, each naming a PCI resource mapping by its ID, e.g. gpu; rom_file a file under /usr/share/kvm/, e.g. vbios.rom."
   }
 }
 variable "bios" {

@@ -90,6 +90,48 @@ run "environment_pci_entry" {
   }
 }
 
+# A ROM file (romfile, under /usr/share/kvm/ on the node), e.g. a GPU's vBIOS; a path out of that folder is refused.
+run "vm_rom_file" {
+  command = plan
+  module {
+    source = "../../modules/proxmox-vm"
+  }
+  variables {
+    name            = "gpu01"
+    node            = "pve1"
+    vm_id           = 101
+    template_vm_id  = 9050
+    datastore       = "local-zfs"
+    bridge          = "vmbr0"
+    admin_user      = "admin"
+    ssh_public_keys = []
+    pci_devices     = [{ mapping = "gpu", rombar = true, rom_file = "vbios.rom" }, { mapping = "nic-10g" }]
+  }
+  assert {
+    condition     = proxmox_virtual_environment_vm.this.hostpci[0].rom_file == "vbios.rom" && proxmox_virtual_environment_vm.this.hostpci[0].rombar && proxmox_virtual_environment_vm.this.hostpci[1].rom_file == null
+    error_message = "rom_file must reach hostpci0 only"
+  }
+}
+
+run "bad_rom_file" {
+  command = plan
+  module {
+    source = "../../modules/proxmox-vm"
+  }
+  variables {
+    name            = "gpu01"
+    node            = "pve1"
+    vm_id           = 101
+    template_vm_id  = 9050
+    datastore       = "local-zfs"
+    bridge          = "vmbr0"
+    admin_user      = "admin"
+    ssh_public_keys = []
+    pci_devices     = [{ mapping = "gpu", rom_file = "../../etc/passwd" }]
+  }
+  expect_failures = [var.pci_devices]
+}
+
 # A device belongs to one node: the entry must name it; a raw PCI ID is not a mapping.
 run "bad_pci_entries" {
   command = plan
