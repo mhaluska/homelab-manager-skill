@@ -535,6 +535,26 @@ class UpgradeNotesTests(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("unknown note id", r.stderr)
 
+    def test_build_choice_in_docs_moves_to_homelab_yaml(self):   # GitHub issue #158
+        sys.path.insert(0, str(SCRIPTS))
+        import upgrade_notes
+        run("init_repo.py", str(self.d), "--add-components", "templates", cwd=self.d)
+        run("config_set.py", "upgrades.reviewed=0.60.0", "--delete", "templates.unattended_updates",
+            "--delete", "templates.sshd_hardening", cwd=self.d)         # a repo set up before the keys
+        ids = lambda: [n["id"] for n in upgrade_notes.pending(self.d)]
+        with unittest.mock.patch.object(upgrade_notes, "installed_version", return_value="0.61.0"):
+            self.assertNotIn("template-build-settings", ids())          # nothing recorded: the defaults apply
+            doc = self.d / "docs/templates.md"
+            doc.write_text(doc.read_text() + '\n- `unattended_updates = "off"`: patching through Ansible only.\n')
+            note = next(n for n in upgrade_notes.pending(self.d) if n["id"] == "template-build-settings")
+            self.assertIn(f"{SCRIPTS.parent}/scripts/config_set.py 'templates.unattended_updates=", note["action"])
+            r = run("config_set.py", "templates.unattended_updates=off", cwd=self.d)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("template-build-settings", ids())
+        hardening = next(n for n in upgrade_notes.all_notes() if n["id"] == "packer-ssh-hardening")
+        self.assertIn("config_set.py", hardening["after_replace"])
+        self.assertNotIn("site.pkrvars.hcl", hardening["after_replace"])   # gitignored and regenerated
+
     def test_reviewed_version_and_repo_state_filter_notes(self):
         self.make_old()
         run("config_set.py", "upgrades.reviewed=0.10.0", "vmid_scheme={vlan}{octet:03d}", cwd=self.d)
