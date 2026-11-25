@@ -122,9 +122,9 @@ changing anything, show the user the jobs (`jq .backup_jobs discovery/proxmox.js
   }
   ```
   Plan until it shows `1 to import` and only the intended change, then approval and apply.
-- **Token rights**: editing a job needs `Datastore.Allocate` on the job's storage (plus `VM.Backup` on the
-  pool for pool jobs); the provisioning role doesn't have it, so the API answers 403. Offer the optional grant
-  in `docs/proxmox-tokens.md` ("Backup jobs") — the user runs it on a node — or the GUI instead:
+- **Token rights**: the provisioning role can't edit backup jobs, so the API answers 403. Offer the optional
+  grant in the repo's `docs/proxmox-tokens.md` ("Backup jobs": which rights, and why only on the backup storage) —
+  the user runs it on a node — or the GUI instead:
   Datacenter → Backup → the job → Edit → add the guests. Re-run `proxmox_inventory.py` and drift afterwards.
 
 ## Secure Boot certificates (Microsoft 2023 CA)

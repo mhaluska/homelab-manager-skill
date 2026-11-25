@@ -67,7 +67,8 @@ QNAP NAS entries carry `firmware` and `apps` instead of package counts (referenc
    Clean-up: after the reboot (or when there is none) the run autoremoves packages nothing needs, so the old
    kernel goes too (`-e autoremove=false` skips it). It simulates it first and skips it on a host (reported as
    `autoremove skipped`, not a failure) when it would remove a package matching `autoremove_protect`
-   (authentication, NSS/PAM, sudo, SSH, systemd, networking) or more than `autoremove_max` (20) packages:
+   (authentication, NSS/PAM, sudo, SSH, systemd, networking; default list in `playbooks/vars/patch-lists.yml`,
+   replaced by `autoremove_protect` in group_vars) or more than `autoremove_max` (20) packages:
    a removed `freeipa-client` leaves SSSD autoremovable, and removing it locks out an IPA `ansible_user`.
    Free space: before anything is snapshotted or patched the run checks every target for `patch_min_free_mb`
    (500) free on `/` and `/var` and `patch_min_free_boot_mb` (100) on a separate `/boot`, and refuses with the

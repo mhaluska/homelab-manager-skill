@@ -6,7 +6,7 @@
   `ansible_connection: ssh`, `ansible_shell_type: powershell`). No WinRM passwords in Git.
   If a host only has WinRM, store its credentials in the keychain and run via `with_secrets.py`.
 - Modules: `ansible.windows.*`, `community.windows.*` (`win_ping`, `win_feature`, `win_service`,
-  `win_package`, `win_updates`, `win_regedit`).
+  `win_package`, `win_regedit`). Updates (`win_updates`): patching.md "Windows".
 - Proxmox Windows VMs: VirtIO drivers + QEMU guest agent; cloud-init → `cloudbase-init` (a
   Windows template build is a separate Packer `proxmox-iso` flow; add it when first needed).
 - Reboots: `ansible.windows.win_reboot` — approval item, the guard asks.
