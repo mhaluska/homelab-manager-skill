@@ -9,8 +9,8 @@ Desired state is data in `homelab.auto.tfvars`; edit data, not module calls.
 
 Optional per `vms`/`containers` entry (the default is what the template always did, so leaving them out changes
 nothing): `ipv4_gateway` (else `defaults.ipv4_gateway`; a guest on another VLAN needs its own), `on_boot` (true),
-`protection` (false), `description`; VMs also `cpu_type` (`x86-64-v2-AES`); containers `dns_servers`/`dns_domain`
-(else the node's DNS). `protection = true` sets the Proxmox protection flag: Proxmox refuses to delete the guest or
+`protection` (false), `description`, `mac_address` (else Proxmox picks one; an imported guest keeps its own);
+VMs also `cpu_type` (`x86-64-v2-AES`); containers `dns_servers`/`dns_domain` (else the node's DNS). `protection = true` sets the Proxmox protection flag: Proxmox refuses to delete the guest or
 its disks, so a plan that destroys it fails at apply. Offer it for guests whose loss hurts (DNS, the NAS, the
 state bucket); turning it off is its own change and plan.
 
