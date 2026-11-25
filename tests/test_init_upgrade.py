@@ -191,11 +191,38 @@ class SettingsUpgradeTests(unittest.TestCase):
             self.assertIn("Read(~/secret)", have["permissions"]["deny"])
             self.assertIn("Read(~/.kube/config)", have["permissions"]["deny"])
             self.assertIn("Bash(packer build:*)", have["permissions"]["ask"])
-            self.assertIn("Bash(git commit *)", have["permissions"]["allow"])   # GitHub issue #147
-            self.assertNotIn("push", json.dumps(have["permissions"]["allow"]))
+            self.assertNotIn("allow", have["permissions"])              # never an allow rule (GitHub issue #157)
+            self.assertNotIn("allow:", dry)
             self.assertEqual(have["model"], "x")
             p.write_text("{oops")                                       # the user's broken file: left alone
             self.assertNotIn("settings.json", run("init_repo.py", str(d), "--sync-managed", "--dry-run", cwd=d).stdout)
+        finally:
+            shutil.rmtree(d)
+
+    def test_removed_allow_rules_stay_removed_and_old_repos_are_asked(self):   # GitHub issue #157
+        d = Path(tempfile.mkdtemp())
+        try:
+            run("init_repo.py", str(d), "--components", "ansible", cwd=d)
+            p = d / ".claude" / "settings.json"
+            have = json.loads(p.read_text())
+            self.assertIn("Bash(git commit *)", have["permissions"]["allow"])  # a new repo gets them at setup
+            have["permissions"]["allow"] = ["Bash(ls:*)"]
+            p.write_text(json.dumps(have))
+            self.assertIn("Up to date", run("init_repo.py", str(d), "--sync-managed", "--dry-run", cwd=d).stdout)
+            run("init_repo.py", str(d), "--sync-managed", cwd=d)
+            r = run("init_repo.py", str(d), "--add-components", "discovery", cwd=d)
+            self.assertNotIn("Merged", r.stdout)
+            self.assertEqual(json.loads(p.read_text())["permissions"]["allow"], ["Bash(ls:*)"])
+            ids = lambda: [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", cwd=d).stdout)]
+            self.assertNotIn("settings-allow-git", ids())     # reviewed at this version: a removal stays a removal
+            run("config_set.py", "upgrades.reviewed=0.55.0", cwd=d)
+            self.assertIn("settings-allow-git", ids())        # set up before 0.56.0: offered, needs a yes
+            out = run("init_repo.py", str(d), "--sync-managed", "--dry-run", cwd=d).stdout
+            self.assertIn("settings-allow-git", out)
+            self.assertNotIn("allow: Bash(git", out)
+            run("upgrade_notes.py", "--decline", "settings-allow-git", cwd=d)
+            self.assertNotIn("settings-allow-git", ids())
+            self.assertEqual(json.loads(p.read_text())["permissions"]["allow"], ["Bash(ls:*)"])
         finally:
             shutil.rmtree(d)
 

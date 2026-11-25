@@ -10,7 +10,8 @@
 
 - Copies only the files the chosen components need. Existing files are NEVER overwritten
   (an existing .claude/settings.json — e.g. from installing the plugin with project scope — gets the
-  template's permission rules merged in, so the safety settings aren't lost),
+  template's permission rules merged in, so the safety settings aren't lost; in a repo that already has a
+  homelab.yaml, and with --sync-managed, only deny/ask rules: an allow rule needs the user's yes),
   except plugin-managed ones (MANAGED) with --sync-managed.
 - --sync-managed also applies one-time upgrades for repos set up by older plugin versions (see upgrades());
   the SessionStart hook (hooks/update_check.py) tells Claude when one is pending. It also lists the opt-in
@@ -91,6 +92,9 @@ MANAGED_MARK = "Managed by the homelab-manager plugin"
 # Template files --sync-managed never replaces even when unedited: config and data the scripts edit in place,
 # and docs whose changes come with steps on Proxmox that a silent replacement would hide.
 HISTORY = HERE.parent / "assets" / "template-history.json"
+# Permission rule kinds merged into an existing repo's .claude/settings.json: they only tighten. allow rules go in
+# only at setup of a new repo (no homelab.yaml yet); later only with the user's yes (GitHub issue #157).
+TIGHTENING = ("deny", "ask")
 NEVER_REPLACE = {"homelab.yaml", ".claude/settings.json", "skill_issues.md", "docs/proxmox-tokens.md"}
 OLD_CLAUDE_RULE = re.compile(r"^- Record problems you find.*?(?=^\S|\Z)", re.M | re.S)       # until 0.5.2
 NEW_CLAUDE_RULE = re.compile(r"^- Homelab problems .*?(?=^\S|\Z)", re.M | re.S)
@@ -104,11 +108,14 @@ LEGACY_ISSUES, NEW_ISSUES = "ISSUES.md", "skill_issues.md"                      
 OLD_ISSUES_KEYS = ("github", "repo", "labels")                                               # until 0.5.2
 
 
-def merge_settings(src: Path, dst: Path) -> list[str]:
-    """Add the template's permission rules and keys to an existing settings.json; never removes anything."""
+def merge_settings(src: Path, dst: Path, kinds=None) -> list[str]:
+    """Add the template's permission rules and keys to an existing settings.json; never removes anything.
+    kinds: only these rule kinds (e.g. TIGHTENING); None = all of them."""
     have, want = json.loads(dst.read_text() or "{}"), json.loads(src.read_text())
     added = []
     for kind, rules in (want.get("permissions") or {}).items():
+        if kinds is not None and kind not in kinds:
+            continue
         cur = have.setdefault("permissions", {}).setdefault(kind, [])
         for rule in rules:
             if rule not in cur:
@@ -123,12 +130,14 @@ def merge_settings(src: Path, dst: Path) -> list[str]:
     return added
 
 
-def missing_settings(src: Path, dst: Path) -> list[str]:
-    """Template permission rules an existing settings.json lacks (unreadable JSON: none, it is the user's file)."""
+def missing_settings(src: Path, dst: Path, kinds=None) -> list[str]:
+    """Template permission rules an existing settings.json lacks (unreadable JSON: none, it is the user's file).
+    kinds: only these rule kinds; None = all of them."""
     try:
         have = (json.loads(dst.read_text() or "{}").get("permissions") or {})
         want = json.loads(src.read_text()).get("permissions") or {}
-        return [f"{kind}: {r}" for kind, rules in want.items() for r in rules if r not in (have.get(kind) or [])]
+        return [f"{kind}: {r}" for kind, rules in want.items() if kinds is None or kind in kinds
+                for r in rules if r not in (have.get(kind) or [])]
     except (ValueError, OSError, AttributeError):
         return []
 
@@ -213,10 +222,12 @@ def upgrades(target: Path) -> list[tuple[str, callable]]:
             out.append((f"remove {rel} (no longer used: homelab problems aren't tracked as issues)", remove))
     settings = target / ".claude" / "settings.json"
     if settings.is_file() and (target / "homelab.yaml").exists():
-        missing = missing_settings(TEMPLATE / ".claude" / "settings.json", settings)
+        # only rules that tighten: an allow rule the user removed stays removed (GitHub issue #157)
+        missing = missing_settings(TEMPLATE / ".claude" / "settings.json", settings, TIGHTENING)
         if missing:
             out.append((f"add the template's permission rules to .claude/settings.json ({', '.join(missing)}); "
-                        "nothing is removed", lambda: merge_settings(TEMPLATE / ".claude" / "settings.json", settings)))
+                        "nothing is removed",
+                        lambda: merge_settings(TEMPLATE / ".claude" / "settings.json", settings, TIGHTENING)))
     cfg = target / "homelab.yaml"
     if cfg.exists():
         r = subprocess.run([hmlib.yq_bin(), "-o=json", ".issues // {} | keys", str(cfg)], capture_output=True,
@@ -854,6 +865,7 @@ def main():
     added = [c for c in comps if c not in existing]
 
     created, kept, merged = [], [], []
+    kinds = None if not (target / "homelab.yaml").exists() else TIGHTENING   # allow rules: a new repo only (#157)
     for src in sorted(TEMPLATE.rglob("*")):
         if src.is_dir() or src.name == ".DS_Store":
             continue
@@ -864,9 +876,7 @@ def main():
         if dst.exists():
             if rel == ".claude/settings.json":
                 try:
-                    if a.dry_run:
-                        merged.append(rel)
-                    elif merge_settings(src, dst):
+                    if missing_settings(src, dst, kinds) if a.dry_run else merge_settings(src, dst, kinds):
                         merged.append(rel)
                     continue
                 except (ValueError, OSError) as e:
