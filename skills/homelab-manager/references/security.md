@@ -74,8 +74,9 @@ prompts to the steps that need a decision:
   guard asks before it is set): the guard allows, without a prompt, read-only runs of this plugin's scripts:
   `check_env.py [--json]`, `upgrade_notes.py [--all] [--json]`, `init_repo.py --sync-managed --dry-run`,
   `issues.py list|show|template`, `issues.py fixed [--github]`, `issues.py report --dry-run`,
-  `overview.py --check`, `drift_report.py --stale`, `update_check.py --force`. Only from the running plugin
-  version, only as one simple command, and any guard finding still wins. Offer it during setup and after the
+  `overview.py --check`, `drift_report.py --stale`, `tofu_import_plan.py` without `--write`,
+  `update_check.py --force`. Only from the running plugin version, only as one simple command, and any guard
+  finding still wins. Offer it during setup and after the
   upgrade that brings it.
 - The template's `.claude/settings.json` allows `git add` and `git commit` (local; the pre-commit hook still
   runs). `git push`, plugin updates and everything that writes elsewhere keep asking.

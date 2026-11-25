@@ -1523,6 +1523,14 @@ def _issues_readonly(args: list[str]) -> bool:
     return sub == "report" and "--dry-run" in rest
 
 
+def _with_values(*opts: str):
+    """Only these options, each with a value that is no option itself (tofu_import_plan.py without --write)."""
+    def test(args: list[str]) -> bool:
+        pairs = list(zip(args[::2], args[1::2]))
+        return len(args) % 2 == 0 and all(o in opts and not v.startswith("-") for o, v in pairs)
+    return test
+
+
 READONLY_SCRIPTS = {
     (_SCRIPTS_DIR, "check_env.py"): _only("--json"),
     (_SCRIPTS_DIR, "upgrade_notes.py"): _only("--all", "--json"),
@@ -1530,6 +1538,7 @@ READONLY_SCRIPTS = {
     (_SCRIPTS_DIR, "issues.py"): _issues_readonly,
     (_SCRIPTS_DIR, "overview.py"): _only("--check", "--no-ansible", need=("--check",)),
     (_SCRIPTS_DIR, "drift_report.py"): _only("--stale", need=("--stale",)),
+    (_SCRIPTS_DIR, "tofu_import_plan.py"): _with_values("--site", "--guest"),
     (PLUGIN_ROOT / "hooks", "update_check.py"): _only("--force"),
 }
 # anything a shell would interpret: a command list, pipe, redirection, substitution, variable, glob or comment

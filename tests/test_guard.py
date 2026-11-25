@@ -353,7 +353,9 @@ class HookProcessTests(unittest.TestCase):
                    f"python3 {s}/check_env.py", f"python3 {s}/check_env.py --json",
                    f"python3 {s}/upgrade_notes.py --all", f"python3 {s}/init_repo.py --sync-managed --dry-run",
                    f"python3 {s}/overview.py --check", f"python3 {s}/drift_report.py --stale",
-                   f"python3 {h}/update_check.py --force", f"python3 '{s}/issues.py' list"]
+                   f"python3 {h}/update_check.py --force", f"python3 '{s}/issues.py' list",
+                   f"python3 {s}/tofu_import_plan.py",   # GitHub issue #149: without --write it only prints
+                   f"python3 {s}/tofu_import_plan.py --site home --guest app01 --guest 101"]
         prompted = [f"python3 {s}/issues.py fixed --apply", f"python3 {s}/issues.py fixed --app",  # abbreviation
                     f"python3 {s}/issues.py resolve SKILL-001", f"python3 {s}/issues.py add --title x --kind idea",
                     f"python3 {s}/issues.py compact", f"python3 {s}/check_env.py --keychain",
@@ -368,7 +370,10 @@ class HookProcessTests(unittest.TestCase):
                     f"HM={s.parent}; python3 $HM/scripts/issues.py list", "python3 $HM/scripts/issues.py list",
                     f"X=1 python3 {s}/issues.py list", f"python3 -I {s}/issues.py list", f"python {s}/issues.py list",
                     f"sudo python3 {s}/issues.py list", "python3 -c 'print(1)'", f"python3 {s}/missing.py",
-                    f"python3 {s}/issues.py list *", f"python3 {s}/issues.py 'list"]
+                    f"python3 {s}/issues.py list *", f"python3 {s}/issues.py 'list",
+                    f"python3 {s}/tofu_import_plan.py --write", f"python3 {s}/tofu_import_plan.py --wr",
+                    f"python3 {s}/tofu_import_plan.py --site home --write", f"python3 {s}/tofu_import_plan.py --site",
+                    f"python3 {s}/tofu_import_plan.py --guest --write", f"python3 {s}/tofu_import_plan.py --site=x"]
         with Repo() as r:
             for c in allowed[:3]:   # off by default
                 self.assertIsNone(self.run_hook(c, r), c)
