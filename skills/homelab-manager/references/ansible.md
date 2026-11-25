@@ -2,6 +2,8 @@
 
 Run from `ansible/` (it holds `ansible.cfg`). SSH via the Mac's agent; no passwords in Git.
 Install collections once: `ansible-galaxy collection install -r requirements.yml -p collections`.
+`requirements.yml` pins each collection below its next major version. Raising a bound is its own change: read
+that release's breaking changes, then `--syntax-check` and a `--check` run of the playbooks that use it.
 
 ## Inventory
 

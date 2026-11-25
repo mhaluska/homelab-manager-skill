@@ -1,8 +1,18 @@
+# Lower bound: the major version the playbooks are tested with; upper bound: below the next major release, whose
+# breaking changes need a look first (references/ansible.md). `ansible-galaxy collection install -r
+# requirements.yml` keeps an installed version that fits and upgrades one that doesn't.
 collections:
   - name: ansible.posix
-  - name: community.general
+    version: ">=2.0.0,<3.0.0"
+  - name: community.general        # redfish_info / redfish_command (bmc-info.yml)
+    version: ">=13.0.0,<15.0.0"
   - name: ansible.windows
+    version: ">=3.0.0,<4.0.0"
   - name: community.windows
+    version: ">=3.0.0,<4.0.0"
   - name: kubernetes.core
+    version: ">=6.0.0,<7.0.0"
   - name: ansible.netcommon       # network_cli for RouterOS
+    version: ">=8.0.0,<9.0.0"
   - name: community.routeros
+    version: ">=3.0.0,<4.0.0"
