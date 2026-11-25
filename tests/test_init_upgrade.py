@@ -760,6 +760,52 @@ class PreCommitHookTests(unittest.TestCase):
             self.assertEqual(self.staged(name), 0, name)
 
 
+    def hook(self, *args):
+        return subprocess.run(["bash", str(self.HOOK), *args], cwd=self.d, capture_output=True, text=True)
+
+    def test_literal_passwords(self):
+        for text in ['password: "hunter2hunter"\n', '  api_key = "abcdef123456"\n',
+                     'services:\n  db:\n    environment:\n      - POSTGRES_PASSWORD=supersecret1\n',
+                     "export GITHUB_TOKEN=abcdefabcdef\n", "mysql_root_password: s3cr3tvalue\n"]:
+            self.assertEqual(self.staged("conf.yml", text), 1, text)
+        for text in ['password: "{{ vault_db_password }}"\n', "secret = var.secret\n", "state_secret: s3-state\n",
+                     "token = secrets.token_hex(16)\n", "password: short\n", "the secret:proxmox-ro line\n",
+                     'password: "hunter2hunter"  # pre-commit: allow\n', "admin_password: changeme-later\n"]:
+            self.assertEqual(self.staged("conf.yml", text), 0, text)
+        (self.d / "c.yml").write_text('token: "abcdefabcdefabcdef"\n')
+        subprocess.run(["git", "add", "c.yml"], cwd=self.d, check=True)
+        r = self.hook()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('token: "ab…', r.stdout)
+        self.assertNotIn("abcdefabcdefabcdef", r.stdout)   # the value is not printed
+
+    def test_unencrypted_vault_file(self):
+        self.assertEqual(self.staged("ansible/group_vars/all/vault.yml", "db_password: x\n"), 1)
+        self.assertEqual(self.staged("ansible/group_vars/all/vault.yml", "$ANSIBLE_VAULT;1.1;AES256\n6162\n"), 0)
+
+    def test_spaces_renames_and_history(self):
+        git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *a],
+                                        cwd=self.d, check=True, capture_output=True)
+        (self.d / "my notes.md").write_text("fine\n")
+        (self.d / "cert.txt").write_text("not a key\n")
+        git("add", "-A")
+        self.assertEqual(self.hook().returncode, 0)       # a name with a space is one name
+        git("commit", "-qm", "init")
+        git("mv", "cert.txt", "cert.pfx")
+        r = self.hook()
+        self.assertEqual(r.returncode, 1)                 # a rename into a secret file name
+        self.assertIn("cert.pfx", r.stdout)
+        git("reset", "-q")
+        self.assertEqual(self.hook("--history").returncode, 0)
+        (self.d / "old.yml").write_text("password: hunter2hunter\n")
+        git("add", "old.yml")
+        git("commit", "-qm", "oops", "--no-verify")
+        git("rm", "-q", "old.yml")
+        git("commit", "-qm", "gone")
+        self.assertEqual(self.hook().returncode, 0)
+        self.assertEqual(self.hook("--history").returncode, 1)   # still in an old commit
+
+
 class PluginVersionGuardTests(unittest.TestCase):  # GitHub issue #111
     def setUp(self):
         self.d = tempfile.mkdtemp()
