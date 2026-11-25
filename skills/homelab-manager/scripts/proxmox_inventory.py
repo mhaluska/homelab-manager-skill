@@ -801,8 +801,9 @@ def keep_details(old: dict | None, new: dict) -> dict:
             kept += 1
     if kept:
         new["details_at"] = old.get("details_at") or old.get("collected_at")
-        if old.get("config_version"):
-            new["config_version"] = old["config_version"]
+        for k in ("config_version", "guest_ip_sources"):   # the sources: else OVERVIEW.md drops "Last backup"
+            if old.get(k):
+                new[k] = old[k]
     return new
 
 

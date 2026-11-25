@@ -883,6 +883,9 @@ class PveNodePlanTests(unittest.TestCase):  # issue 23
         self.assertEqual(pinv.keep_details({**old, "config_version": 2}, {"guests": [{"vmid": 101, "type": "vm"}]})
                          ["config_version"], 2)                 # what tofu_import_plan.py checks (issue #149)
         self.assertNotIn("config_version", out)
+        sources = {"agent": "", "backups": "pbs"}               # else OVERVIEW.md loses "Last backup"
+        self.assertEqual(pinv.keep_details({**old, "guest_ip_sources": sources},
+                                           {"guests": [{"vmid": 101, "type": "vm"}]})["guest_ip_sources"], sources)
         self.assertEqual(pinv.guest_config({"cpu": "host", "protection": "1", "swap": "512", "serial0": "socket",
                                             "lock": "backup"}),
                          {"cpu": "host", "protection": "1", "swap": "512", "serial0": "socket"})
