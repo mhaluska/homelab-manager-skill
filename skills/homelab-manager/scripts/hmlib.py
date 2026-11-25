@@ -419,6 +419,42 @@ def site_of_secret(cfg: dict, secret: str) -> dict | None:
     return None
 
 
+# Proxmox Backup Servers whose datastores proxmox_inventory.py reads (GitHub issue #151): `pbs:` in homelab.yaml,
+# [{server, token, port, fingerprint, ca_cert, verify_tls}]. `server` is the address the Proxmox `pbs` storages give
+# (a list when they name it several ways); `token` names a secret of kind pbs_token (DatastoreAudit, read-only).
+PBS_KEYS = {"server", "token", "port", "fingerprint", "ca_cert", "verify_tls"}
+
+
+def pbs_servers(cfg: dict) -> list[dict]:
+    """pbs: entries, validated, each with `names` (its server names in lower case) and `_where`."""
+    raw = get(cfg, "pbs", []) or []
+    if not isinstance(raw, list):
+        raise ConfigError("pbs must be a list of {server, token} (Proxmox Backup Servers, docs/proxmox-tokens.md).")
+    out, seen = [], {}
+    for i, e in enumerate(raw):
+        where = f"pbs[{i}]"
+        if not isinstance(e, dict) or not e.get("server") or not e.get("token"):
+            raise ConfigError(f"{where} needs server (as the Proxmox pbs storage names it) and token (a secret name).")
+        extra = set(e) - PBS_KEYS
+        if extra:
+            raise ConfigError(f"{where}: unknown key(s) {', '.join(sorted(extra))} ({', '.join(sorted(PBS_KEYS))}).")
+        names = [str(x).strip().lower() for x in (e["server"] if isinstance(e["server"], list) else [e["server"]])]
+        for n in names:
+            if not n or "/" in n or " " in n:
+                raise ConfigError(f"{where}.server: {n!r} is not a host name or address.")
+            if n in seen:
+                raise ConfigError(f"{where}.server: {n} is also in pbs[{seen[n]}].")
+            seen[n] = i
+        out.append({**e, "names": names, "_where": where})
+    return out
+
+
+def pbs_server(cfg: dict, server) -> dict | None:
+    """The pbs: entry for a storage's server address (case-insensitive), or None."""
+    name = str(server or "").strip().lower()
+    return next((e for e in pbs_servers(cfg) if name in e["names"]), None)
+
+
 # discovery/ (GitHub issue #75): one file per kind, never a site in its name. A file whose source is one site
 # (proxmox, network, pve-patch, unifi) holds {"sites": {<site>: <that site's data>}}; files keyed by inventory host
 # tag each host with its site. A repo without sites: keeps its data under "default".

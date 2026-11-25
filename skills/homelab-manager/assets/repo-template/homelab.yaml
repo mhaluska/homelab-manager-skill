@@ -53,6 +53,11 @@ proxmox:
     read_only: proxmox-ro    # secret name below; role PVEAuditor on /
     provisioning: proxmox-rw # secret name below; custom role, see docs/proxmox-tokens.md
 
+pbs: []                      # optional, Proxmox Backup Servers whose datastores OVERVIEW.md checks (GC, prune, verify):
+                             # [{server: 10.0.10.20, token: pbs-ro}]; server as the Proxmox `pbs` storages name it (a
+                             # list if they use several names), token: a secret below (DatastoreAudit role,
+                             # docs/proxmox-tokens.md). TLS: pinned to the storage's fingerprint; or set ca_cert
+
 sites: []                    # optional, for more than one location (references/proxmox.md "Several sites"):
                              # [{name, label, ranges, proxmox}], the default site first; its Proxmox is the
                              # proxmox: block above or sites[0].proxmox (one of the two). Inventory hosts belong
@@ -102,6 +107,9 @@ opentofu:
 overview:                    # OVERVIEW.md (overview.py), regenerated after every change
   redact: false              # true for a shared or public repo: mask IPs, MACs, domain and Proxmox hosts
   backup_max_age_days: 7     # a guest in a backup job without a successful backup this recent is a warning
+  scrub_max_age_days: 35     # a ZFS pool whose last scrub is older is a warning
+  disk_wearout_max_pct: 80   # an SSD worn this much (SMART wearout used) is a warning
+  pbs_max_age_days: 7        # a PBS datastore whose last GC or prune, or oldest unverified snapshot, is older
 
 ansible:
   default_linux_group: linux
@@ -129,6 +137,7 @@ secrets:
   proxmox-ro:   {service: homelab/proxmox-ro,   kind: proxmox_token}   # user@pve!token=uuid
   proxmox-rw:   {service: homelab/proxmox-rw,   kind: proxmox_token}
   s3-state:     {service: homelab/s3-state,     kind: s3_credentials}  # ACCESS_KEY_ID:SECRET_ACCESS_KEY (S3 state only)
+  # pbs-ro:     {service: homelab/pbs-ro,       kind: pbs_token}       # user@pbs!token:secret (pbs: above)
   # bmc:        {service: homelab/bmc,          kind: user_password, env: BMC}   # user:password → BMC_USER/BMC_PASSWORD
   # unifi-api:  {service: homelab/unifi-api,    kind: env, env: UNIFI_API_KEY}   # UniFi Network Integration API key
   # unifi:      {service: homelab/unifi,        kind: user_password, env: UNIFI} # UniFi read-only admin (unifi_auth: login)

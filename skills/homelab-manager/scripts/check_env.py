@@ -145,7 +145,8 @@ def check_config_and_secrets():
             v = hmlib.keychain_read(service, account, timeout=15)
             fmt_ok = True
             want = {"proxmox_token": (r"^[^@\s]+@[^!\s]+![^=\s]+=\S+$", "user@realm!tokenid=secret"),
-                    "s3_credentials": (r"^[^:\s]+:\S+$", "ACCESS_KEY_ID:SECRET_ACCESS_KEY"),
+                    "pbs_token": (r"^[^@\s]+@[^!\s]+![^:=\s]+[:=]\S+$", "user@realm!tokenid:secret"),
+                    "s3_credentials":(r"^[^:\s]+:\S+$", "ACCESS_KEY_ID:SECRET_ACCESS_KEY"),
                     "user_password": (r"^[^:\s]+:.+$", "user:password")}.get(entry.get("kind"))
             if want:
                 fmt_ok = bool(re.match(want[0], v))

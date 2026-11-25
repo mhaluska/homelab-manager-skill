@@ -159,6 +159,102 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
         Path(self.d, "OVERVIEW.md").unlink()
         self.assertEqual(run("overview.py", "--no-ansible", "--check", cwd=self.d).returncode, 2)
 
+    def test_storage_health_and_pbs(self):  # GitHub issues #151, #152
+        f = Path(self.d, "discovery/proxmox.json")
+        snap = json.loads(f.read_text())   # collected 2026-01-02T03:04:05Z
+        snap["nodes"][0]["zfs"] = [
+            {"pool": "tank", "state": "DEGRADED", "errors": "No known data errors", "scan": "scrub repaired …",
+             "scrub_at": "2025-12-20", "scrub_errors": 0, "size_gib": 100, "alloc_gib": 40,
+             "bad_devices": ["ata-DISK-B FAULTED (read/write/cksum 3/0/12)"]},
+            {"pool": "old", "state": "ONLINE", "errors": "No known data errors", "scan": "scrub repaired …",
+             "scrub_at": "2025-11-01", "scrub_errors": 0, "size_gib": 50, "alloc_gib": 5},
+            {"pool": "fine", "state": "ONLINE", "errors": "No known data errors", "scan": "scrub in progress …",
+             "scrub_running": True, "size_gib": 50, "alloc_gib": 5}]
+        snap["nodes"][0]["disks"] = [
+            {"dev": "/dev/sda", "type": "ssd", "model": "SSD X", "health": "PASSED", "used": "ZFS", "wear_pct": 60},
+            {"dev": "/dev/sdb", "type": "hdd", "model": "HDD Y", "health": "FAILED", "used": "ZFS"},
+            {"dev": "/dev/sdc", "type": "usb", "model": "Stick", "health": "UNKNOWN", "used": "exfat"}]
+        snap["replication"] = [
+            {"id": "101-0", "guest": 101, "source": "pve1", "target": "pve2", "enabled": True,
+             "last_sync": "2026-01-01T10:00:00Z", "next_sync": "2026-01-02T03:20:00Z", "fail_count": 3,
+             "error": "no space left"},
+            {"id": "102-0", "guest": 102, "source": "pve1", "target": "pve2", "enabled": True,
+             "last_sync": "2026-01-01T00:00:00Z", "next_sync": "2026-01-01T00:15:00Z", "fail_count": 0},
+            {"id": "103-0", "guest": 103, "source": "pve1", "target": "pve2", "enabled": True,
+             "last_sync": "2026-01-02T03:00:00Z", "next_sync": "2026-01-02T03:15:00Z", "fail_count": 0},
+            {"id": "104-0", "guest": 104, "source": "pve1", "target": "pve2", "enabled": False,
+             "next_sync": "2025-01-01T00:00:00Z", "fail_count": 9}]
+        snap["ceph"] = {"health": "HEALTH_WARN", "checks": [{"check": "OSD_DOWN", "severity": "HEALTH_WARN",
+                                                             "message": "1 osds down"}]}
+        snap["storage_health"] = {"zfs": "ok", "disks": "not read: pve2: 500 smartctl hung", "replication": "ok",
+                                  "ceph": "ok", "pbs": "no token for pbs2.example (pbs: in homelab.yaml, "
+                                                       "docs/proxmox-tokens.md) (2 of 3 datastores read)"}
+        job = {"schedule": "daily", "state": "OK", "at": "2026-01-01T05:00:00Z"}
+        snap["pbs_datastores"] = [
+            {"server": "pbs.example", "datastore": "store1", "storages": ["pbs-a"], "gc": job,
+             "prune": [{"id": "p1", **job, "state": "ERROR: datastore is locked"}], "verify": [{"id": "v1", **job}],
+             "snapshots": {"count": 10, "verified": 7, "failed": 1, "newest": "2026-01-02T01:00:00Z",
+                           "newest_verified": "2026-01-01T01:00:00Z", "oldest_unverified": "2025-12-01T01:00:00Z"}},
+            {"server": "pbs.example", "datastore": "store2", "storages": ["pbs-b"],
+             "gc": {"schedule": "daily", "state": "running"}, "prune": [], "verify": [{"id": "v2", "state": "running"}],
+             "snapshots": {"count": 4, "verified": 4, "failed": 0, "newest": "2025-06-01T00:00:00Z",
+                           "newest_verified": "2025-06-01T00:00:00Z", "oldest_unverified": None}},   # an archive
+            {"server": "pbs2.example", "datastore": "far", "storages": ["pbs-far"]}]
+        f.write_text(json.dumps(snap))
+        r = run("config_set.py", "overview.disk_wearout_max_pct=50", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = run("overview.py", "--no-ansible", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        md = Path(self.d, "OVERVIEW.md").read_text()
+        sec = md[md.index("### Storage health"):md.index("### Guests")]
+        self.assertIn("| pve1 | tank | DEGRADED | 40/100 GiB | 2025-12-20, 0 errors | ⚠ state DEGRADED; devices: "
+                      "ata-DISK-B FAULTED (read/write/cksum 3/0/12) |", sec)
+        self.assertIn("| pve1 | old | ONLINE | 5/50 GiB | 2025-11-01, 0 errors | ⚠ last scrub 2025-11-01, over 35 days "
+                      "before the snapshot |", sec)
+        self.assertIn("| pve1 | fine | ONLINE | 5/50 GiB | running | OK |", sec)
+        self.assertIn("Disks: 3 disks on 1 node, SMART passed on 1, unknown on 1; most worn: pve1 /dev/sda (ssd) 60 % "
+                      "(a warning from 50 %).", sec)
+        self.assertIn("| pve1 | /dev/sda | ssd | SSD X | ZFS | PASSED | 60 % | worn 60 % |", sec)
+        self.assertIn("| pve1 | /dev/sdb | hdd | HDD Y | ZFS | FAILED | – | SMART FAILED |", sec)
+        self.assertNotIn("/dev/sdc |", sec)
+        self.assertIn("| 101-0 | 101 | pve1 → pve2 | 2026-01-01 10:00 | ⚠ 3 failed sync(s): no space left |", sec)
+        self.assertIn("| 102-0 | 102 | pve1 → pve2 | 2026-01-01 00:00 | ⚠ late: next sync was due 2026-01-01 |", sec)
+        self.assertIn("| 103-0 | 103 | pve1 → pve2 | 2026-01-02 03:00 | OK |", sec)
+        self.assertIn("| 104-0 | 104 | pve1 → pve2 | never | disabled |", sec)
+        self.assertIn("Ceph: HEALTH\\_WARN — OSD\\_DOWN: 1 osds down.", sec)
+        self.assertIn("Not read: disks pve2: 500 smartctl hung.", sec)
+        backups = md[md.index("### Backups"):]
+        self.assertIn("| pbs-a | pbs.example | store1 | OK 2026-01-01 | failed 2026-01-01 | OK 2026-01-01 | 7/10, 1 failed "
+                      "| 2026-01-01 | ⚠ prune job p1 failed: ERROR: datastore is locked; 1 snapshot(s) failed "
+                      "verification; 2 snapshot(s) not verified, the oldest from 2025-12-01 |", backups)
+        self.assertIn("| pbs-b | pbs.example | store2 | running | – | running | 4/4 | 2025-06-01 | OK |", backups)
+        self.assertNotIn("| pbs-far |", backups)
+        self.assertIn("PBS datastores (GC, prune, verify) not read for pbs2.example: add a read-only PBS token", backups)
+        glance = md[md.index("Warnings (details"):].split("\n")[0]
+        for text in ("2 ZFS pools degraded, with errors or not scrubbed recently", "2 disks failing SMART or worn out",
+                     "Ceph not healthy on 1 site", "1 PBS datastore with a failed or old GC, prune or verify",
+                     "2 replication jobs failing or late"):
+            self.assertIn(text, glance)
+        self.assertLess(glance.index("ZFS pools"), glance.index("guest in no"))
+        health = md[md.index("## Health"):]
+        self.assertIn("- default: ZFS pool tank on pve1: state DEGRADED", health)
+        self.assertIn("- default: replication 102-0 (guest 102): late", health)
+        self.assertIn("- default: PBS datastore store1 on pbs.example: prune job p1 failed", health)
+        # healthy: no warnings, thresholds from homelab.yaml
+        for p in snap["nodes"][0]["zfs"]:
+            p.update(state="ONLINE", scrub_at="2025-12-20")
+            p.pop("bad_devices", None)
+        snap["nodes"][0]["disks"] = snap["nodes"][0]["disks"][:1]
+        snap["replication"], snap["ceph"] = snap["replication"][2:], {"health": "HEALTH_OK", "checks": []}
+        snap["pbs_datastores"] = snap["pbs_datastores"][1:2]
+        f.write_text(json.dumps(snap))
+        r = run("config_set.py", "overview.disk_wearout_max_pct=80", cwd=self.d)
+        md = run("overview.py", "--no-ansible", "--out", "-", cwd=self.d).stdout
+        glance = md[md.index("Warnings (details"):].split("\n")[0]
+        for word in ("ZFS", "disk", "Ceph", "PBS", "replication"):
+            self.assertNotIn(word, glance)
+        self.assertIn("Ceph: HEALTH\\_OK.", md)
+
     def test_recovery_impact_exposure_expirations_access(self):  # GitHub issue #89
         sys.path.insert(0, str(SCRIPTS))
         import hmlib

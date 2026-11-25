@@ -184,6 +184,216 @@ class InventoryErrorTests(unittest.TestCase):
         self.assertIsInstance(e.exception, SystemExit)   # scripts that don't catch it still end with the message
 
 
+class StorageHealthCollectTests(unittest.TestCase):
+    """GitHub issues #151, #152: ZFS, disks, replication, Ceph and PBS datastores, from recorded (invented) answers."""
+
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import proxmox_inventory
+        self.inv = proxmox_inventory
+        self.calls = []
+
+    def fake(self, answers: dict):
+        """A PVE whose _get answers from `answers` (an Exception is raised, a missing path is [])."""
+        pve = self.inv.PVE("https://pve.example:8006", "homelab@pve!ro=s3cret", None)
+
+        def get(path, **params):
+            self.calls.append(path)
+            a = answers.get(path, [])
+            if isinstance(a, Exception):
+                raise a
+            return a
+        pve._get = get
+        return pve
+
+    def base(self, storage_conf: list | None = None) -> dict:
+        nodes = [{"type": "node", "node": n, "status": "online", "maxcpu": 4, "maxmem": 2 ** 34} for n in ("pve1", "pve2")]
+        return {"/version": {"version": "9.1.1"}, "/cluster/resources": nodes, "/storage": storage_conf or [],
+                "/nodes/pve1/status": {}, "/nodes/pve2/status": {}}
+
+    def test_zfs_disks_replication_ceph(self):
+        a = self.base([{"storage": "ceph-vm", "type": "rbd", "pool": "vm"}])
+        a.update({
+            "/nodes/pve1/disks/zfs": [{"name": "tank", "health": "DEGRADED", "size": 2 ** 41, "alloc": 2 ** 40}],
+            "/nodes/pve1/disks/zfs/tank": {
+                "name": "tank", "state": "DEGRADED", "errors": "No known data errors",
+                "scan": "scrub repaired 0B in 01:02:03 with 2 errors on Sun Oct  4 01:26:03 2026",
+                "children": [{"name": "tank", "state": "DEGRADED", "read": 0, "write": 0, "cksum": 0, "children": [
+                    {"name": "mirror-0", "state": "DEGRADED", "read": 0, "write": 0, "cksum": 0, "children": [
+                        {"name": "ata-DISK-A", "state": "ONLINE", "read": 0, "write": 0, "cksum": 0, "leaf": 1},
+                        {"name": "ata-DISK-B", "state": "FAULTED", "read": 3, "write": 0, "cksum": "1.2K",
+                         "leaf": 1, "msg": "too many errors"}]}]}]},
+            "/nodes/pve1/disks/list": [
+                {"devpath": "/dev/sda", "type": "ssd", "model": "SSD X", "health": "PASSED", "wearout": 12, "used": "ZFS"},
+                {"devpath": "/dev/sdb", "type": "hdd", "model": "HDD Y", "health": "FAILED", "wearout": "N/A",
+                 "used": "ZFS"},
+                {"devpath": "/dev/nvme0n1", "type": "nvme", "model": "NVMe Z", "health": "PASSED", "wearout": 100}],
+            "/nodes/pve2/disks/zfs": closed_http_error("u", 403, "Permission check failed", {}, None),
+            "/nodes/pve2/disks/list": closed_http_error("u", 500, "smartctl hung", {}, None),
+            "/cluster/replication": [{"id": "101-0", "guest": 101, "target": "pve2", "source": "pve1"},
+                                     {"id": "102-0", "guest": 102, "target": "pve1", "source": "pve2", "disable": 1}],
+            "/nodes/pve1/replication": [{"id": "101-0", "guest": 101, "source": "pve1", "target": "pve2",
+                                         "last_sync": 1790000000, "next_sync": 1790000900, "fail_count": 2,
+                                         "error": "no space left on device"}],
+            "/nodes/pve2/replication": [],
+            "/cluster/ceph/status": {"health": {"status": "HEALTH_WARN", "checks": {
+                "OSD_DOWN": {"severity": "HEALTH_WARN", "summary": {"message": "1 osds down"}},
+                "MUTED_ONE": {"severity": "HEALTH_WARN", "muted": True, "summary": {"message": "ignored"}}}}}})
+        snap = self.inv.collect(self.fake(a), details=False)
+        pve1, pve2 = snap["nodes"]
+        pool = pve1["zfs"][0]
+        self.assertEqual((pool["pool"], pool["state"], pool["scrub_at"], pool["scrub_errors"]),
+                         ("tank", "DEGRADED", "2026-10-04", 2))
+        self.assertEqual(pool["bad_devices"], ["ata-DISK-B FAULTED (read/write/cksum 3/0/1.2K)"])
+        self.assertEqual([(d["dev"], d["health"], d.get("wear_pct")) for d in pve1["disks"]],
+                         [("/dev/nvme0n1", "PASSED", 0), ("/dev/sda", "PASSED", 88), ("/dev/sdb", "FAILED", None)])
+        self.assertNotIn("zfs", pve2)
+        self.assertNotIn("disks", pve2)
+        health = snap["storage_health"]
+        self.assertIn("pve2: forbidden: the read-only token needs Sys.Audit", health["zfs"])
+        self.assertIn("pve2: 500 smartctl hung", health["disks"])
+        self.assertEqual((health["replication"], health["ceph"]), ("ok", "ok"))
+        self.assertNotIn("errors", snap)   # a failed health read is a note, not a failed API call
+        self.assertEqual(snap["replication"][0], {"id": "101-0", "guest": 101, "source": "pve1", "target": "pve2",
+                                                  "enabled": True, "last_sync": "2026-09-21T14:13:20Z",
+                                                  "next_sync": "2026-09-21T14:28:20Z", "fail_count": 2,
+                                                  "error": "no space left on device"})
+        self.assertEqual(snap["replication"][1]["enabled"], False)
+        self.assertEqual(snap["ceph"], {"health": "HEALTH_WARN", "checks": [
+            {"check": "OSD_DOWN", "severity": "HEALTH_WARN", "message": "1 osds down"}]})
+        text = self.inv.summary(snap)
+        self.assertIn("ZFS: pve1/tank DEGRADED (scrub 2026-10-04, 2 errors)", text)
+        self.assertIn("Disks: 3, SMART not passed: 1, most worn 88%", text)
+        self.assertIn("zfs not read — not read: pve2: forbidden", text)
+
+    def test_nodes_without_ceph_or_replication_are_quiet(self):
+        a = self.base([{"storage": "ext-ceph", "type": "rbd", "monhost": "10.0.0.1"}])   # someone else's Ceph
+        a["/cluster/ceph/status"] = closed_http_error("u", 500, "binary not installed: /usr/bin/ceph-mon", {}, None)
+        snap = self.inv.collect(self.fake(a), details=False)
+        self.assertNotIn("/cluster/ceph/status", self.calls)
+        self.assertNotIn("ceph", snap)
+        self.assertEqual(snap["replication"], [])
+        self.assertEqual(snap["storage_health"], {"zfs": "ok", "disks": "ok", "replication": "ok"})
+        self.assertEqual([n["zfs"] for n in snap["nodes"]], [[], []])
+        self.assertNotIn("Storage health", self.inv.summary(snap))
+        # a hyper-converged Ceph that can't be read says so once; a replication list refused leaves it None
+        a = self.base([{"storage": "ceph-vm", "type": "rbd"}])
+        a["/cluster/ceph/status"] = closed_http_error("u", 500, "rados_connect failed", {}, None)
+        a["/cluster/replication"] = closed_http_error("u", 403, "Permission check failed", {}, None)
+        snap = self.inv.collect(self.fake(a), details=False)
+        self.assertEqual(snap["storage_health"]["ceph"], "not read: 500 rados_connect failed")
+        self.assertIsNone(snap["replication"])
+        self.assertIn("forbidden", snap["storage_health"]["replication"])
+
+    def test_zfs_scan_lines(self):
+        scan = self.inv.zfs_scan
+        self.assertEqual(scan("scrub repaired 0B in 00:05:41 with 0 errors on Sun Nov  8 00:29:43 2026"),
+                         {"scrub_at": "2026-11-08", "scrub_errors": 0})
+        self.assertEqual(scan("scrub in progress since Sun Nov  8 00:24:01 2026\n1.2T scanned"), {"scrub_running": True})
+        for other in ("none requested", "resilvered 1.5G in 00:01:00 with 0 errors on Sun Nov  8 00:24:01 2026",
+                      "scrub canceled on Sun Nov  8 00:24:01 2026", "", None):
+            self.assertEqual(scan(other), {})
+
+    def pbs_snapshot(self, opener):
+        a = self.base([{"storage": "pbs-a", "type": "pbs", "server": "pbs.example", "datastore": "store1",
+                        "fingerprint": "AA:BB"},
+                       {"storage": "pbs-a2", "type": "pbs", "server": "pbs.example", "datastore": "store1",
+                        "fingerprint": "AA:BB"},
+                       {"storage": "pbs-ns", "type": "pbs", "server": "pbs.example", "datastore": "store2",
+                        "namespace": "site/a"},
+                       {"storage": "pbs-off", "type": "pbs", "server": "pbs.example", "datastore": "x", "disable": 1}])
+        return self.inv.collect(self.fake(a), details=False, pbs=opener)
+
+    def test_pbs_datastores(self):
+        seen = []
+
+        class FakePbs:
+            def get(self, path, **params):
+                seen.append((path, params))
+                if path == "/admin/gc":
+                    return [{"store": "store1", "schedule": "daily", "last-run-state": "OK",
+                             "last-run-endtime": 1790000000, "next-run": 1790086400, "upid": "UPID:x"},
+                            {"store": "store2", "schedule": "daily", "upid": "UPID:y"}]   # running
+                if path == "/admin/prune":
+                    return [{"id": "p1", "store": "store1", "schedule": "daily",
+                             "last-run-state": "ERROR: datastore is locked", "last-run-endtime": 1790000000}]
+                if path == "/admin/verify":
+                    return [{"id": "v1", "store": "store1", "schedule": "daily", "last-run-state": "OK",
+                             "last-run-endtime": 1790000000},
+                            {"id": "v2", "store": "store2", "last-run-upid": "UPID:z"}]
+                if path == "/admin/datastore/store1/snapshots":
+                    return [{"backup-type": "vm", "backup-id": "101", "backup-time": 1789000000,
+                             "verification": {"state": "ok"}},
+                            {"backup-type": "vm", "backup-id": "101", "backup-time": 1789900000,
+                             "verification": {"state": "failed"}},
+                            {"backup-type": "ct", "backup-id": "102", "backup-time": 1789950000}]
+                if path == "/admin/datastore/store2/snapshots":
+                    raise self_inv.PbsError("403: the PBS token (and its user) need the DatastoreAudit role", 403)
+                raise AssertionError(path)
+        self_inv = self.inv
+        opened = []
+
+        def opener(server, port, fingerprint):
+            opened.append((server, port, fingerprint))
+            return FakePbs(), ""
+        snap = self.pbs_snapshot(opener)
+        self.assertEqual(opened, [("pbs.example", 8007, "AA:BB")])   # one client per server
+        self.assertIn(("/admin/datastore/store2/snapshots", {"ns": "site/a"}), seen)
+        ds1, ds2 = snap["pbs_datastores"]
+        self.assertEqual(ds1["storages"], ["pbs-a", "pbs-a2"])
+        self.assertEqual(ds1["gc"], {"schedule": "daily", "state": "OK", "at": "2026-09-21T14:13:20Z",
+                                     "next": "2026-09-22T14:13:20Z"})
+        self.assertEqual(ds1["prune"][0]["state"], "ERROR: datastore is locked")
+        self.assertEqual(ds1["snapshots"], {"count": 3, "verified": 1, "failed": 1, "newest": "2026-09-21T00:20:00Z",
+                                            "newest_verified": "2026-09-10T00:26:40Z",
+                                            "oldest_unverified": "2026-09-21T00:20:00Z"})
+        self.assertEqual((ds2["namespace"], ds2["gc"]["state"], ds2["verify"][0]["state"]), ("site/a", "running", "running"))
+        self.assertIn("snapshots: 403", ds2["errors"][0])
+        self.assertEqual(snap["storage_health"]["pbs"], "ok (2 of 2 datastores read)")
+        self.assertNotIn("x", [d["datastore"] for d in snap["pbs_datastores"]])   # a disabled storage
+
+    def test_pbs_without_token_or_refused(self):
+        snap = self.pbs_snapshot(lambda *a: (None, ""))
+        self.assertEqual(snap["storage_health"]["pbs"], "no token for pbs.example (pbs: in homelab.yaml, "
+                                                        "docs/proxmox-tokens.md) (0 of 2 datastores read)")
+        self.assertNotIn("snapshots", snap["pbs_datastores"][0])
+
+        class Refused:
+            def get(self, path, **params):
+                raise inv.PbsError("401: the PBS token or its secret is wrong, or the token was removed", 401)
+        inv = self.inv
+        snap = self.pbs_snapshot(lambda *a: (Refused(), ""))
+        self.assertEqual({d.get("error") for d in snap["pbs_datastores"]},
+                         {"401: the PBS token or its secret is wrong, or the token was removed"})
+        self.assertIn("pbs.example: 401", snap["storage_health"]["pbs"])
+        snap = self.pbs_snapshot(lambda *a: (None, "Keychain item 'homelab/pbs-ro' not readable (exit 44)."))
+        self.assertIn("not readable", snap["pbs_datastores"][0]["error"])
+
+    def test_pbs_token_header_and_config(self):
+        self.assertEqual(self.inv.pbs_token("homelab@pbs!ro:abc=1"), "homelab@pbs!ro:abc=1")
+        self.assertEqual(self.inv.pbs_token("homelab@pbs!ro=abc"), "homelab@pbs!ro:abc")
+        p = self.inv.PBS("fd00::5", 8007, "homelab@pbs!ro=abc", None, "AA:bb:01")
+        self.assertEqual((p.fingerprint, p.headers["Authorization"]), ("aabb01", "PBSAPIToken=homelab@pbs!ro:abc"))
+        sys.path.insert(0, str(SCRIPTS))
+        import hmlib
+        cfg = {"pbs": [{"server": ["PBS1.example", "10.0.0.9"], "token": "pbs-ro"}, {"server": "pbs2", "token": "t2"}]}
+        self.assertEqual(hmlib.pbs_server(cfg, "pbs1.EXAMPLE")["token"], "pbs-ro")
+        self.assertEqual(hmlib.pbs_server(cfg, "10.0.0.9")["token"], "pbs-ro")
+        self.assertIsNone(hmlib.pbs_server(cfg, "other"))
+        for bad in ([{"server": "a"}], [{"server": "a", "token": "t", "user": "x"}], {"server": "a"},
+                    [{"server": "a", "token": "t"}, {"server": "A", "token": "u"}]):
+            with self.assertRaises(hmlib.ConfigError):
+                hmlib.pbs_servers({"pbs": bad})
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        run("init_repo.py", d, "--components", "proxmox", cwd=d)
+        r = run("config_set.py", "pbs+={server: pbs.example}", cwd=d)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("needs server", r.stdout + r.stderr)
+        r = run("config_set.py", "pbs+={server: pbs.example, token: pbs-ro}", cwd=d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+
 class PveSnapshotTests(unittest.TestCase):  # issue 37
     def setUp(self):
         sys.path.insert(0, str(SCRIPTS))

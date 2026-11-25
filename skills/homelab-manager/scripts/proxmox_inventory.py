@@ -17,7 +17,12 @@ The snapshot goes into discovery/proxmox.json under its site (GitHub issue #75),
 site's Proxmox with its own token; --all-sites reads each in turn and carries on past one that can't be reached
 (exit 1 then).
 Each node's subscription (status, level, next due date), web UI certificate and each network storage's server
-are read too.
+are read too, and storage health (GitHub issue #152): each node's ZFS pools (state, errors, last scrub) and disks (SMART
+health, wear), replication jobs, and Ceph health where a storage uses the cluster's own Ceph — all with Sys.Audit; a
+read that fails is one note in storage_health, not an error. A `pbs` storage's datastore (GC, prune and verify job
+runs, snapshots verified and the newest verified one; GitHub issue #151) is read from the Proxmox Backup Server with a
+read-only PBS token when `pbs:` in homelab.yaml names that server; its certificate is pinned to the storage's
+fingerprint.
 --details also reads every guest's config (with LXC `unprivileged` and `features`) and addresses, and its newest successful backup and a newer failure
 from the nodes' vzdump task logs (last_backup, backup_error: GitHub issue #89; the read-only token can't list
 backup volumes, which need VM.Backup, but reads task logs with Sys.Audit).
@@ -347,7 +352,292 @@ def subscription(pve: PVE, node: str) -> dict | None:
             if sub.get(src)}
 
 
-def collect(pve: PVE, details: bool, jobs: int = 8) -> dict:
+# --------------------------------------------------------------------------- storage health (GitHub issue #152)
+
+AUDIT_PRIV = "Sys.Audit on / (PVEAuditor)"
+_MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov",
+                                       "dec"), 1)}
+_SCAN_DONE = re.compile(r"scrub repaired \S+ in .*? with (\d+) errors on \w+ (\w+) +(\d+) [\d:]+ (\d{4})")
+
+
+def http_reason(e: Exception) -> str:
+    """'403', '500 binary not installed: /usr/bin/ceph-mon', 'timed out': why a read failed, short."""
+    if isinstance(e, urllib.error.HTTPError):
+        return f"{e.code} {clean(e.reason, 120)}".strip()
+    return clean(str(getattr(e, "reason", None) or e or type(e).__name__), 120)
+
+
+def health_get(pve: PVE, path: str, notes: dict, key: str, where: str, default=None):
+    """GET for the storage health reads: a refusal or failure becomes one note in `notes[key]` (no exception, nothing
+    in `errors`: a node without Ceph or replication answers an error, which is no reason to warn)."""
+    try:
+        data = pve._get(path)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        code = getattr(e, "code", None)
+        why = (f"forbidden: the read-only token needs {AUDIT_PRIV}" if code == 403 else http_reason(e))
+        notes.setdefault(key, []).append(f"{where}: {why}" if where else why)
+        return default
+    return data if data is not None else ([] if default is None else default)   # read, possibly empty
+
+
+def zfs_scan(scan: str) -> dict:
+    """The last scrub from a zpool scan line: {scrub_at (date), scrub_errors} for a finished scrub, scrub_running,
+    or nothing ('none requested', a resilver)."""
+    first = " ".join(str(scan or "").split())
+    m = _SCAN_DONE.search(first)
+    if m and m.group(2).lower()[:3] in _MONTHS:
+        try:
+            at = dt.date(int(m.group(4)), _MONTHS[m.group(2).lower()[:3]], int(m.group(3))).isoformat()
+            return {"scrub_at": at, "scrub_errors": int(m.group(1))}
+        except ValueError:
+            return {}
+    return {"scrub_running": True} if first.startswith("scrub in progress") else {}
+
+
+def bad_vdevs(node: dict, out: list | None = None) -> list[str]:
+    """Disks (leaf devices) of a pool that are not ONLINE (or a spare AVAIL) or have read/write/checksum errors."""
+    out = [] if out is None else out
+    for c in node.get("children") or []:
+        state = str(c.get("state") or "")
+        errs = [str(c.get(k) or 0) for k in ("read", "write", "cksum")]
+        if c.get("leaf") and ((state and state not in ("ONLINE", "AVAIL")) or any(e not in ("0", "") for e in errs)):
+            out.append(clean(f"{c.get('name')} {state}" + (f" (read/write/cksum {'/'.join(errs)})"
+                                                            if any(e != "0" for e in errs) else ""), 120))
+        bad_vdevs(c, out)
+    return out
+
+
+def node_zfs(pve: PVE, node: str, notes: dict) -> list[dict] | None:
+    pools = health_get(pve, f"/nodes/{node}/disks/zfs", notes, "zfs", node)
+    if pools is None:
+        return None
+    out = []
+    for p in pools:
+        name = str(p.get("name") or "")
+        d = health_get(pve, f"/nodes/{node}/disks/zfs/{urllib.parse.quote(name, safe='')}", notes, "zfs",
+                       f"{node} pool {clean(name)}", {})
+        rec = {"pool": clean(name), "state": clean(d.get("state") or p.get("health")),
+               "size_gib": gib(p.get("size")), "alloc_gib": gib(p.get("alloc"))}
+        if d:
+            rec["errors"] = clean(d.get("errors"), 200)
+            rec["scan"] = clean(" ".join(str(d.get("scan") or "").split()), 200)
+            rec.update(zfs_scan(d.get("scan")))
+            bad = bad_vdevs(d)
+            if bad:
+                rec["bad_devices"] = bad[:10]
+        out.append(rec)
+    return sorted(out, key=lambda x: x["pool"] or "")
+
+
+def node_disks(pve: PVE, node: str, notes: dict) -> list[dict] | None:
+    """SMART health and wear of a node's disks. Proxmox's `wearout` is the life left (100 = new); wear_pct is the
+    part used, as the GUI shows it."""
+    disks = health_get(pve, f"/nodes/{node}/disks/list", notes, "disks", node)
+    if disks is None:
+        return None
+    out = []
+    for x in disks:
+        w = x.get("wearout")
+        try:
+            wear = 100 - int(w) if str(w).strip().lstrip("-").isdigit() else None
+        except ValueError:
+            wear = None
+        out.append({"dev": clean(x.get("devpath")), "type": clean(x.get("type")), "model": clean(x.get("model"), 60),
+                    "health": clean(x.get("health")), "used": clean(x.get("used")),
+                    **({"wear_pct": wear} if wear is not None else {})})
+    return sorted(out, key=lambda x: x["dev"] or "")
+
+
+def iso(ts) -> str | None:
+    return dt.datetime.fromtimestamp(ts, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") \
+        if isinstance(ts, (int, float)) and not isinstance(ts, bool) and ts > 0 else None
+
+
+def replication(pve: PVE, nodes: list[dict], notes: dict) -> list[dict] | None:
+    """Storage replication jobs with their last sync and failures (status per source node)."""
+    conf = health_get(pve, "/cluster/replication", notes, "replication", "", [])
+    if "replication" in notes:
+        return None
+    if not conf:
+        return []
+    disabled = {str(j.get("id")) for j in conf if j.get("disable") not in (None, 0, "0", False)}
+    out, seen = [], set()
+    for n in nodes:
+        if n["status"] != "online":
+            continue
+        for j in health_get(pve, f"/nodes/{n['node']}/replication", notes, "replication", n["node"], []):
+            seen.add(str(j.get("id")))
+            out.append({"id": clean(j.get("id")), "guest": j.get("guest"), "source": clean(j.get("source") or n["node"]),
+                        "target": clean(j.get("target")), "enabled": str(j.get("id")) not in disabled,
+                        "last_sync": iso(j.get("last_sync")),
+                        "next_sync": iso(j.get("next_sync")), "fail_count": j.get("fail_count") or 0,
+                        **({"error": clean(j.get("error"), 200)} if j.get("error") else {})})
+    for j in conf:   # a job whose source node is offline has no status
+        if str(j.get("id")) not in seen:
+            out.append({"id": clean(j.get("id")), "guest": j.get("guest"), "source": clean(j.get("source")),
+                        "target": clean(j.get("target")), "enabled": str(j.get("id")) not in disabled,
+                        "status": "no status (source node not read)"})
+    return sorted(out, key=lambda x: x["id"] or "")
+
+
+def ceph_status(pve: PVE, notes: dict) -> dict | None:
+    st = health_get(pve, "/cluster/ceph/status", notes, "ceph", "")
+    if not isinstance(st, dict):
+        return None
+    h = st.get("health") or {}
+    checks = [{"check": clean(k), "severity": clean(v.get("severity")),
+               "message": clean(((v.get("summary") or {}).get("message")), 200)}
+              for k, v in sorted((h.get("checks") or {}).items()) if isinstance(v, dict) and not v.get("muted")]
+    return {"health": clean(h.get("status")), "checks": checks}
+
+
+# --------------------------------------------------------------------------- Proxmox Backup Server (GitHub issue #151)
+
+class PbsError(Exception):
+    def __init__(self, msg: str, code: int | None = None):
+        super().__init__(msg)
+        self.code = code
+
+
+def pbs_token(value: str) -> str:
+    """user@realm!tokenid:secret as PBS wants it in its Authorization header ('=' after the token id works too)."""
+    tid, _, rest = value.partition("!")
+    if not rest or ":" in rest:
+        return value
+    return tid + "!" + rest.replace("=", ":", 1)
+
+
+class PBS:
+    """Read-only Proxmox Backup Server API (GET only). With a fingerprint (the Proxmox storage's, or pbs[].fingerprint)
+    the certificate is pinned to it, as Proxmox VE itself does; without one it is verified against ca_cert or the
+    system CAs. The token is sent only after the certificate checked out."""
+
+    def __init__(self, host: str, port: int, token: str, ctx: ssl.SSLContext | None, fingerprint: str = ""):
+        self.host, self.port = host, int(port or 8007)
+        self.headers = {"Authorization": f"PBSAPIToken={pbs_token(token)}", "Accept": "application/json"}
+        self.fingerprint = re.sub(r"[^0-9a-f]", "", str(fingerprint or "").lower())
+        self.ctx = ssl._create_unverified_context() if self.fingerprint else (ctx or ssl.create_default_context())
+
+    def _get(self, path: str, **params):
+        import hashlib
+        import http.client
+        url = "/api2/json" + path + (("?" + urllib.parse.urlencode(params)) if params else "")
+        conn = http.client.HTTPSConnection(f"[{self.host}]" if ":" in self.host else self.host, self.port,
+                                           context=self.ctx, timeout=30)
+        try:
+            conn.connect()
+            if self.fingerprint:
+                seen = hashlib.sha256(conn.sock.getpeercert(binary_form=True) or b"").hexdigest()
+                if seen != self.fingerprint:
+                    raise PbsError(f"its certificate's fingerprint is not the one the Proxmox storage pins "
+                                   f"({':'.join(seen[i:i + 2] for i in range(0, 64, 2))})")
+            conn.request("GET", url, headers=self.headers)
+            r = conn.getresponse()
+            body = r.read()
+            if r.status != 200:
+                raise PbsError(f"{r.status} {clean(r.reason, 120)}", r.status)
+            return json.loads(body or b"{}").get("data")
+        except (OSError, http.client.HTTPException) as e:
+            raise PbsError(http_reason(e)) from None
+        except ValueError:
+            raise PbsError("the answer is not valid JSON") from None
+        finally:
+            conn.close()
+
+    def get(self, path: str, **params):
+        try:
+            return self._get(path, **params)
+        except PbsError as e:
+            if e.code == 401:
+                raise PbsError("401: the PBS token or its secret is wrong, or the token was removed", 401) from None
+            if e.code == 403:
+                raise PbsError("403: the PBS token (and its user) need the DatastoreAudit role on /datastore "
+                               "(docs/proxmox-tokens.md)", 403) from None
+            raise
+
+
+def pbs_job(j: dict) -> dict:
+    """A PBS job's (GC, prune, verify) last run: state OK / an error / running (an UPID without a result yet)."""
+    state = j.get("last-run-state")
+    if not state and (j.get("last-run-upid") or j.get("upid")) and not j.get("last-run-endtime"):
+        state = "running"
+    return {k: v for k, v in (("id", clean(j.get("id"))), ("schedule", clean(j.get("schedule"))),
+                              ("ns", clean(j.get("ns"))), ("state", clean(state, 200)),
+                              ("at", iso(j.get("last-run-endtime"))), ("next", iso(j.get("next-run"))),
+                              ("enabled", False if j.get("disable") else None)) if v not in (None, "")}
+
+
+def pbs_datastore(pbs: PBS, store: str, ns: str, jobs: dict) -> dict:
+    """One datastore (namespace) as the overview judges it: GC, prune and verify job runs and its snapshots'
+    verification (counts and the newest backup and newest verified backup times; never the snapshot list)."""
+    out: dict = {"gc": None, "prune": [], "verify": []}
+    for kind in ("gc", "prune", "verify"):
+        if isinstance(jobs.get(kind), str):
+            out.setdefault("errors", []).append(f"{kind} jobs: {jobs[kind]}")
+            continue
+        mine = [pbs_job(j) for j in jobs.get(kind) or [] if j.get("store") == store]
+        if kind == "gc":
+            out["gc"] = mine[0] if mine else None
+        else:
+            out[kind] = sorted(mine, key=lambda j: j.get("id") or "")
+    try:
+        snaps = pbs.get(f"/admin/datastore/{urllib.parse.quote(store, safe='')}/snapshots", **({"ns": ns} if ns else {}))
+    except PbsError as e:
+        out.setdefault("errors", []).append(f"snapshots: {e}")
+        return out
+    state = [((s.get("verification") or {}).get("state"), s.get("backup-time")) for s in snaps or []]
+    out["snapshots"] = {"count": len(state), "verified": sum(1 for v, _ in state if v == "ok"),
+                        "failed": sum(1 for v, _ in state if v == "failed"),
+                        "newest": iso(max((t for _, t in state if isinstance(t, int)), default=None)),
+                        "newest_verified": iso(max((t for v, t in state if v == "ok" and isinstance(t, int)),
+                                                   default=None)),
+                        # not verified yet (neither ok nor failed): how far verification lags behind the backups
+                        "oldest_unverified": iso(min((t for v, t in state if v not in ("ok", "failed")
+                                                      and isinstance(t, int)), default=None))}
+    return out
+
+
+def pbs_health(stores: dict, opener) -> tuple[list[dict], str]:
+    """Read every PBS datastore the site's `pbs` storages use. stores: {(server, port, datastore, namespace):
+    {storages, fingerprint}}; opener(server, port, fingerprint) → (PBS | None, why not)."""
+    out, missing, failed, clients = [], set(), [], {}
+    for (server, port, store, ns), info in sorted(stores.items()):
+        rec = {"server": server, "datastore": store, **({"namespace": ns} if ns else {}),
+               "storages": sorted(info["storages"])}
+        key = (server, port)
+        if key not in clients:
+            pbs, why = opener(server, port, info["fingerprint"]) if opener else (None, "")
+            jobs: dict = {}
+            if pbs:
+                for kind, path in (("gc", "/admin/gc"), ("prune", "/admin/prune"), ("verify", "/admin/verify")):
+                    try:
+                        jobs[kind] = pbs.get(path) or []
+                    except PbsError as e:
+                        if e.code in (401, 403) or e.code is None:
+                            pbs, why = None, str(e)
+                            break
+                        jobs[kind] = str(e)   # an older PBS without the job list
+            clients[key] = (pbs, why, jobs)
+        pbs, why, jobs = clients[key]
+        if pbs is None:
+            if why:
+                rec["error"] = why
+                failed.append(f"{server}: {why}")
+            else:
+                missing.add(server)
+            out.append(rec)
+            continue
+        rec.update(pbs_datastore(pbs, store, ns, jobs))
+        out.append(rec)
+    notes = []
+    if missing:
+        notes.append(f"no token for {', '.join(sorted(missing))} (pbs: in homelab.yaml, docs/proxmox-tokens.md)")
+    notes += sorted(set(failed))
+    read = sum(1 for r in out if "error" not in r and r["server"] not in missing)
+    return out, ("ok" if not notes else "; ".join(notes)) + f" ({read} of {len(out)} datastores read)"
+
+
+def collect(pve: PVE, details: bool, jobs: int = 8, pbs=None) -> dict:
     version = pve.get("/version") or {}
     status = pve.get("/cluster/status") or []
     cluster = next((s for s in status if s.get("type") == "cluster"), None)
@@ -382,6 +672,7 @@ def collect(pve: PVE, details: bool, jobs: int = 8) -> dict:
             return default
 
     networks = {}
+    notes: dict[str, list[str]] = {}   # storage health reads that failed (GitHub issue #152), one line each
 
     def read_node(n: dict):
         nets = get(f"/nodes/{n['node']}/network", f"node {n['node']} network", [])
@@ -395,6 +686,10 @@ def collect(pve: PVE, details: bool, jobs: int = 8) -> dict:
         cert = web_certificate(pve, n["node"])
         if cert:
             n["certificate"] = cert
+        for key, read in (("zfs", node_zfs), ("disks", node_disks)):   # GitHub issue #152
+            got = read(pve, n["node"], notes)
+            if got is not None:
+                n[key] = got
         networks[n["node"]] = [{"iface": clean(x.get("iface")), "type": x.get("type"), "cidr": x.get("cidr"),
                                 "gateway": x.get("gateway"), "bridge_ports": clean(x.get("bridge_ports")),
                                 "vlan_aware": bool(x.get("bridge_vlan_aware")), "active": bool(x.get("active"))}
@@ -411,6 +706,26 @@ def collect(pve: PVE, details: bool, jobs: int = 8) -> dict:
         for key in ("server", "export", "datastore", "share"):
             if conf.get(key):
                 s[key] = clean(conf[key])
+
+    # GitHub issue #152: replication, and Ceph where a storage uses this cluster's own Ceph (no monhost)
+    repl = replication(pve, nodes, notes)
+    hyper = any(c.get("type") in ("rbd", "cephfs") and not c.get("monhost") and not c.get("disable")
+                for c in servers.values())
+    ceph = ceph_status(pve, notes) if hyper else None
+    health = {k: ("ok" if k not in notes else "not read: " + "; ".join(sorted(notes[k])))
+              for k in ("zfs", "disks", "replication")}
+    if hyper:
+        health["ceph"] = "ok" if ceph else "not read: " + "; ".join(notes.get("ceph") or ["no answer"])
+    # GitHub issue #151: the PBS datastores behind `pbs` storages, read with a PBS token (pbs: in homelab.yaml)
+    stores: dict = {}
+    for sid, c in servers.items():
+        if c.get("type") == "pbs" and c.get("server") and c.get("datastore") and not c.get("disable"):
+            k = (clean(c["server"]), int(c.get("port") or 8007), clean(c["datastore"]), clean(c.get("namespace")) or "")
+            e = stores.setdefault(k, {"storages": set(), "fingerprint": str(c.get("fingerprint") or "")})
+            e["storages"].add(clean(sid))
+    pbs_ds = None
+    if stores:
+        pbs_ds, health["pbs"] = pbs_health(stores, pbs)
 
     try:  # scheduled vzdump jobs (PVEAuditor can read them); None = could not read
         backup_jobs = [{"id": clean(j.get("id")), "enabled": j.get("enabled", 1) not in (0, "0"),
@@ -453,6 +768,8 @@ def collect(pve: PVE, details: bool, jobs: int = 8) -> dict:
             # sorted: nodes answer in any order, and Proxmox lists interfaces in a varying order
             "networks": {k: sorted(v, key=lambda x: x["iface"] or "") for k, v in sorted(networks.items())},
             "backup_jobs": backup_jobs,
+            "replication": repl, **({"ceph": ceph} if ceph else {}),
+            **({"pbs_datastores": pbs_ds} if pbs_ds is not None else {}), "storage_health": health,
             **({"guest_ip_sources": ip_sources} if details else {}), **({"warnings": warnings} if warnings else {}),
             **({"errors": sorted(errors)} if errors else {})}
 
@@ -505,6 +822,35 @@ def used_vmids(cfg: dict, site_name: str | None = None) -> dict[int, str]:
     return used
 
 
+def health_summary(inv: dict) -> list[str]:
+    """Storage health facts (GitHub issues #151, #152), not judged: overview.py applies the thresholds."""
+    out = []
+    pools = [(n["node"], p) for n in inv.get("nodes") or [] for p in n.get("zfs") or []]
+    if pools:
+        out.append("ZFS: " + ", ".join(f"{n}/{p['pool']} {p.get('state')}"
+                                       + (f" (scrub {p['scrub_at']}, {p.get('scrub_errors')} errors)"
+                                          if p.get("scrub_at") else "") for n, p in pools))
+    disks = [d for n in inv.get("nodes") or [] for d in n.get("disks") or []]
+    if disks:
+        worn = max((d.get("wear_pct") for d in disks if isinstance(d.get("wear_pct"), int)), default=None)
+        bad = sum(1 for d in disks if str(d.get("health") or "").upper() not in ("PASSED", "OK", "UNKNOWN", ""))
+        out.append(f"Disks: {len(disks)}, SMART not passed: {bad}" + (f", most worn {worn}%" if worn is not None else ""))
+    repl = inv.get("replication") or []
+    if repl:
+        out.append(f"Replication: {len(repl)} job(s), failing: {sum(1 for j in repl if j.get('fail_count'))}")
+    if inv.get("ceph"):
+        out.append(f"Ceph: {inv['ceph'].get('health')}")
+    for ds in inv.get("pbs_datastores") or []:
+        sn = ds.get("snapshots") or {}
+        if not sn:
+            continue   # not read: the note below says why, once per server
+        out.append(f"PBS {ds['server']} {ds['datastore']}: {sn.get('verified', 0)}/{sn.get('count', 0)} snapshots "
+                   f"verified, newest verified {sn.get('newest_verified') or 'none'}")
+    out += [f"{k} not read — {v}" for k, v in sorted((inv.get("storage_health") or {}).items())
+            if not v.startswith("ok")]
+    return (["\nStorage health:"] + [f"  {x}" for x in out]) if out else []
+
+
 def summary(inv: dict, cfg: dict | None = None) -> str:
     lines = [f"Proxmox VE {inv['version']} — " + (f"cluster {inv['cluster']['name']} ({inv['cluster']['nodes']} nodes, "
              f"quorate={bool(inv['cluster']['quorate'])})" if inv["cluster"] else "standalone node")]
@@ -534,6 +880,7 @@ def summary(inv: dict, cfg: dict | None = None) -> str:
         lines.append(f"\nLast backups {backups} — the read-only token needs Sys.Audit on / (PVEAuditor).")
     if inv.get("details_at"):
         lines.append(f"\nGuest config kept from the --details run of {inv['details_at']} (refresh with --details).")
+    lines += health_summary(inv)
     for w in inv.get("warnings") or []:
         lines.append(f"\nWarning: {w}.")
     if inv.get("errors"):
@@ -586,12 +933,29 @@ def main():
     return 1 if failed else 0
 
 
+def pbs_opener(cfg: dict):
+    """(server, port, fingerprint) → (PBS | None, why not) from pbs: in homelab.yaml (GitHub issue #151): None and ''
+    when no entry names that server (the token is optional)."""
+    def open_pbs(server: str, port: int, fingerprint: str):
+        try:
+            e = hmlib.pbs_server(cfg, server)
+            if not e:
+                return None, ""
+            token = hmlib.read_secret(cfg, str(e["token"]))
+            pin = "" if e.get("ca_cert") or e.get("verify_tls") is False else str(e.get("fingerprint") or fingerprint)
+            ctx = hmlib.proxmox_ssl_context(cfg, e)
+        except hmlib.ConfigError as err:
+            return None, str(err)
+        return PBS(server, int(e.get("port") or port), token, ctx, pin), ""
+    return open_pbs
+
+
 def inventory_site(cfg: dict, px: dict, a) -> None:
     """Read one site's Proxmox and write its snapshot."""
     s = hmlib.site(cfg, px["_site"])
     ctx = hmlib.proxmox_ssl_context(cfg, px)
     token = hmlib.read_secret(cfg, a.secret or hmlib.proxmox_token_name(px, "read_only"))
-    inv = collect(PVE(hmlib.pick_endpoint(px), token, ctx), a.details, a.jobs)
+    inv = collect(PVE(hmlib.pick_endpoint(px), token, ctx), a.details, a.jobs, pbs_opener(cfg))
     if s["name"]:
         inv = {"site": s["name"], **inv}
     if not a.summary:

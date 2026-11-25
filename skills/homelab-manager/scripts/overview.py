@@ -5,7 +5,7 @@
 
 Renders what the repository already holds and contacts nothing (GitHub issue #87): homelab.yaml (sites,
 network.vlans, clusters), discovery/proxmox.json (nodes, storage, guests, backup jobs, last backups, subscriptions,
-certificates), network.json (scanned addresses, services, TLS certificates), unifi.json, routeros.json (devices,
+certificates, storage health: ZFS, disks, replication, Ceph and PBS datastores; GitHub issues #151, #152), network.json (scanned addresses, services, TLS certificates), unifi.json, routeros.json (devices,
 NAT rules, CHR licences), bmc.json, containers.json, qnap-containers.json, updates.json, security.json, the managed
 Ansible inventory (`ansible-inventory --list`; --no-ansible skips it), discovery/drift.md and the newest
 docs/security-audit-*.md. Network devices and appliances start from the inventory (routeros, unifi, qnap,
@@ -45,6 +45,10 @@ STALE_DAYS = 7      # update data this much older than the newest check is marke
 FOLD_ROWS = 15      # a longer Guests, Containers or Other scanned addresses table is collapsed (GitHub issue #113)
 EXPIRY_WARN_DAYS = 30   # an expiry this close to the newest data is a warning (GitHub issue #89)
 BACKUP_MAX_AGE_DAYS = 7   # default overview.backup_max_age_days: an older last backup is a warning (GitHub issue #89)
+SCRUB_MAX_AGE_DAYS = 35   # default overview.scrub_max_age_days: an older last ZFS scrub is a warning (GitHub issue #152)
+WEAROUT_MAX_PCT = 80      # default overview.disk_wearout_max_pct: an SSD worn this much is a warning
+PBS_MAX_AGE_DAYS = 7      # default overview.pbs_max_age_days: PBS GC/prune runs and the newest verified snapshot (#151)
+REPLICATION_LATE_S = 3600   # a replication job whose next sync was due this long before the snapshot is late
 SOURCES = [  # (discovery file, what writes it)
     ("proxmox.json", "proxmox_inventory.py --details"), ("network.json", "nmap_scan.py"),
     ("unifi.json", "unifi-info.yml"), ("routeros.json", "routeros_audit.py"), ("bmc.json", "bmc-info.yml"),
@@ -80,9 +84,9 @@ def label(value, limit: int = 40) -> str:
     return re.sub(r"[\"<>`{}\[\]|;#&]", "'", s).strip() or "?"
 
 
-def table(head: list[str], rows: list[list]) -> list[str]:
+def table(head: list[str], rows: list[list], limit: int = 120) -> list[str]:
     out = ["| " + " | ".join(head) + " |", "|" + "|".join("---" for _ in head) + "|"]
-    out += ["| " + " | ".join(cell(c) for c in r) + " |" for r in rows]
+    out += ["| " + " | ".join(cell(c, limit) for c in r) + " |" for r in rows]
     return out
 
 
@@ -596,9 +600,219 @@ def backup_failed(g: dict) -> bool:
     return bool(err) and (not lb or str(err.get("at") or "") > str(lb.get("at") or ""))
 
 
+def threshold(cfg: dict, key: str, default: int) -> int:
+    """overview.<key> from homelab.yaml when it is a positive whole number, else the default."""
+    v = hmlib.get(cfg, f"overview.{key}", default)
+    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else default
+
+
 def max_backup_age(cfg: dict) -> int:
-    v = hmlib.get(cfg, "overview.backup_max_age_days", BACKUP_MAX_AGE_DAYS)
-    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else BACKUP_MAX_AGE_DAYS
+    return threshold(cfg, "backup_max_age_days", BACKUP_MAX_AGE_DAYS)
+
+
+# --------------------------------------------------------------------------- storage health (GitHub issues #151, #152)
+
+SMART_OK = ("PASSED", "OK", "UNKNOWN", "")
+ZFS_NO_ERRORS = "No known data errors"
+
+
+def zfs_problems(p: dict, ref, max_age: int) -> list[str]:
+    """What is wrong with a ZFS pool: not ONLINE, data errors, a faulted or erroring device, a scrub that found
+    errors or none finished within max_age days of the snapshot (one running counts as recent)."""
+    out = []
+    if str(p.get("state") or "") != "ONLINE":
+        out.append(f"state {p.get('state') or 'unknown'}")
+    if p.get("errors") and p["errors"] != ZFS_NO_ERRORS:
+        out.append(str(p["errors"]))
+    if p.get("bad_devices"):
+        out.append("devices: " + ", ".join(p["bad_devices"]))
+    if p.get("scrub_errors"):
+        out.append(f"last scrub found {p['scrub_errors']} errors")
+    if "scan" in p and not p.get("scrub_running"):
+        at = day(p.get("scrub_at"))
+        if not at:
+            out.append("no finished scrub on record")
+        elif ref and (ref - at).days > max_age:
+            out.append(f"last scrub {at}, over {max_age} days before the snapshot")
+    return out
+
+
+def disk_problems(d: dict, max_wear: int) -> list[str]:
+    out = []
+    if str(d.get("health") or "").upper() not in SMART_OK:
+        out.append(f"SMART {d.get('health')}")
+    if isinstance(d.get("wear_pct"), int) and d["wear_pct"] >= max_wear:
+        out.append(f"worn {d['wear_pct']} %")
+    return out
+
+
+def replication_problems(j: dict, ref: "dt.datetime | None") -> list[str]:
+    if not j.get("enabled", True) or j.get("status"):
+        return []   # disabled, or its source node was not read (the node table shows that)
+    out = []
+    if j.get("fail_count"):
+        out.append(f"{j['fail_count']} failed sync(s)" + (f": {j['error']}" if j.get("error") else ""))
+    due = utc_time(j.get("next_sync"))
+    if due and ref and (ref - due).total_seconds() > REPLICATION_LATE_S:
+        out.append(f"late: next sync was due {stamp(j['next_sync'])}")
+    return out
+
+
+def pbs_job_text(j: dict | None) -> str:
+    if not j:
+        return "–"
+    state = str(j.get("state") or "")
+    when = stamp(j.get("at"))
+    word = "running" if state == "running" else "OK" if state == "OK" else "never ran" if not state else "failed"
+    return f"{word} {when}".strip() + ("" if j.get("enabled", True) else " (disabled)")
+
+
+def pbs_problems(ds: dict, ref: "dt.datetime | None", max_age: int) -> list[str]:
+    """A PBS datastore that cannot be trusted to restore: its GC or prune failed or is older than max_age days, a
+    verify job failed, snapshots failed verification, or a snapshot has waited over max_age days to be verified.
+    An archive that gets no new backups is not a problem: the guests' own last backup is judged under Backups."""
+    if ds.get("error"):
+        return [f"not read: {ds['error']}"]
+    out = [f"not read: {e}" for e in ds.get("errors") or []]
+    sn = ds.get("snapshots")
+    if sn is None:
+        return out
+
+    def old(at) -> bool:
+        t = utc_time(at)
+        return bool(ref and (not t or (ref - t).days > max_age))
+    gc = ds.get("gc")
+    if gc is not None and not any(e.startswith("gc ") for e in ds.get("errors") or []):
+        if not gc.get("schedule"):
+            out.append("GC not scheduled")
+        if gc.get("state") not in (None, "", "OK", "running"):
+            out.append(f"GC failed: {gc['state']}")
+        elif gc.get("state") != "running" and old(gc.get("at")):
+            out.append(f"GC last ran {stamp(gc.get('at')) or 'never'}")
+    for kind in ("prune", "verify"):
+        for j in ds.get(kind) or []:
+            if not j.get("enabled", True):
+                continue
+            if j.get("state") not in (None, "", "OK", "running"):
+                out.append(f"{kind} job {j.get('id')} failed: {j['state']}")
+            elif kind == "prune" and j.get("state") != "running" and old(j.get("at")):
+                out.append(f"prune job {j.get('id')} last ran {stamp(j.get('at')) or 'never'}")
+    if sn.get("failed"):
+        out.append(f"{sn['failed']} snapshot(s) failed verification")
+    waiting = (sn.get("count") or 0) - (sn.get("verified") or 0) - (sn.get("failed") or 0)
+    if waiting > 0 and sn.get("oldest_unverified") and old(sn["oldest_unverified"]):
+        out.append(f"{waiting} snapshot(s) not verified, the oldest from {stamp(sn['oldest_unverified'])}")
+    return out
+
+
+def storage_health(cfg: dict, px: dict, title: str, stats: dict) -> list[str]:
+    """ZFS pools, disks, replication and Ceph of one site (GitHub issue #152), judged against the snapshot's time."""
+    ref_t = utc_time(px.get("collected_at"))
+    ref = ref_t.date() if ref_t else None
+    scrub_age, max_wear = threshold(cfg, "scrub_max_age_days", SCRUB_MAX_AGE_DAYS), \
+        threshold(cfg, "disk_wearout_max_pct", WEAROUT_MAX_PCT)
+    nodes = sorted(px.get("nodes") or [], key=lambda n: n.get("node") or "")
+    notes = px.get("storage_health") or {}
+    out = []
+
+    def warn(kind: str, text: str):
+        stats[kind] += 1
+        stats["warnings"].append(f"{title}: {text}")
+    rows = []
+    for n in nodes:
+        for p in n.get("zfs") or []:
+            bad = zfs_problems(p, ref, scrub_age)
+            if bad:
+                warn("zfs", f"ZFS pool {p.get('pool')} on {n.get('node')}: " + "; ".join(bad))
+            scrub = (f"running" if p.get("scrub_running") else f"{p['scrub_at']}, {p.get('scrub_errors')} errors"
+                     if p.get("scrub_at") else "–")
+            rows.append([n.get("node"), p.get("pool"), p.get("state"), f"{p.get('alloc_gib')}/{p.get('size_gib')} GiB",
+                         scrub, "⚠ " + "; ".join(bad) if bad else "OK"])
+    if rows:
+        out += table(["Node", "Pool", "State", "Allocated", "Last scrub", "Health"], rows, 400) + [""]
+    disks = [(n.get("node"), d) for n in nodes for d in n.get("disks") or []]
+    if disks:
+        bad_disks = [(node, d, disk_problems(d, max_wear)) for node, d in disks]
+        bad_disks = [x for x in bad_disks if x[2]]
+        worn = max((x for x in disks if isinstance(x[1].get("wear_pct"), int)), key=lambda x: x[1]["wear_pct"],
+                   default=None)
+        smart = sum(1 for _, d in disks if str(d.get("health") or "").upper() in ("PASSED", "OK"))
+        unknown = sum(1 for _, d in disks if str(d.get("health") or "").upper() in ("UNKNOWN", ""))
+        out.append(f"Disks: {plural(len(disks), 'disk')} on {plural(len({x[0] for x in disks}), 'node')}, SMART passed "
+                   f"on {smart}" + (f", unknown on {unknown}" if unknown else "") + (f"; most worn: {cell(worn[0])} {cell(worn[1].get('dev'))} "
+                                    f"({cell(worn[1].get('type'))}) {worn[1]['wear_pct']} %" if worn else "")
+                   + f" (a warning from {max_wear} %).")
+        for node, d, why in bad_disks:
+            warn("disks", f"disk {d.get('dev')} on {node}: " + "; ".join(why))
+        if bad_disks:
+            out += [""] + table(["Node", "Disk", "Type", "Model", "Used by", "SMART", "Worn", "Problem"],
+                                [[node, d.get("dev"), d.get("type"), d.get("model"), d.get("used"), d.get("health"),
+                                  f"{d['wear_pct']} %" if isinstance(d.get("wear_pct"), int) else "–", "; ".join(why)]
+                                 for node, d, why in bad_disks], 300)
+        out.append("")
+    jobs = px.get("replication") or []
+    if jobs:
+        rows = []
+        for j in jobs:
+            bad = replication_problems(j, ref_t)
+            if bad:
+                warn("replication", f"replication {j.get('id')} (guest {j.get('guest')}): " + "; ".join(bad))
+            rows.append([j.get("id"), j.get("guest"), f"{j.get('source')} → {j.get('target')}",
+                         stamp(j.get("last_sync")) + (" " + str(j["last_sync"])[11:16] if j.get("last_sync") else "")
+                         or "never", j.get("status") or ("disabled" if not j.get("enabled", True) else
+                                                         "⚠ " + "; ".join(bad) if bad else "OK")])
+        out += ["Replication:", ""] + table(["Job", "Guest", "From → to", "Last sync (UTC)", "Status"], rows, 300) + [""]
+    ceph = px.get("ceph")
+    if ceph:
+        ok = ceph.get("health") == "HEALTH_OK"
+        if not ok:
+            warn("ceph", f"Ceph {ceph.get('health')}" + (": " + "; ".join(
+                str(c.get("message") or c.get("check")) for c in ceph.get("checks") or []) if ceph.get("checks") else ""))
+        out += [f"Ceph: {cell(ceph.get('health'))}" + ("" if ok else " — " + cell(
+            "; ".join(f"{c.get('check')}: {c.get('message')}" for c in ceph.get("checks") or []), 400)) + ".", ""]
+    unread = [f"{k} {v[len('not read: '):]}" for k, v in sorted(notes.items())
+              if k != "pbs" and str(v).startswith("not read")]
+    if unread:
+        out += ["Not read: " + "; ".join(cell(u, 300) for u in unread) + ".", ""]
+    return out
+
+
+def pbs_section(cfg: dict, px: dict, title: str, stats: dict) -> list[str]:
+    """The Proxmox Backup Server datastores behind the site's `pbs` storages (GitHub issue #151)."""
+    dss = px.get("pbs_datastores") or []
+    if not dss:
+        return []
+    note = str((px.get("storage_health") or {}).get("pbs") or "")
+    ref = utc_time(px.get("collected_at"))
+    max_age = threshold(cfg, "pbs_max_age_days", PBS_MAX_AGE_DAYS)
+    read = [d for d in dss if d.get("snapshots") is not None or d.get("error") or d.get("errors")]
+    out = []
+    rows = []
+    for d in read:
+        bad = pbs_problems(d, ref, max_age)
+        if bad:
+            stats["pbs"] += 1
+            stats["warnings"].append(f"{title}: PBS datastore {d.get('datastore')} on {d.get('server')}: "
+                                     + "; ".join(bad))
+        sn = d.get("snapshots") or {}
+        rows.append([d.get("storages"), d.get("server"),
+                     str(d.get("datastore") or "") + (f" ({d['namespace']})" if d.get("namespace") else ""),
+                     pbs_job_text(d.get("gc")), cell([pbs_job_text(j) for j in d.get("prune") or []]),
+                     cell([pbs_job_text(j) for j in d.get("verify") or []]),
+                     f"{sn.get('verified')}/{sn.get('count')}" + (f", {sn['failed']} failed" if sn.get("failed") else "")
+                     if sn else "–", stamp(sn.get("newest_verified")) or "–",
+                     "⚠ " + "; ".join(bad) if bad else "OK"])
+    if rows:
+        out += ["", f"Proxmox Backup Server datastores (as of {stamp(px.get('collected_at')) or '?'}): a warning when a "
+                    f"job failed, the last GC or prune ran over {max_age} days before, or a snapshot has waited longer "
+                    "than that to be verified.", ""]
+        out += table(["Storage", "Server", "Datastore", "GC", "Prune", "Verify", "Snapshots verified",
+                      "Newest verified", "Health"], rows, 400)
+    missing = re.match(r"no token for ([^(]+) \(", note)
+    if missing:
+        out += ["", f"PBS datastores (GC, prune, verify) not read for {cell(missing.group(1).strip())}: add a read-only "
+                    "PBS token (`pbs:` in homelab.yaml, docs/proxmox-tokens.md)."]
+    return out
 
 
 def startup_up(g: dict) -> str:
@@ -1067,7 +1281,7 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
                           tuple(n.get("node") for n in px.get("nodes") or [] if n.get("node")))
     hardware = sorted((d for d in devices if d["kind"] == "BMC"), key=lambda d: (not d["server"], d["server"], d["name"]))
     stats = {"nodes": len(px.get("nodes") or []), "guests": len(guests), "vlans": len(vl), "warnings": [],
-             "memory": 0, "storage": 0, "backup": 0, "backup_old": 0}
+             "memory": 0, "storage": 0, "backup": 0, "backup_old": 0, **{k: 0 for k in HEALTH_COUNTS}}
     role = roles(cfg, st, px, guests, vl, known, managed)
     backups_read = str((px.get("guest_ip_sources") or {}).get("backups") or "")
 
@@ -1160,6 +1374,9 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
                          f"{s.get('used_gib')}/{s.get('size_gib')} GiB", "–" if p is None else
                          f"{p}%" + (" ⚠" if p >= STORAGE_WARN_PCT else ""), s.get("content")])
         out += sub("Storage") + table(["Storage", "Node", "Type", "Used", "Full", "Content"], rows) + [""]
+        health_lines = storage_health(cfg, px, title, stats)
+        if health_lines:
+            out += sub("Storage health") + health_lines
 
         with_backups = backups_read.startswith("ok")   # GitHub issue #89: newest backup from the vzdump task logs
         rows = [[g["vmid"], g.get("name"), g.get("type"), g.get("node"), g.get("status"), g.get("cpus"),
@@ -1194,6 +1411,7 @@ def site_section(cfg: dict, st: dict, docs: dict, managed: dict, known: Known, a
                         + ", ".join(f"{g['vmid']} {cell(g.get('name'))}" for g in sorted(missing, key=lambda g: g["vmid"]))
                         + "."]
             out += backup_ages(cfg, px, guests, missing, backups_read, title, stats)
+            out += pbs_section(cfg, px, title, stats)
             out.append("")
         if any("config" in g for g in guests):   # startup settings come with --details
             out += sub("Start order") + (start_order(px, guests_by, role)
@@ -1581,6 +1799,7 @@ def security_counts(docs: dict) -> dict:
     return out
 
 
+HEALTH_COUNTS = ("zfs", "disks", "ceph", "replication", "pbs")   # storage health warnings (GitHub #151, #152)
 ROS_WARN = ("critical", "high", "medium")   # routeros_audit.py severities that count as warnings; low and info don't
 HEALTH_RANK = {"Critical": 0, "Warning": 1}
 
@@ -1597,6 +1816,12 @@ def glance_warnings(docs: dict, managed: dict, counts: dict) -> list[str]:
             bad[b["health"]] = bad.get(b["health"], 0) + 1
     if bad:
         out.append("BMC: " + ", ".join(f"{n} {cell(k)}" for k, n in sorted(bad.items(), key=lambda x: (HEALTH_RANK.get(x[0], 2), x[0]))))
+    if counts.get("zfs"):   # GitHub issue #152: a degraded pool or a dying disk loses data
+        out.append(f"{plural(counts['zfs'], 'ZFS pool')} degraded, with errors or not scrubbed recently")
+    if counts.get("disks"):
+        out.append(f"{plural(counts['disks'], 'disk')} failing SMART or worn out")
+    if counts.get("ceph"):
+        out.append(f"Ceph not healthy on {plural(counts['ceph'], 'site')}")
     sev: dict = {}
     for d in (docs["routeros.json"].get("devices") or {}).values():
         for f in d.get("findings") or []:
@@ -1624,6 +1849,10 @@ def glance_warnings(docs: dict, managed: dict, counts: dict) -> list[str]:
         out.append(f"{plural(counts['backup'], 'guest')} in no enabled backup job")
     if counts.get("backup_old"):
         out.append(f"{plural(counts['backup_old'], 'guest')} without a recent successful backup")
+    if counts.get("pbs"):   # GitHub issue #151
+        out.append(f"{plural(counts['pbs'], 'PBS datastore')} with a failed or old GC, prune or verify")
+    if counts.get("replication"):
+        out.append(f"{plural(counts['replication'], 'replication job')} failing or late")
     if counts.get("storage"):
         out.append(f"{plural(counts['storage'], 'storage')} {STORAGE_WARN_PCT} % full or more")
     if counts.get("memory"):
@@ -1656,13 +1885,14 @@ def render(cfg: dict, managed: dict, note: str) -> str:
     known = build_known(cfg, docs, managed, snaps)
     all_guests = Guests(snaps)
     body, rows, warnings = [], [], []
-    totals = {"nodes": 0, "guests": 0, "memory": 0, "storage": 0, "backup": 0, "backup_old": 0}
+    totals = {"nodes": 0, "guests": 0, "memory": 0, "storage": 0, "backup": 0, "backup_old": 0,
+              **{k: 0 for k in HEALTH_COUNTS}}
     for st in st_list:
         sec, stats = site_section(cfg, st, docs, managed, known, all_guests, len(st_list) > 1)
         body += sec
         rows.append((st, stats["nodes"], stats["guests"], stats["vlans"]))
         warnings += stats["warnings"]
-        for k in ("nodes", "guests", "memory", "storage", "backup", "backup_old"):
+        for k in ("nodes", "guests", "memory", "storage", "backup", "backup_old", *HEALTH_COUNTS):
             totals[k] += stats[k]
     warnings += memory_pressure(docs)
     exp = expirations(cfg, root, docs, managed, known, totals)
