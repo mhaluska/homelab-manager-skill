@@ -109,6 +109,53 @@ tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=5,fd=3))
 @@end""".splitlines()
 
 
+# What security-audit.yml keeps for a Proxmox Backup Server (GitHub issue #148): invented users and datastores
+PBS = """@@os
+name|Debian GNU/Linux 13 (trixie)
+@@pbs
+acl|{"path":"/","propagate":true,"roleid":"Admin","ugid":"ops@pbs","ugid_type":"user"}
+acl|{"path":"/","propagate":true,"roleid":"Admin","ugid":"alice@ldap","ugid_type":"user"}
+acl|{"path":"/datastore/store1","propagate":true,"roleid":"DatastoreAdmin","ugid":"client1@pbs","ugid_type":"user"}
+acl|{"path":"/datastore/store1","propagate":true,"roleid":"RemoteAdmin","ugid":"client1@pbs","ugid_type":"user"}
+acl|{"path":"/datastore/store1","propagate":true,"roleid":"DatastoreBackup","ugid":"client2@pbs","ugid_type":"user"}
+acl|{"path":"/datastore/store2","propagate":true,"roleid":"DatastorePowerUser","ugid":"client2@pbs","ugid_type":"user"}
+acl|{"path":"/datastore/store2","propagate":true,"roleid":"DatastoreAdmin","ugid":"client2@pbs!pve","ugid_type":"user"}
+acl|{"path":"/datastore/store1/ns/lab","propagate":true,"roleid":"DatastoreAdmin","ugid":"ops@pbs!sync","ugid_type":"token"}
+acl|{"path":"/datastore/store1","propagate":true,"roleid":"DatastoreAdmin","ugid":"bob@ldap","ugid_type":"user"}
+acl|{"path":"/datastore","propagate":true,"roleid":"DatastoreAdmin","ugid":"wide@pbs","ugid_type":"user"}
+acl|{"path":"/datastore","propagate":false,"roleid":"DatastoreAdmin","ugid":"narrow@pbs","ugid_type":"user"}
+acl|{"path":"/datastore/store1","propagate":true,"roleid":"DatastoreAdmin","ugid":"old@pbs","ugid_type":"user"}
+acl|{"path":"/datastore/store1","propagate":true,"roleid":"DatastoreAdmin","ugid":"gone@pbs","ugid_type":"user"}
+acl|{"path":"/datastore/store2","propagate":true,"roleid":"DatastoreAdmin","ugid":"client3@pbs!off","ugid_type":"user"}
+acl|{"path":"/datastore/store2","propagate":true,"roleid":"DatastoreAdmin","ugid":"group1","ugid_type":"group"}
+acl|{"path":"/datastore/store2","roleid":"DatastoreAdmin","ugid":"broken
+user|root@pam||
+user|ops@pbs|true|0
+token|ops@pbs!sync|true|0
+user|alice@ldap|true|0
+user|client1@pbs|true|0
+user|client2@pbs|true|0
+token|client2@pbs!pve|true|0
+user|client3@pbs|true|0
+token|client3@pbs!off|false|0
+user|wide@pbs|true|0
+user|old@pbs|true|1700000000
+user|gone@pbs|false|0
+datastore|store1
+datastore|store2
+@@pve-keys
+@@end""".splitlines()
+
+PVE_NODE = """@@os
+name|Debian GNU/Linux 13 (trixie)
+@@pbs
+@@pve-keys
+dir|/etc/pve/priv
+enc|pbs-home
+enc|pbs-other-cluster
+@@end""".splitlines()
+
+
 def keys(found):
     return {k: s for k, s, _ in found}
 
@@ -155,6 +202,57 @@ class ParseAndJudgeTests(unittest.TestCase):
         self.assertEqual(f, {"sudo-nopasswd-ansible": "low"})               # key-only SSH, firewall, dnf-automatic
         rpc = WEAK[:WEAK.index("@@nfs")] + ["@@end"]
         self.assertEqual(keys(sa.host_findings(sa.parse_host({"output": rpc}), self.today))["listen-rpcbind"], "low")
+
+    def test_pbs_acl(self):
+        facts = sa.parse_host({"output": PBS})
+        self.assertEqual(facts["pbs"]["datastores"], ["store1", "store2"])
+        self.assertTrue(facts["pbs"]["users"]["root@pam"]["enabled"])                # no enable flag: enabled
+        self.assertIsNone(facts["pve_keys"])                                         # not a Proxmox VE node
+        f = keys(sa.host_findings(facts, self.today))
+        self.assertEqual(f, {
+            "pbs-datastore-admin-client1-pbs-store1": "medium",                     # RemoteAdmin beside it: one
+            "pbs-datastore-poweruser-client2-pbs-store2": "low",
+            "pbs-datastore-poweruser-client2-pbs-pve-store2": "low",                # the token is limited by its user
+            "pbs-datastore-admin-ops-pbs-sync-store1": "medium",                    # an admin's token, a namespace
+            "pbs-datastore-admin-wide-pbs-all": "medium"})                          # /datastore, propagated
+        text = dict((k, t) for k, _, t in sa.host_findings(facts, self.today))
+        self.assertIn("PBS token `ops@pbs!sync` has `DatastoreAdmin` on datastore `store1`", text[
+            "pbs-datastore-admin-ops-pbs-sync-store1"])
+        self.assertIn("on every datastore", text["pbs-datastore-admin-wide-pbs-all"])
+        self.assertIn("give it `DatastoreBackup`", text["pbs-datastore-admin-client1-pbs-store1"])
+        later = sa.host_findings(facts, dt.date(2020, 1, 1))                          # before old@pbs expired
+        self.assertIn("pbs-datastore-admin-old-pbs-store1", keys(later))
+        self.assertIsNone(sa.parse_host({"output": GOOD})["pbs"])
+        self.assertIsNone(sa.parse_host({"output": PVE_NODE})["pbs"])                 # the section, but empty
+        self.assertEqual(sa.parse_host({"output": PVE_NODE})["pve_keys"], ["pbs-home", "pbs-other-cluster"])
+
+    def test_pbs_encryption(self):
+        cfg = {"sites": [{"name": "home", "ranges": ["192.0.2.0/24"]},
+                         {"name": "lab", "label": "Lab", "ranges": ["198.51.100.0/24"]}]}
+        home, lab = sa.hmlib.sites(cfg)
+        pbs = lambda sid, server, node="pve1": {"storage": sid, "node": node, "type": "pbs", "server": server,
+                                                "datastore": "store1"}
+        storages = [pbs("pbs-home", "192.0.2.10"), pbs("pbs-local", "192.0.2.10"),
+                    pbs("pbs-local", "192.0.2.10", "pve2"), pbs("pbs-lab", "198.51.100.7"),
+                    pbs("pbs-cloud", "203.0.113.9"), pbs("pbs-named", "pbs-lab1"), pbs("pbs-dns", "backup.example"),
+                    {"storage": "nas", "node": "pve1", "type": "nfs", "server": "192.0.2.20"}]
+        found = sa.encryption_findings(cfg, home, storages, {"pbs-home"}, "Proxmox home", {"pbs-lab1": "198.51.100.8"})
+        self.assertEqual({k: s for k, s, _, _ in found}, {
+            "pbs-no-encryption-pbs-local": "low",                                   # same site, once for two nodes
+            "pbs-no-encryption-pbs-lab": "medium",                                  # on another site
+            "pbs-no-encryption-pbs-cloud": "medium",                                # outside the site's ranges
+            "pbs-no-encryption-pbs-named": "medium",                                # an inventory name, on lab
+            "pbs-no-encryption-pbs-dns": "low"})                                    # can't place it
+        text = {k: t for k, _, t, _ in found}
+        self.assertIn("Proxmox storage `pbs-lab` (PBS 198.51.100.7, datastore store1) has no encryption key; the "
+                      "Backup Server is on site lab (Lab)", text["pbs-no-encryption-pbs-lab"])
+        self.assertIn("outside the site's ranges", text["pbs-no-encryption-pbs-cloud"])
+        self.assertIn("`pvesm set pbs-local --encryption-key autogen`", text["pbs-no-encryption-pbs-local"])
+        self.assertEqual({w for *_, w in found}, {"Proxmox home"})
+        bare = {"sites": [{"name": "home"}]}                                         # no ranges: nothing to compare
+        self.assertEqual([s for _, s, _, _ in sa.encryption_findings(bare, sa.hmlib.sites(bare)[0],
+                                                                      [pbs("x", "203.0.113.9")], set(), "Proxmox")],
+                         ["low"])
 
     def test_firewall_and_updates_edge_cases(self):
         fw = lambda **kw: sa.firewall_state({"units": {}, "nft": [], "iptables": None, "ufw": None, "pvefw": None, **kw})
@@ -488,6 +586,7 @@ class CommandTests(unittest.TestCase):
         self.assertIn("## Not checked\n\n- lab1: unreachable: timed out", out)
         self.assertIn("| db1 | home | Rocky Linux 9.6 (Blue Onyx) | no | without-password | yes | yes | 1 | – |", out)
         self.assertIn("## Still to check by hand", out)
+        self.assertIn("- Backups, if a Proxmox Backup Server keeps them: `proxmox_inventory.py`", out)   # no proxmox.json
         db = json.loads(self.db.read_text())["hosts"]
         f = {x["key"]: x for x in db["web1"]["findings"]}
         self.assertTrue(f["ssh-password-auth"]["accepted"])
@@ -576,6 +675,48 @@ class CommandTests(unittest.TestCase):
         self.assertIn("web1 · forward-rdp-web1", since.split("Gone")[1])
         self.assertNotIn("Since the audit", self.audit("--no-proxmox", "--site", "lab", "--no-write").stdout)
 
+    def test_pbs_acl_and_encryption(self):
+        subprocess.run(["yq", "-i", '.sites[0].ranges = ["192.0.2.0/24"] | .sites[1].ranges = ["198.51.100.0/24"]',
+                        "homelab.yaml"], cwd=self.d, check=True)
+        db = json.loads(self.db.read_text())
+        db["hosts"]["pbs1"] = {"output": PBS, "collected_at": "2026-11-21T07:00:00+00:00", "site": None}
+        db["hosts"]["pve1"] = {"output": PVE_NODE, "collected_at": "2026-11-21T07:00:00+00:00", "site": None}
+        self.db.write_text(json.dumps(db))
+        pbs = lambda sid, server, node: {"storage": sid, "node": node, "type": "pbs", "server": server,
+                                         "datastore": "store1", "shared": True}
+        (self.d / "discovery/proxmox.json").write_text(json.dumps({"sites": {
+            "home": {"storage": [pbs("pbs-home", "192.0.2.20", "pve1"), pbs("pbs-offsite", "198.51.100.9", "pve1")]},
+            "lab": {"storage": [pbs("pbs-lab", "192.0.2.20", "lab-pve1")]}}}))
+        r = self.audit("--no-proxmox")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = r.stdout
+        self.assertIn("the ACL of 1 Backup Server(s), the encryption of 2 `pbs` storage(s) (`proxmox.json`)", out)
+        self.assertIn("— pbs1 · `pbs-datastore-admin-client1-pbs-store1`", out)
+        self.assertIn("the Backup Server is on site lab", out)
+        self.assertIn("— Proxmox home · `pbs-no-encryption-pbs-offsite`", out)
+        self.assertNotIn("pbs-no-encryption-pbs-home", out)                         # pve1 has its key
+        todo = out[out.index("## Still to check by hand"):]
+        self.assertIn("encryption of the `pbs` storages at lab: run `security-audit.yml` on the Proxmox nodes", todo)
+        self.assertNotIn("PBS users and ACL", todo)                                  # pbs1 reported its ACL
+        saved = json.loads(self.db.read_text())
+        self.assertEqual({x["key"]: x["severity"] for x in saved["sites"]["home"]["findings"]},
+                         {"pbs-no-encryption-pbs-offsite": "medium"})
+        subprocess.run(["yq", "-i", '.security_audit.accept.home = ["pbs-no-encryption-pbs-offsite"]', "homelab.yaml"],
+                       cwd=self.d, check=True)
+        inv = self.d / "ansible/inventory/managed"
+        (inv / "hosts.yml").write_text((inv / "hosts.yml").read_text().replace(
+            "    site_lab:", "        pbs1:\n          ansible_host: 192.0.2.20\n    site_lab:"))
+        (inv / "host_vars/pbs1.yml").write_text("security_audit_accept: [pbs-datastore-admin-wide-pbs-all]\n")
+        out = self.audit("--no-proxmox", "--no-write").stdout
+        self.assertIn("- site home: `pbs-no-encryption-pbs-offsite` (medium)", out)
+        self.assertIn("- pbs1: `pbs-datastore-admin-wide-pbs-all` (medium)", out)
+        db = json.loads(self.db.read_text())
+        db["hosts"].pop("pbs1")
+        self.db.write_text(json.dumps(db))
+        out = self.audit("--no-proxmox", "--no-write").stdout
+        self.assertIn("- Backups: PBS users and ACL (`DatastoreBackup`, not `DatastoreAdmin`): run `security-audit.yml`",
+                      out)
+
     def test_errors(self):
         self.assertEqual(self.audit("--site", "nowhere").returncode, 3)
         self.assertEqual(self.audit("--host", "ghost").returncode, 4)
@@ -599,6 +740,11 @@ class TemplateTests(unittest.TestCase):
                      r"\buseradd\b", r"\bpasswd\s+-"):
             self.assertIsNone(re.search(word, body), word)
         self.assertNotIn("print $2", body.replace('"password|" $1', ""))               # never the hash field
+        for section in ("@@pbs", "@@pve-keys", "acl list", "user list-tokens", "datastore list"):
+            self.assertIn(section, body)
+        pbs = body[body.index("@@pbs"):body.index("@@other")]
+        self.assertNotRegex(pbs, r"\b(cat|head|tail|less|grep|sed|awk|cp|base64)\b[^\n|]*/etc/pve")   # key names only
+        self.assertNotRegex(pbs, r"(email|firstname|lastname|comment)")              # user ids and flags only
         self.assertIn("security_merged", pb)
         self.assertIn("prev | combine(", pb)                                             # the Mac's checks stay
 

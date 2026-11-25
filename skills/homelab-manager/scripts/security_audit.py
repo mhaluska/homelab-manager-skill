@@ -21,7 +21,9 @@ listening sockets, Samba shares, NFS exports, containers, tunnel clients). This 
 It prints a Markdown report and writes the findings back into discovery/security.json (unless --no-write), which
 OVERVIEW.md counts. --report saves the report as docs/security-audit-<date>[-<site>].md, the draft of the audit
 record: it never overwrites one that exists (--force does), and records the findings so the next report lists what
-is new and what is gone since. PBS and the repo are still checked by hand ("Still to check by hand").
+is new and what is gone since. From the playbook's data it also judges each Proxmox Backup Server's ACL (a backup
+client or token that can prune or delete backups) and, with discovery/proxmox.json, which `pbs` storages have no
+encryption key (GitHub issue #148). The repo is still checked by hand ("Still to check by hand").
 
 Every finding has a stable key (`ssh-password-auth`, `smb-guest-write-media`, `lxc-privileged-105`,
 `pve-no-tfa-root-pam`, `forward-rdp-<host>`, …). The host or group var `security_audit_accept: [keys]` marks the
@@ -36,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import ipaddress
 import json
 import platform
 import re
@@ -229,7 +232,37 @@ def parse_host(entry: dict) -> dict:
     facts["tunnels"] = tun
     other = dict(fields(x, 2) for x in sec.get("other", []))
     facts["fail2ban"] = other.get("fail2ban") or None
+    facts["pbs"] = parse_pbs(sec.get("pbs", []))
+    keys = sec.get("pve-keys", [])
+    facts["pve_keys"] = sorted({fields(x, 2)[1] for x in keys if x.startswith("enc|")}) \
+        if any(x.startswith("dir|") for x in keys) else None
     return facts
+
+
+def parse_pbs(lines: list[str]) -> dict | None:
+    """The @@pbs lines of a Proxmox Backup Server → {acl: [{path, propagate, role, ugid}], users: {id: {enabled,
+    expire}}, tokens: {id: {…}}, datastores: [name]}; None on a host without proxmox-backup-manager."""
+    if not lines:
+        return None
+    out: dict = {"acl": [], "users": {}, "tokens": {}, "datastores": []}
+    for line in lines:
+        kind, rest = fields(line, 2)
+        if kind == "acl":
+            try:
+                e = json.loads(rest)
+            except ValueError:
+                continue
+            if isinstance(e, dict) and e.get("ugid") and e.get("path") and e.get("ugid_type") in ("user", "token"):
+                out["acl"].append({"path": clean(e["path"], 200), "propagate": e.get("propagate") is not False,
+                                   "role": clean(e.get("roleid"), 60), "ugid": clean(e["ugid"], 120)})
+        elif kind in ("user", "token"):
+            _, uid, enable, expire = fields(line, 4)
+            if uid:
+                out[kind + "s"][clean(uid, 120)] = {"enabled": enable.strip().lower() != "false",
+                                                    "expire": _epoch(expire.strip())}
+        elif kind == "datastore" and rest:
+            out["datastores"].append(clean(rest, 80))
+    return out
 
 
 # --------------------------------------------------------------------------- judging
@@ -438,6 +471,108 @@ def host_findings(facts: dict, today: dt.date | None = None) -> list[tuple[str, 
         if age is not None and age > CLOUDFLARED_MAX_MONTHS:
             out.append((f"cloudflared-{key_part(t['version'])}", "low",
                         f"cloudflared {t['version']} is {age} months old (supported for about a year): update it"))
+    if facts.get("pbs"):
+        out += pbs_findings(facts["pbs"], dt.datetime.combine(today, dt.time()).timestamp())
+    return out
+
+
+# PBS roles that can prune or delete backups: 2 = every backup in the datastore, 1 = the owner's own backups
+PBS_PRUNE = {"Admin": 2, "DatastoreAdmin": 2, "DatastorePowerUser": 1}
+
+
+def _pbs_covers(entry: dict, path: str) -> bool:
+    """Does a PBS ACL entry apply to path (the same path, or a parent with propagate)?"""
+    a, p = entry["path"].rstrip("/"), path.rstrip("/")
+    return a == p or (entry["propagate"] and (a == "" or p.startswith(a + "/")))
+
+
+def _pbs_admin(acl: list[dict], userid: str) -> bool:
+    return userid == "root@pam" or any(e["ugid"] == userid and e["role"] == "Admin" and e["path"] == "/" for e in acl)
+
+
+def pbs_findings(pbs: dict, now: float) -> list[tuple[str, str, str]]:
+    """[(key, severity, text)] of a Backup Server's ACL: a non-admin @pbs user, or an API token, that can prune or
+    delete backups on a datastore (Admin, DatastoreAdmin; DatastorePowerUser its own). Such a credential sits on
+    every Proxmox node that backs up there: a compromised node could wipe the backups (GitHub issue #148).
+    A token's rights are its own ACL limited by its user's; disabled or expired users and tokens are left out."""
+    acl = pbs.get("acl") or []
+    users, tokens = pbs.get("users") or {}, pbs.get("tokens") or {}
+
+    def active(x):
+        return x is None or (x.get("enabled", True) and not (x.get("expire") and x["expire"] < now))
+
+    best: dict = {}
+    for e in acl:
+        rank = PBS_PRUNE.get(e["role"], 0)
+        path = e["path"].rstrip("/") or "/"
+        if path.startswith("/datastore/"):
+            ds = path.split("/")[2]
+        elif path in ("/", "/datastore") and e["propagate"]:
+            ds = None                                  # every datastore
+        else:
+            continue
+        if not rank:
+            continue
+        ugid = e["ugid"]
+        owner = ugid.split("!", 1)[0]
+        if not active(users.get(owner)):
+            continue
+        if "!" in ugid:
+            if not active(tokens.get(ugid)):
+                continue
+            rank = min(rank, 2 if _pbs_admin(acl, owner) else max(
+                [PBS_PRUNE.get(x["role"], 0) for x in acl if x["ugid"] == owner and _pbs_covers(x, path)] or [0]))
+        elif ugid.rsplit("@", 1)[-1] != "pbs" or _pbs_admin(acl, ugid):
+            continue                                   # people and administrators: not a backup client
+        if rank and rank >= best.get((ugid, ds), (0,))[0]:
+            best[(ugid, ds)] = (rank, e["role"])
+    out = []
+    for (ugid, ds), (rank, role) in sorted(best.items(), key=lambda x: (x[0][0], x[0][1] or "")):
+        kind = "token" if "!" in ugid else "user"
+        where = f"datastore `{ds}`" if ds else "every datastore"
+        if rank == 2:
+            out.append((f"pbs-datastore-admin-{key_part(ugid)}-{key_part(ds or 'all')}", "medium",
+                        f"PBS {kind} `{ugid}` has `{role}` on {where}: it can prune and delete every backup there, so "
+                        "whoever takes a Proxmox node that holds it can wipe them; give it `DatastoreBackup` and keep "
+                        "the retention with a PBS prune job (not the Proxmox storage's or backup job's)"))
+        else:
+            out.append((f"pbs-datastore-poweruser-{key_part(ugid)}-{key_part(ds or 'all')}", "low",
+                        f"PBS {kind} `{ugid}` has `{role}` on {where}: it can prune and delete its own backups; "
+                        "`DatastoreBackup` with a PBS prune job keeps them out of a compromised client's reach"))
+    return out
+
+
+def encryption_findings(cfg: dict, st: dict, storages: list[dict], keys: set, where: str,
+                        addresses: dict | None = None) -> list[tuple]:
+    """[(key, severity, text, where)] of a site's `pbs` storages without an encryption key (no
+    /etc/pve/priv/storage/<id>.enc on its nodes): low; medium when the Backup Server is on another site or outside
+    the site's ranges. addresses {inventory name: ip} places a server given by name."""
+    out, seen = [], set()
+    for s in storages or []:
+        sid = s.get("storage")
+        if s.get("type") != "pbs" or not sid or sid in seen or sid in keys:
+            continue
+        seen.add(sid)
+        server = str(s.get("server") or "")
+        ip = (addresses or {}).get(server) or server
+        place = hmlib.site_of_address(cfg, ip)
+        try:
+            placed = bool(ipaddress.ip_address(ip))
+        except ValueError:
+            placed = False
+        if place is not None and hmlib.site_key(place) != hmlib.site_key(st):
+            sev, there = "medium", f"on site {hmlib.site_title(place)}"
+        elif placed and place is None and st.get("ranges"):
+            sev, there = "medium", "outside the site's ranges"
+        else:
+            sev, there = "low", ""
+        srv = f"PBS {server}" + (f", datastore {s['datastore']}" if s.get("datastore") else "") if server else "PBS"
+        out.append((f"pbs-no-encryption-{key_part(sid)}", sev,
+                    f"Proxmox storage `{sid}` ({srv}) has no encryption key"
+                    + (f"; the Backup Server is {there}" if there else "")
+                    + ": whoever reads the datastore reads every backup; set one (Datacenter > Storage > Edit > "
+                    "Encryption, or `pvesm set " + sid + " --encryption-key autogen`) and keep a copy of the key "
+                    "outside the cluster, or the backups can't be restored (the next backup is a full one)", where))
     return out
 
 
@@ -935,10 +1070,11 @@ def pve_row(site: str, e: dict) -> list[str]:
 def report(cfg: dict, hosts: dict, mac: dict | None, accepts: dict, mac_accepted: set, site_name: str | None,
            today: dt.date | None = None, pve: dict | None = None, site_found: dict | None = None,
            routers: list | None = None, stale_site: dict | None = None, since: dict | None = None,
-           sources: dict | None = None) -> str:
+           sources: dict | None = None, todo: list | None = None) -> str:
     """The Markdown report. pve {site key: Proxmox entry}, site_found {site key: [finding]} (port forwards, network
     scan), routers [(device, finding)] from routeros.json (listed, counted apart), stale_site {site key: keys},
-    since {date, new, gone} against the last recorded audit, sources: what the joins read."""
+    since {date, new, gone} against the last recorded audit, sources: what the joins read, todo: more lines for
+    "Still to check by hand"."""
     today = today or dt.date.today()
     pve, site_found, routers, sources = pve or {}, site_found or {}, routers or [], sources or {}
     st_title = hmlib.site_title(hmlib.site(cfg, site_name)) if site_name else "all sites"
@@ -965,6 +1101,10 @@ def report(cfg: dict, hosts: dict, mac: dict | None, accepts: dict, mac_accepted
                       ("updates.json", "pending updates")):
         if sources.get(what):
             parts.append(f"{src} (`{what}`, {sources[what]})")
+    if sources.get("pbs"):
+        parts.append(f"the ACL of {sources['pbs']} Backup Server(s)")
+    if sources.get("pbs storages"):
+        parts.append(f"the encryption of {sources['pbs storages']} `pbs` storage(s) (`proxmox.json`)")
     if mac:
         parts.append("this Mac")
     rc = {s: sum(1 for _, f in routers if f.get("severity") == s) for s in ("critical", "high", "medium", "low")}
@@ -1057,8 +1197,8 @@ def report(cfg: dict, hosts: dict, mac: dict | None, accepts: dict, mac_accepted
              for k, e in sorted(pve.items()) if e.get("error")]
     if nots:
         lines += ["## Not checked", ""] + nots + [""]
-    todo = ["- Backups: PBS users and ACL (`DatastoreBackup`, not `DatastoreAdmin`), client-side encryption.",
-            "- Repo: no secrets in Git history, pre-commit hook active, `.gitignore` covers state and keys."]
+    todo = list(todo or []) + ["- Repo: no secrets in Git history, pre-commit hook active, `.gitignore` covers state "
+                               "and keys."]
     if not pve_ok:
         todo.insert(0, "- Proxmox: run `security_audit.py` without `--no-proxmox` (read-only token).")
     if not sources.get("routeros.json"):
@@ -1184,8 +1324,10 @@ def main(argv=None):
 
     # names of addresses: Proxmox guests, then inventory hosts (they win)
     names: dict = {}
+    snaps: dict = {}
     try:
-        for _, snap in hmlib.proxmox_snapshots(cfg):
+        for snap_site, snap in hmlib.proxmox_snapshots(cfg):
+            snaps[hmlib.site_key(snap_site)] = snap
             for g in snap.get("guests") or []:
                 for x in hmlib.guest_nic_addresses(g):
                     names.setdefault(x["ip"], clean(g.get("name")) or f"CT {g.get('vmid')}")
@@ -1204,6 +1346,8 @@ def main(argv=None):
 
     upd_hosts = upd_db.get("hosts") or {}
     site_names = {s["name"] for s in hmlib.sites(cfg) if s["name"]}
+    enc_keys: dict = {}        # {site key: storage ids with an encryption key}, from the sites' Proxmox nodes
+    pbs_hosts = 0
     for h, e in hosts.items():
         if "error" in e:
             e.pop("findings", None)
@@ -1212,11 +1356,18 @@ def main(argv=None):
         exp = (exposed.get(site_k) or {}).get(host_ip.get(h, ""))
         upd = upd_hosts.get(h)
         upd = {"collected_at": upd_db.get("collected_at"), **upd} if isinstance(upd, dict) else None
-        found = host_findings(parse_host(e), today) + update_findings(upd, exp)
+        facts = parse_host(e)
+        if facts["pve_keys"] is not None:
+            enc_keys.setdefault(site_k, set()).update(facts["pve_keys"])
+        pbs_hosts += bool(facts["pbs"])
+        found = host_findings(facts, today) + update_findings(upd, exp)
         e["findings"] = as_dicts(found, accepts.get(h, set()))
         e["findings_at"] = now
 
     pve_out, site_found, stale_site = {}, {}, {}
+    multi = len(hmlib.sites(cfg)) > 1
+    pbs_sites = {k for k in keys_in_scope
+                 if any(s.get("type") == "pbs" for s in (snaps.get(k) or {}).get("storage") or [])}
     audited = {host_ip.get(h) for h, e in hosts.items() if "error" not in e} | \
         {x["ip"] for x in hmlib.routeros_addresses(cfg, inventory)}
     for st in scope:
@@ -1237,6 +1388,9 @@ def main(argv=None):
         found = forward_findings([x for x in fwds if x["site"] == k], names)
         if k in nets:
             found += network_findings(nets[k], audited, names)
+        if k in pbs_sites and k in enc_keys:
+            found += encryption_findings(cfg, st, snaps[k].get("storage"), enc_keys[k],
+                                         f"Proxmox {k}" if multi else "Proxmox", host_ip)
         site_found[k] = as_dicts(found, acc, accepts)
         mine |= {x["key"] for x in site_found[k]}
         if k in pve_out or site_found[k]:
@@ -1270,8 +1424,21 @@ def main(argv=None):
         old = set(prev["findings"])
         since = {"date": prev.get("date") or "?", "new": sorted(set(record) - old), "gone": sorted(old - set(record))}
 
+    todo = []
+    if not a.host and not any(k in snaps for k in keys_in_scope):
+        todo.append("- Backups, if a Proxmox Backup Server keeps them: `proxmox_inventory.py` (the `pbs` storages), "
+                    "`security-audit.yml` on the Backup Server hosts and the Proxmox nodes, then this script again.")
+    elif not a.host and pbs_sites - set(enc_keys):
+        todo.append(f"- Backups: encryption of the `pbs` storages at {', '.join(sorted(pbs_sites - set(enc_keys)))}: "
+                    "run `security-audit.yml` on the Proxmox nodes (`-e target=proxmox_nodes`), then this script again.")
+    if not a.host and pbs_sites and not pbs_hosts:
+        todo.append("- Backups: PBS users and ACL (`DatastoreBackup`, not `DatastoreAdmin`): run `security-audit.yml` on "
+                    "the Backup Server hosts (by hand for one outside the inventory: `proxmox-backup-manager acl list`).")
+    sources["pbs"] = pbs_hosts
+    sources["pbs storages"] = sum(len({s.get("storage") for s in (snaps.get(k) or {}).get("storage") or []
+                                       if s.get("type") == "pbs"}) for k in pbs_sites if k in enc_keys)
     text = report(cfg, hosts, mac, accepts, mac_accepted, a.site, today, pve_out, site_found, routers, stale_site,
-                  since, sources)
+                  since, sources, todo)
     out = root / "docs" / f"security-audit-{today.isoformat()}{'-' + a.site if a.site else ''}.md"
     if a.report and out.exists() and not a.force:
         print(f"security_audit: {out.relative_to(root)} exists: edit it, or pass --force to replace it.",
