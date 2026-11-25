@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.58.0 — 2026-11-25
 - `pve_snapshot.py`: `create` and `delete` go on after a guest that fails and report every failure at the end
   (a guest stopped for a `--mode stop` snapshot is started again); `prune --older-than 30d [--prefix P]` deletes
   old snapshots; `--dry-run` shows what any write would do using the read-only token; `restore` is an alias of
