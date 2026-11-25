@@ -1,0 +1,26 @@
+# This case's homelab.yaml values; place-files.sh merges them into the scaffolded homelab.yaml.
+site:
+  domain: home.arpa
+network:
+  authorized_ranges:
+    - 10.0.10.0/24
+  excluded_hosts:
+    - 10.0.10.1
+  dns_servers:
+    - 10.0.10.1
+  gateway: 10.0.10.1
+proxmox:
+  endpoint: https://pve1.home.arpa:8006
+  default_node: pve1
+  default_storage: local-zfs
+  image_storage: local
+  default_bridge: vmbr0
+defaults:
+  admin_user: marek
+  ssh_public_keys:
+    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyOnly marek@macmini
+clusters:
+  - name: k8s
+    ansible_group: k8s_workers
+    pre_hook: playbooks/hooks/k8s-drain.yml
+    post_hook: playbooks/hooks/k8s-uncordon.yml

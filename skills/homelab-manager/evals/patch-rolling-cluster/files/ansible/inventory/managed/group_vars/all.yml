@@ -1,3 +1,0 @@
-# No secrets here. SSH uses the agent of the management Mac.
-ansible_user: "{{ homelab_admin_user | default(omit) }}"
-health_services: []        # services that must be active after changes, e.g. [sshd, zabbix-agent2]
