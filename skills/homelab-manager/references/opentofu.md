@@ -34,6 +34,19 @@ container's features); `console_mode` (`tty`), `tty_count`, `console`; `mount_po
 for a bind mount (adding or changing one needs root@pam). Removing or reordering items changes the container's
 mount points, and a removed volume's data may go with it: treat it like a disk change (approval).
 
+UEFI (VMs): `bios` (`seabios`; `ovmf` for UEFI), `efi_disk = { datastore, type, pre_enrolled_keys }` (the UEFI
+variables; `type` `4m`, or `2m` for older VMs; `pre_enrolled_keys` false, true for Secure Boot with the
+distribution's and Microsoft's keys, needs `4m`), `tpm_state = { datastore, version }` (a vTPM; `version` `v2.0` or `v1.2`); a `datastore` left
+out is the root disk's. Left out: SeaBIOS, no EFI disk, no TPM, as before. A Windows 11 VM (cloned from a Windows
+template, windows-appliances.md) needs `bios = "ovmf"`, `efi_disk = { pre_enrolled_keys = true }` (4m),
+`tpm_state = {}` (v2.0), `machine = "q35"` and `os_type = "win11"`. The EFI disk's `type` and `pre_enrolled_keys`
+and the TPM `version` count at creation only (the module ignores later changes): the provider would replace the
+whole VM for a new type or version and write a new, empty EFI disk for new keys, losing the boot entries and Secure
+Boot keys or the TPM's secrets (BitLocker). Changing a `datastore` moves the disk with its data (a power cycle:
+approval). Removing `efi_disk` or `tpm_state` from an existing VM's entry removes the disk and what it holds: never
+without the user's yes. Proxmox's `ms-cert` marker (proxmox.md "Secure Boot certificates") is not an attribute:
+OpenTofu leaves it alone.
+
 IPv6 (both kinds): `ipv6_address` is `auto` (SLAAC), `dhcp` (DHCPv6) or address/prefix (`fd00:10::21/64`);
 `ipv6_gateway` (else `defaults.ipv6_gateway`, often the router's link-local `fe80::1`) is used only with a static
 address, since SLAAC and DHCPv6 take it from the router advertisement. Without `ipv6_address` the guest gets no
@@ -65,8 +78,8 @@ start): keep it in the entry for the VM's life.
 
 The variables refuse a bad `ipv4_address` (not `dhcp` or address/prefix), a bad `ipv6_address` or `ipv6_gateway`,
 `vlan_id` outside 1–4094, a VMID below 100, an extra disk on `scsi0` or an unknown bus, an `extra_nics` item with
-a bad MAC, VLAN, address, model or a container interface name used twice (or eth0), and an unknown
-`checksum_algorithm`; the error names the entry.
+a bad MAC, VLAN, address, model or a container interface name used twice (or eth0), a `bios`, EFI disk `type` or
+TPM `version` other than the ones above, and an unknown `checksum_algorithm`; the error names the entry.
 A static address without a gateway (on any NIC), or with one outside its subnet, is a warning in the plan ("Check
 block assertion failed"): set the entry's `ipv4_gateway`, or tell the user the guest has no default route. So is
 an IPv4 gateway on more than one NIC (several default routes).

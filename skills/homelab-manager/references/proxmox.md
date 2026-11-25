@@ -89,9 +89,14 @@ Only through resource mappings: a raw PCI ID needs `root@pam`, which the skill's
 2. The provisioning token needs `Mapping.Use` on that mapping: the "PCI passthrough" grant in
    `docs/proxmox-tokens.md` (missing there: copy it from the template's), run by the user on a node.
 3. Entry: `node` set explicitly (the validation refuses a VM with devices but no node), `pci_devices =
-   [{ mapping = "gpu", pcie = true }]` (`hostpci0`, `hostpci1`, … in list order; also `rombar`, `xvga` for the
-   primary GPU), and `machine = "q35"` for `pcie = true`. Adding devices to an existing VM is an in-place change
-   that needs a power cycle (approval item); `machine` on an existing VM changes its hardware: ask first.
+   [{ mapping = "gpu", pcie = true }]` (`hostpci0`, `hostpci1`, … in list order; also `rombar`, left out meaning
+   off as the provider writes it, `rom_file` under `/usr/share/kvm/` on the node, `xvga` for the primary GPU), and
+   `machine = "q35"` for `pcie = true`. Adding devices to an existing VM is an in-place change that needs a power
+   cycle (approval item); `machine` on an existing VM changes its hardware: ask first.
+An existing VM that passes a raw ID (`hostpci0: 0000:01:00,...`) stays unmanaged until it uses a mapping: step 1
+for its device, then the user switches it with the VM stopped (VM → Hardware → the PCI device → Edit → Mapped
+Device; options such as PCI-Express and the ROM file stay), starts it, and a new snapshot lets
+`tofu_import_plan.py` import it.
 A VM with a passed-through device can't live-migrate and runs only on nodes where the mapping has a device, so it
 stays pinned to its `node`; a move ("Migrate") is offline and only to another node of the mapping. Don't put it
 under HA unless every HA node has the device mapped.
@@ -122,14 +127,15 @@ For guests listed as "Not managed by OpenTofu" in the drift report:
    datastores, `extra_disks`, bridge, VLAN tag, the NIC's `mac_address`, static address and gateway, further NICs
    as `extra_nics`, LXC DNS, tags, `cpu_type`, `on_boot`, `protection`, `description`, `started`, `unprivileged`,
    `nesting`, and the settings of opentofu.md "Entry attributes" an imported guest keeps: sockets, NUMA,
-   ballooning, disk options, start order, no cloud-init drive or serial port, a CD-ROM, LXC features, mount points
-   and console, ...). A comment above an entry lists what the first plan will still change, the few settings the
+   ballooning, disk options, start order, no cloud-init drive or serial port, a CD-ROM, UEFI with its EFI disk and
+   TPM state, PCI devices by resource mapping, LXC features, mount points and console, ...). A comment above an entry lists what the first plan will still change, the few settings the
    modules don't carry (disk I/O limits, NIC rate limit, ...) and provider defaults it writes again: show the user
    that list; it is part of the import decision. An older environment's `variables.tf` lacks the newer
    attributes: they become such notes, or a blocker where the plan would remove or rebuild something (mount
-   points, extra NICs, a non-Linux OS type, `q35`); `init_repo.py --sync-managed` first.
-   Guests it can't represent (passthrough, a root disk other than `scsi0`, UEFI/TPM, VLAN trunks, NICs or mount
-   points numbered with a gap) get no entry: leave them unmanaged and record why in `docs/decisions.md`. A gap
+   points, extra NICs, a non-Linux OS type, `q35`, UEFI, the EFI disk, the TPM state, PCI devices);
+   `init_repo.py --sync-managed` first.
+   Guests it can't represent (a raw PCI ID, see "PCI passthrough", USB or a mediated device, a root disk other than
+   `scsi0`, VLAN trunks, NICs, PCI devices or mount points numbered with a gap) get no entry: leave them unmanaged and record why in `docs/decisions.md`. A gap
    (net0, net2; mp0, mp1, mp4) can't be expressed: the provider numbers NICs and mount points by list position, so
    a later change would write them renumbered (a VM's NIC into another PCI slot, a mount point's volume into a
    second slot while the old one stays). The way in is renumbering
