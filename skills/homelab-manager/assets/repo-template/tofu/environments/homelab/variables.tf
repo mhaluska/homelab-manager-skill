@@ -22,6 +22,8 @@ variable "defaults" {
     dns_domain      = optional(string)
     ipv4_gateway    = optional(string)
     ipv6_gateway    = optional(string) # static ipv6_address entries
+    # homelab.yaml proxmox.snippets_storage: cloud-init snippets of VMs (needs snippets content)
+    snippets_datastore = optional(string)
   })
 }
 
@@ -71,6 +73,10 @@ variable "vms" {
     started        = optional(bool, true)
     on_boot        = optional(bool, true)
     protection     = optional(bool, false) # Proxmox refuses to remove the guest while it is set
+    # files in tofu/snippets/, first boot only: vendor data merges with the built-in user data (admin user,
+    # keys); user data replaces it and must create the admin user and keys itself
+    cloud_init_snippet      = optional(string)
+    cloud_init_user_snippet = optional(string)
   }))
   default = {}
   validation {
@@ -92,6 +98,10 @@ variable "vms" {
   validation {
     condition     = length([for k, v in var.vms : k if !alltrue([for d in v.extra_disks : can(regex("^(scsi([1-9]|[12][0-9]|30)|virtio([0-9]|1[0-5])|sata[0-5])$", d.interface))])]) == 0
     error_message = "vms ${join(", ", [for k, v in var.vms : k if !alltrue([for d in v.extra_disks : can(regex("^(scsi([1-9]|[12][0-9]|30)|virtio([0-9]|1[0-5])|sata[0-5])$", d.interface))])])}: extra_disks interface must be scsi1-scsi30, virtio0-virtio15 or sata0-sata5 (scsi0 is the root disk)."
+  }
+  validation {
+    condition     = length([for k, v in var.vms : k if !alltrue([for f in [v.cloud_init_snippet, v.cloud_init_user_snippet] : f == null || can(regex("^[A-Za-z0-9][A-Za-z0-9._-]*$", f))])]) == 0
+    error_message = "vms ${join(", ", [for k, v in var.vms : k if !alltrue([for f in [v.cloud_init_snippet, v.cloud_init_user_snippet] : f == null || can(regex("^[A-Za-z0-9][A-Za-z0-9._-]*$", f))])])}: cloud_init_snippet and cloud_init_user_snippet name a file in tofu/snippets/ (no path), e.g. \"docker-host.yaml\"."
   }
 }
 

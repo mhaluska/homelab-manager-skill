@@ -64,6 +64,10 @@ module "vm" {
   started         = each.value.started
   on_boot         = each.value.on_boot
   protection      = each.value.protection
+
+  snippets_datastore      = var.defaults.snippets_datastore
+  cloud_init_snippet      = each.value.cloud_init_snippet == null ? null : "${path.root}/../../snippets/${each.value.cloud_init_snippet}"
+  cloud_init_user_snippet = each.value.cloud_init_user_snippet == null ? null : "${path.root}/../../snippets/${each.value.cloud_init_user_snippet}"
 }
 
 module "lxc" {

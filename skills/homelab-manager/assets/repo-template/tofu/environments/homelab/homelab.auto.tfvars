@@ -17,6 +17,7 @@
 #   dns_domain      = "home.arpa"
 #   ipv4_gateway    = "10.0.10.1"
 #   ipv6_gateway    = "fe80::1"              # optional, for entries with a static ipv6_address
+#   snippets_datastore = "local"             # optional, proxmox.snippets_storage (needs snippets content)
 # }
 
 base_images = {
@@ -41,7 +42,9 @@ vms = {
   #   ansible_groups = ["rocky"]
   #   # optional: ipv4_gateway (else defaults), vlan_id, cpu_type ("x86-64-v2-AES"), on_boot (true),
   #   # protection (false; true: Proxmox refuses to delete it), description, started (true), extra_disks,
-  #   # ipv6_address ("dhcp", "auto" for SLAAC, or CIDR) and ipv6_gateway (static only; else defaults)
+  #   # ipv6_address ("dhcp", "auto" for SLAAC, or CIDR) and ipv6_gateway (static only; else defaults),
+  #   # cloud_init_snippet (vendor data file in tofu/snippets/, first boot only; cloud_init_user_snippet
+  #   # replaces the admin user and keys)
   # }
 }
 

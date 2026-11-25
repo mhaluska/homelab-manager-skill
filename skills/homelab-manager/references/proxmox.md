@@ -211,4 +211,5 @@ config_set.py 'sites+={name: offsite, label: Rented server, ranges: [192.0.2.0/2
 
 Keys come from `defaults.ssh_public_keys` (agent public keys). Cloud-init user data only
 applies at first boot, so key changes on existing VMs are an Ansible job (ansible.md),
-not a tofu change — `user_account` is ignored after creation for that reason.
+not a tofu change — `user_account` is ignored after creation for that reason. First-boot extras (packages, a
+runcmd) go in a vendor-data snippet (`cloud_init_snippet`, opentofu.md "Entry attributes"), not in the template.

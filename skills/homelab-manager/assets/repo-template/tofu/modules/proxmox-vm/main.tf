@@ -81,16 +81,52 @@ resource "proxmox_virtual_environment_vm" "this" {
       servers = length(var.dns_servers) > 0 ? var.dns_servers : null
       domain  = var.dns_domain
     }
-    user_account {
-      username = var.admin_user
-      keys     = var.ssh_public_keys
+    # A user-data snippet replaces the built-in user data (the provider refuses both), so it must create the
+    # admin user and keys itself. Vendor data merges with it.
+    dynamic "user_account" {
+      for_each = var.cloud_init_user_snippet == null ? [1] : []
+      content {
+        username = var.admin_user
+        keys     = var.ssh_public_keys
+      }
     }
+    vendor_data_file_id = try(proxmox_virtual_environment_file.cloud_init["vendor"].id, null)
+    user_data_file_id   = try(proxmox_virtual_environment_file.cloud_init["user"].id, null)
   }
 
   lifecycle {
     # The template is only the starting point. A new template version must never
     # rebuild running VMs, and cloud-init user data only applies at first boot.
-    ignore_changes = [clone, initialization[0].user_account]
+    ignore_changes = [clone, initialization[0].user_account, initialization[0].vendor_data_file_id,
+    initialization[0].user_data_file_id]
+  }
+}
+
+# Cloud-init snippets (vendor and user data) from tofu/snippets/, uploaded over SSH to the node's snippets storage
+# under a name with the VMID, so entries never share a file. Like the user account they count at first boot only:
+# later edits of the file are not uploaded. The VM keeps pointing at the uploaded file, so it must stay while the
+# VM exists (Proxmox reads it whenever it rebuilds the cloud-init drive).
+resource "proxmox_virtual_environment_file" "cloud_init" {
+  for_each     = { for k, f in { vendor = var.cloud_init_snippet, user = var.cloud_init_user_snippet } : k => f if f != null }
+  content_type = "snippets"
+  datastore_id = var.snippets_datastore
+  node_name    = var.node
+
+  source_file {
+    path      = each.value
+    file_name = "vm-${var.vm_id}-${each.key}-data.yaml"
+  }
+
+  lifecycle {
+    ignore_changes = [source_file]
+    precondition {
+      condition     = var.snippets_datastore != null
+      error_message = "VM ${var.name}: a cloud-init snippet needs defaults.snippets_datastore (homelab.yaml proxmox.snippets_storage, a storage with snippets content)."
+    }
+    precondition {
+      condition     = fileexists(each.value)
+      error_message = "VM ${var.name}: cloud-init snippet ${each.value} not found (files live in tofu/snippets/)."
+    }
   }
 }
 

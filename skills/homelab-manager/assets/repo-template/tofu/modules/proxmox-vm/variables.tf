@@ -116,3 +116,18 @@ variable "protection" {
   nullable    = false
   description = "Proxmox protection flag: the guest and its disks can't be removed until it is turned off again."
 }
+variable "cloud_init_snippet" {
+  type        = string
+  default     = null
+  description = "Path of a cloud-init vendor data file, merged with the built-in user data (admin user, keys). Ignored after creation."
+}
+variable "cloud_init_user_snippet" {
+  type        = string
+  default     = null
+  description = "Path of a cloud-init user data file. It replaces the built-in user data: it must create the admin user and keys itself. Ignored after creation."
+}
+variable "snippets_datastore" {
+  type        = string
+  default     = null
+  description = "Storage with snippets content the snippet files are uploaded to (over SSH, on var.node)."
+}

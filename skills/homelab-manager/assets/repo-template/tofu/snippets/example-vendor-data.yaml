@@ -1,0 +1,12 @@
+#cloud-config
+# Example cloud-init vendor data for a VM entry: cloud_init_snippet = "example-vendor-data.yaml" in
+# tofu/environments/<env>/homelab.auto.tfvars. Vendor data merges with the user data Proxmox generates (the admin
+# user and SSH keys from defaults), so a mistake here can't lock you out. It runs at the VM's first boot only;
+# later edits of this file change nothing on existing VMs (Ansible does that).
+# The snippet is uploaded over SSH to defaults.snippets_datastore (homelab.yaml proxmox.snippets_storage), a
+# storage with "snippets" content. Copy this file under a new name for your own snippets.
+package_update: true
+packages:
+  - qemu-guest-agent
+runcmd:
+  - [systemctl, enable, --now, qemu-guest-agent]
