@@ -43,7 +43,7 @@ GUESTS = [
        net0=f"virtio={MAC1},bridge=vmbr1,tag=10,firewall=1",
        ipconfig0="ip=10.0.10.21/24,gw=10.0.10.1"),
     vm(102, "win01", ostype="win11", bios="ovmf", efidisk0="local-zfs:vm-102-disk-1,size=1M"),
-    vm(103, "multi", net1="virtio=BC:24:11:00:00:03,bridge=vmbr0"),
+    vm(103, "multi", net2="virtio=BC:24:11:00:00:03,bridge=vmbr0"),
     vm(104, "virt", scsi0=None, virtio0="local-zfs:vm-104-disk-0,size=20G"),
     vm(106, "gpu", hostpci0="0000:01:00,pcie=1"),
     lxc(201, "dns01", cores="2", memory="1024", swap="256", onboot=None, features="nesting=1,keyctl=1",
@@ -145,7 +145,7 @@ class ImportPlanTests(unittest.TestCase):
                       '      { volume = "/mnt/media", path = "/media", read_only = true },\n'
                       '    ]', nas)
         blocked = out[out.index("Not importable"):]
-        for text in ("VM 102 win01: UEFI", "VM 103 multi: 2 network devices",
+        for text in ("VM 102 win01: UEFI", "VM 103 multi: network devices net0, net2 have a gap",
                      "VM 104 virt: root disk virtio0", "VM 106 gpu: passthrough (hostpci0)",
                      "container 203 gap: mount points mp0, mp2 have a gap"):
             self.assertIn(text, blocked)
@@ -287,6 +287,78 @@ class ImportPlanTests(unittest.TestCase):
                      'mount_points     = [{ volume = "/dev/zvol/tank/data", path = "/data", size_gib = 25 }]'):
             self.assertIn(line, fs)
         self.assertNotIn("Not importable", out)
+
+    def test_extra_nics(self):
+        """net1, net2, ... become extra_nics in order; the entry's own NIC attributes stay net0's."""
+        mac3, mac4, mac5 = "BC:24:11:00:00:03", "BC:24:11:00:00:04", "BC:24:11:00:00:05"
+        self.snapshot({"config_version": 3, "guests": [
+            vm(150, "router", ipconfig0="ip=10.0.10.25/24,gw=10.0.10.1",
+               net1=f"e1000={mac3},bridge=vmbr1,tag=30,firewall=1,mtu=9000,queues=2,link_down=1",
+               net2=f"virtio={mac4},bridge=vmbr0,rate=10", ipconfig2="ip=dhcp,ip6=auto"),
+            vm(151, "nocloud", ide2=None, ipconfig0=None, net1=f"virtio={mac3},bridge=vmbr1,tag=40"),
+            lxc(250, "proxy", net0=f"name=eth0,bridge=vmbr0,hwaddr={MAC2},ip=10.0.10.35/24,type=veth",
+                net1=f"name=eth1,bridge=vmbr1,hwaddr={mac3},ip=192.0.2.35/24,gw=192.0.2.1,tag=20,firewall=1,"
+                     "mtu=1400,type=veth",
+                net2=f"name=wg,bridge=vmbr0,hwaddr={mac4},ip6=fd00:20::35/64,gw6=fd00:20::1,type=veth"),
+            vm(152, "trunk", net1=f"virtio={mac5},bridge=vmbr1,trunks=10;20"),
+            vm(153, "oldnic", net1=f"ne2k_pci={mac5},bridge=vmbr1"),
+            lxc(251, "gapct", net2=f"name=eth2,bridge=vmbr0,hwaddr={mac5},ip=dhcp,type=veth")]})
+        r = self.plan()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = r.stdout
+
+        def entry(key):
+            e = out[out.index(f'"{key}" = {{'):]
+            return e[:e.index("\n  }")]
+        router = entry("router")
+        for line in ('bridge         = "vmbr0"', f'mac_address    = "{MAC1}"', 'ipv4_address   = "10.0.10.25/24"',
+                     '  extra_nics = [\n'
+                     f'      {{ bridge = "vmbr1", vlan_id = 30, mac_address = "{mac3}", model = "e1000", '
+                     'firewall = true, mtu = 9000, queues = 2, disconnected = true },\n'
+                     f'      {{ mac_address = "{mac4}", ipv4_address = "dhcp", ipv6_address = "auto" }},\n'
+                     '    ]'):
+            if line.startswith("bridge"):
+                self.assertNotIn(line, router)   # net0 on defaults.bridge: not set
+            else:
+                self.assertIn(line, router)
+        notes = out[out.index("# 150 router"):out.index('"router" = {')]
+        self.assertIn("net2 rate=10: the modules don't set it", notes)
+        self.assertNotIn("link_down", notes)
+        self.assertIn(f'extra_nics       = [{{ bridge = "vmbr1", vlan_id = 40, mac_address = "{mac3}" }}]',
+                      entry("nocloud"))
+        proxy = entry("proxy")
+        for line in ('ipv4_address     = "10.0.10.35/24"\n    ipv4_gateway     = ""',   # the default route is eth1's
+                     f'{{ bridge = "vmbr1", vlan_id = 20, mac_address = "{mac3}", firewall = true, mtu = 1400, '
+                     'ipv4_address = "192.0.2.35/24", ipv4_gateway = "192.0.2.1" },',
+                     f'{{ name = "wg", mac_address = "{mac4}", ipv6_address = "fd00:20::35/64", '
+                     'ipv6_gateway = "fd00:20::1" },'):
+            self.assertIn(line, proxy)
+        self.assertNotIn('name = "eth1"', proxy)   # the default name by position
+        notes = out[out.index("# 250 proxy"):out.index('"proxy" = {')]
+        self.assertIn("net2 has no IPv4 setting: the modules set dhcp", notes)
+        self.assertNotIn("defaults.ipv4_gateway", notes)
+        blocked = out[out.index("Not importable"):]
+        self.assertIn("VM 152 trunk: net1 carries VLAN trunks (10;20)", blocked)
+        self.assertIn("VM 153 oldnic: net1 model ne2k_pci: not one the module knows", blocked)
+        self.assertIn("container 251 gapct: network interfaces net0, net2 have a gap", blocked)
+        self.assertIn("3 guest(s) to import, 3 the modules can't represent", out)
+
+    def test_extra_nics_need_the_new_template(self):
+        """An environment from before 0.63.0 has no extra_nics: the plan would remove the NICs, so no entry."""
+        variables = self.env / "variables.tf"
+        text = variables.read_text()
+        for marker in ("    # NICs after the first", "    # interfaces after eth0"):
+            start = text.index(marker)
+            text = text[:start] + text[text.index("})), [])\n", start) + len("})), [])\n"):]
+        variables.write_text(text)
+        self.assertNotIn("extra_nics", tip.entry_attributes(text)["vms"])
+        self.snapshot({"config_version": 3, "guests": [
+            vm(160, "two", net1="virtio=BC:24:11:00:00:03,bridge=vmbr1"), vm(161, "one")]})
+        r = self.plan()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("VM 160 two: extra_nics: not in this environment's variables.tf (older template; "
+                      "init_repo.py --sync-managed updates it), the plan would remove the NICs", r.stdout)
+        self.assertIn('"one" = {', r.stdout)
 
     def test_name_clash_and_bad_name(self):
         guests = [vm(110, "present"), vm(111, "bad_name!")]

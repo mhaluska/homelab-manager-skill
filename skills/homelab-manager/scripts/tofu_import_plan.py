@@ -10,10 +10,10 @@ disks (size, datastore, extra_disks), bridge, VLAN tag, MAC address, static addr
 cpu_type, on_boot, protection, description, started, unprivileged and nesting, and what an older guest has that a
 cloned one doesn't (0.62.0: sockets, NUMA, CPU flags, ballooning, disk cache/ssd/iothread/discard/backup, start
 order, OS type, machine, no cloud-init drive or serial port, a CD-ROM, NIC firewall/MTU/queues, LXC features, mount
-points and console). Above an entry a comment names what the first plan will still change (the few settings the
-modules don't carry, e.g. disk I/O limits). A guest the modules can't represent without a rebuild or lost hardware
-(passthrough, several NICs, a root disk other than scsi0, UEFI, mount points numbered with a gap, ...) gets no
-entry: it stays unmanaged, with a line for docs/decisions.md.
+points and console; 0.63.0: further NICs as extra_nics). Above an entry a comment names what the first plan will
+still change (the few settings the modules don't carry, e.g. disk I/O limits). A guest the modules can't represent
+without a rebuild or lost hardware (passthrough, a root disk other than scsi0, UEFI, NICs or mount points numbered
+with a gap, VLAN trunks, ...) gets no entry: it stays unmanaged, with a line for docs/decisions.md.
 
 Read-only by default (stdout). --write creates or extends imports.tf in the environment and adds the entries inside
 the `vms` / `containers` maps of homelab.auto.tfvars; it never changes an existing entry or import block. Then the
@@ -39,7 +39,8 @@ VM_OS_TYPES = {"l24", "l26", "other", "solaris", "w2k", "w2k3", "w2k8", "win7", 
 DISK_FIELDS = ("discard", "iothread", "ssd", "cache", "backup")   # extra_disks fields of 0.62.0 (with disk_cache)
 KEY_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,61}[A-Za-z0-9])?$")   # a map key the modules use as name
 MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
-VM_EXTRA_RE = re.compile(r"^(scsi([1-9]|[12][0-9]|30)|virtio([0-9]|1[0-5])|sata[0-5])$")
+VM_NIC_MODELS = {"virtio", "e1000", "e1000e", "rtl8139", "vmxnet3"}   # bpg network_device.model
+VM_EXTRA_RE =re.compile(r"^(scsi([1-9]|[12][0-9]|30)|virtio([0-9]|1[0-5])|sata[0-5])$")
 DISK_RE = re.compile(r"^(scsi|virtio|sata|ide)\d+$")
 NO_TEMPLATE_FILE = "local:vztmpl/imported.tar.zst"   # placeholder: ignored after creation
 
@@ -262,45 +263,79 @@ def common(e: Entry, conf: dict):
 
 
 def network(e: Entry, conf: dict, ctx: dict, nic: str, ip: str | None, gw: str | None, ip6: str | None,
-            gw6: str | None = None):
-    """bridge, vlan_id, mac_address, ipv4_* and ipv6_* of the guest's one NIC."""
+            gw6: str | None = None, pos: int = 0, gw_elsewhere: bool = False):
+    """bridge, vlan_id, mac_address, firewall, mtu, ipv4_* and ipv6_* of the NIC at position pos: the first one's
+    as the entry's attributes, a later one's as an extra_nics item (returned). An extra NIC's gateways are its own
+    (no defaults); a VM's has no cloud-init settings unless ipconfigN has an address (dhcp included). The first NIC
+    without a gateway gets ipv4_gateway = "" (none) when another NIC has one (gw_elsewhere), else the default."""
     _, o = options(conf.get(nic))
-    d = ctx["defaults"]
+    d, first, out = ctx["defaults"], pos == 0, {}
+    if e.kind == "containers" and not first and o.get("name") != f"eth{pos}":
+        out["name"] = o.get("name") or ""
     bridge = o.get("bridge")
     if bridge and bridge != d.get("bridge"):
-        e.set("bridge", bridge)
+        out["bridge"] = bridge
     if o.get("tag"):
-        e.set("vlan_id", int(o["tag"]))
+        out["vlan_id"] = int(o["tag"])
     if o.get("trunks"):
         e.blockers.append(f"{nic} carries VLAN trunks ({o['trunks']}): the modules set one tag")
     mac = o.get("hwaddr") or next((v for k, v in o.items() if MAC_RE.match(v or "")), None)
     if mac:
-        e.set("mac_address", mac)
+        out["mac_address"] = mac
+    if e.kind == "vms" and not first:
+        model = next((k for k, v in o.items() if MAC_RE.match(v)), options(conf.get(nic))[0])
+        if model not in VM_NIC_MODELS:
+            e.blockers.append(f"{nic} model {model or 'unknown'}: not one the module knows")
+        elif model != "virtio":
+            out["model"] = model
     if flag(o, "firewall"):
-        e.set("firewall", True)
+        out["firewall"] = True
     for k in ("mtu", "queues") if e.kind == "vms" else ("mtu",):
         if re.fullmatch(r"\d+", o.get(k) or "") and int(o[k]) > 0:
-            e.set(k, int(o[k]))
-    for k in ("rate", "link_down") if e.kind == "vms" else ("rate", "link_down", "queues"):
+            out[k] = int(o[k])
+    if e.kind == "vms" and not first and flag(o, "link_down"):
+        out["disconnected"] = True
+    for k in ("rate",) + (("link_down",) if first or e.kind == "containers" else ()) + (
+            ("queues",) if e.kind == "containers" else ()):
         if o.get(k) not in (None, "", "0"):
             e.notes.append(f"{nic} {k}={o[k]}: the modules don't set it, the plan removes it")
     if ip and ip not in ("dhcp", "manual"):
-        e.set("ipv4_address", ip)
-        if gw and gw != d.get("ipv4_gateway"):
-            e.set("ipv4_gateway", gw)
-        elif not gw and d.get("ipv4_gateway"):
+        out["ipv4_address"] = ip
+        if gw and (gw != d.get("ipv4_gateway") or not first):
+            out["ipv4_gateway"] = gw
+        elif not gw and d.get("ipv4_gateway") and first and gw_elsewhere:
+            out["ipv4_gateway"] = ""   # the default route is on another NIC: none here, not the default gateway
+        elif not gw and d.get("ipv4_gateway") and first:
             e.notes.append("no gateway in Proxmox: the entry gets defaults.ipv4_gateway")
-    elif ip == "manual":
-        e.notes.append(f"{nic} ip=manual: the modules set dhcp")
+    elif ip == "dhcp" and e.kind == "vms" and not first:   # an extra VM NIC has no ipconfigN by default
+        out["ipv4_address"] = "dhcp"
+    elif ip == "manual" or (not ip and e.kind == "containers" and not first):
+        e.notes.append(f"{nic} {'ip=manual' if ip else 'has no IPv4 setting'}: the modules set dhcp")
     if ip6 == "manual":
         e.notes.append(f"{nic} ip6=manual: the modules set no IPv6, the plan removes it")
     elif ip6:   # "auto" (SLAAC), "dhcp" or address/prefix, as the modules take it
-        e.set("ipv6_address", ip6)
+        out["ipv6_address"] = ip6
         if ip6 not in ("auto", "dhcp"):
-            if gw6 and gw6 != d.get("ipv6_gateway"):
-                e.set("ipv6_gateway", gw6)
-            elif not gw6 and d.get("ipv6_gateway"):
+            if gw6 and (gw6 != d.get("ipv6_gateway") or not first):
+                out["ipv6_gateway"] = gw6
+            elif not gw6 and d.get("ipv6_gateway") and first:
                 e.notes.append("no IPv6 gateway in Proxmox: the entry gets defaults.ipv6_gateway")
+    if first:
+        for k, v in out.items():
+            e.set(k, v)
+    return out
+
+
+def nic_slots(e: Entry, conf: dict, what: str) -> list[str]:
+    """The guest's netN keys; a blocker when they are not net0, net1, ... without a gap (the provider numbers the
+    modules' NICs by position)."""
+    n = nets(conf)
+    if not n:
+        e.blockers.append(f"no {what}: the module has at least one")
+    elif n != [f"net{i}" for i in range(len(n))]:
+        e.blockers.append(f"{what}s {', '.join(n)} have a gap: the module numbers them net0, net1, ... in list "
+                          "order")
+    return n
 
 
 def vm_entry(g: dict, ctx: dict) -> Entry:
@@ -417,21 +452,21 @@ def vm_entry(g: dict, ctx: dict) -> Entry:
         e.notes.append(f"serial ports {', '.join(f'{k} {conf[k]}' for k in serials)}: the module has one, "
                        "serial0 socket")
 
-    n = nets(conf)
-    if not n:
-        e.blockers.append("no network device: the module has one")
-    elif len(n) > 1:
-        e.blockers.append(f"{len(n)} network devices ({', '.join(n)}): the module has one")
-    else:
+    n = nic_slots(e, conf, "network device")
+    if n:
         first, o = options(conf[n[0]])
         model = next((k for k, v in o.items() if MAC_RE.match(v)), first)
         if model != "virtio":
             e.blockers.append(f"{n[0]} model {model or 'unknown'}: the module sets virtio, the guest sees a new NIC")
-        idx = n[0][3:]
-        _, ic = options(conf.get(f"ipconfig{idx}"))
-        if n[0] != "net0":
-            e.blockers.append(f"the only NIC is {n[0]}: the module's is net0")
-        network(e, conf, ctx, n[0], ic.get("ip"), ic.get("gw"), ic.get("ip6"), ic.get("gw6"))
+        extra, ics = [], [options(conf.get(f"ipconfig{k[3:]}"))[1] for k in n]
+        for pos, k in enumerate(n):
+            ic = ics[pos]
+            nic = network(e, conf, ctx, k, ic.get("ip"), ic.get("gw"), ic.get("ip6"), ic.get("gw6"), pos,
+                          any(c.get("gw") for c in ics[1:]))
+            if pos:
+                extra.append(nic)
+        if extra:
+            e.set("extra_nics", extra)
         if cloudinit:
             servers = str(conf.get("nameserver") or "").split()
             if servers and servers != d.get("dns_servers"):
@@ -567,18 +602,20 @@ def lxc_entry(g: dict, ctx: dict) -> Entry:
         e.set("console", False)
     if conf.get("arch") not in (None, "amd64"):
         e.notes.append(f"arch {conf['arch']}: the module doesn't set it")
-    n = nets(conf)
-    if not n:
-        e.blockers.append("no network interface: the module has one")
-    elif len(n) > 1:
-        e.blockers.append(f"{len(n)} network interfaces ({', '.join(n)}): the module has one")
-    else:
+    n = nic_slots(e, conf, "network interface")
+    if n:
         _, no = options(conf[n[0]])
         if no.get("name", "eth0") != "eth0":
-            e.blockers.append(f"interface name {no.get('name')}: the module names it eth0")
-        if n[0] != "net0":
-            e.blockers.append(f"the only interface is {n[0]}: the module's is net0")
-        network(e, conf, ctx, n[0], no.get("ip"), no.get("gw"), no.get("ip6"), no.get("gw6"))
+            e.blockers.append(f"interface name {no.get('name')}: the module names the first one eth0")
+        extra, nos = [], [options(conf[k])[1] for k in n]
+        for pos, k in enumerate(n):
+            no = nos[pos]
+            nic = network(e, conf, ctx, k, no.get("ip"), no.get("gw"), no.get("ip6"), no.get("gw6"), pos,
+                          any(c.get("gw") for c in nos[1:]))
+            if pos:
+                extra.append(nic)
+        if extra:
+            e.set("extra_nics", extra)
     servers = str(conf.get("nameserver") or "").split()
     if servers:
         e.set("dns_servers", servers)
@@ -716,7 +753,8 @@ def plan(cfg: dict, site_name: str | None, wanted: list[str]) -> dict:
         if unsupported:
             attrs = dict(e.attrs)
             for n in unsupported:   # what an older template would change for the worse: no entry then
-                why = {"mount_points": "the plan would remove them", "os_type": f"{attrs.get(n)} would become l26",
+                why = {"mount_points": "the plan would remove them", "extra_nics": "the plan would remove the NICs",
+                       "os_type": f"{attrs.get(n)} would become l26",
                        "machine": "the default i440fx changes the guest's PCI layout" if "q35" in str(
                            attrs.get(n)) else ""}.get(n)
                 if why:
