@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+- Importing existing guests: the OpenTofu modules carry what an older guest has, so the first plan of a
+  `tofu_import_plan.py` entry shows only the `tofu` tag and the description (on a real site: 83 of 95 guests,
+  up from 2). New optional attributes, which plan as before when left out: for VMs `os_type`, `sockets`, `numa`,
+  `cpu_flags`, `memory_floating_mib`, `startup`, `scsi_hardware`, `tablet_device`, `agent_trim`, the NIC's
+  `firewall`/`mtu`/`queues`, the root disk's `disk_cache`/`disk_discard`/`disk_iothread`/`disk_ssd`/`disk_backup`
+  (and the same per `extra_disks` item), and for a VM without cloud-init `cloud_init_drive = false`,
+  `serial_socket = false` and `cdrom`; for containers `keyctl`, `fuse`, `mknod`, `mount_types`, `features = false`,
+  `mount_points`, `startup`, `console_mode`/`tty_count`/`console`, `firewall` and `mtu`. The script also copies
+  `machine` and a non-Linux OS type, so `q35`, Windows guests and LXC mount points are no longer blockers; it needs
+  a `proxmox_inventory.py --details` snapshot from this version. An upgrade note offers the module and environment
+  merge ([#149](https://github.com/mhaluska/homelab-manager-skill/issues/149)).
+
 ## 0.61.0 — 2026-11-25
 - `init_repo.py --sync-managed` no longer adds the template's `permissions.allow` rules back to `.claude/settings.json`
   after the user removed them: `--sync-managed`, and `--components`/`--add-components` on an existing repo, merge only
