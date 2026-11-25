@@ -132,23 +132,31 @@ changing anything, show the user the jobs (`jq .backup_jobs discovery/proxmox.js
 `all`/`vmid`/`exclude`/`pool`) and ask which job each guest belongs in. Often the fix is an `all` job with
 `exclude`, or a pool job, rather than a longer VMID list.
 
-- **Declarative (preferred)**: `proxmox_backup_job` (bpg provider) in the environment's own file, e.g.
-  `tofu/environments/homelab/backup-jobs.tf`. Import the existing job first, so nothing is recreated:
-  ```hcl
-  import {
-    to = proxmox_backup_job.daily
-    id = "<job id>"          # backup_jobs[].id
-  }
-  resource "proxmox_backup_job" "daily" {
-    id       = "<job id>"
-    schedule = "<as now>"
-    storage  = "<as now>"
-    vmid     = ["101", "102"] # or all = true + exclude = [...], or pool = "..."
-    # copy every other setting the job has now (mode, compress, retention/prune_backups, notification)
-  }
-  ```
-  Plan until it shows `1 to import` and only the intended change, then approval and apply.
-- **Token rights**: the provisioning role can't edit backup jobs, so the API answers 403. Offer the optional
+- **Declarative (preferred)**: `backup_jobs` in the site's `homelab.auto.tfvars`, the map key being the job ID;
+  `backup-jobs.tf` in the environment turns each into a `proxmox_backup_job`. (An environment without that file:
+  copy it from the template's `tofu/environments/homelab/`.) Bring a job under OpenTofu before changing it:
+  1. The snapshot's `backup_jobs[]` has the ID (the import ID) and the main settings: schedule, storage,
+     all/vmid/exclude/pool, node, enabled, comment. The plan in step 3 shows the rest.
+  2. Entry plus a temporary import block (in `backup-jobs.tf` or an `imports.tf` next to it):
+     ```hcl
+     import {
+       to = proxmox_backup_job.this["<job id>"]
+       id = "<job id>"
+     }
+     ```
+     ```hcl
+     backup_jobs = {
+       "<job id>" = { schedule = "<as now>", storage = "<as now>", all = true, exclude = [105] } # or vmid / pool
+     }
+     ```
+  3. `tofu plan`: the goal is `1 to import, 0 to add, 0 to change`. Each `~` line is a setting the entry lacks
+     (mode, compress, prune_backups, notes_template, mailto, fleecing, …): copy the job's value into the entry and
+     plan again. A setting the object has no attribute for: tell the user, add it to the variable and the resource
+     in `backup-jobs.tf` (the provider's `proxmox_backup_job` arguments).
+  4. Approval, apply, remove the import block, commit. Only then the intended change (e.g. a guest into `vmid` or
+     out of `exclude`), as its own plan: expect `1 to change` on that job.
+- **Token rights**: the import only reads the job, which the provisioning token may; changing or creating one
+  needs more, and without it the API answers 403. Offer the optional
   grant in the repo's `docs/proxmox-tokens.md` ("Backup jobs": which rights, and why only on the backup storage) —
   the user runs it on a node — or the GUI instead:
   Datacenter → Backup → the job → Edit → add the guests. Re-run `proxmox_inventory.py` and drift afterwards.

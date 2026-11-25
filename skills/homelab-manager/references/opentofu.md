@@ -3,7 +3,8 @@
 Layout: `tofu/modules/{proxmox-vm,proxmox-lxc,cloud-image-base}`, one environment per
 directory under `tofu/environments/` (default `homelab`; another site: its name, proxmox.md "Several sites").
 Provider: `bpg/proxmox`.
-Desired state is data in `homelab.auto.tfvars`; edit data, not module calls.
+Desired state is data in `homelab.auto.tfvars`; edit data, not module calls. Besides guests and base images it
+holds `lxc_templates` (proxmox.md "LXC containers") and `backup_jobs` (`backup-jobs.tf`, proxmox.md "Backup jobs").
 
 ## Entry attributes
 

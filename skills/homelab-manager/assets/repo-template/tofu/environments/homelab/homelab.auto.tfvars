@@ -67,3 +67,14 @@ containers = {
   #   # ipv6_address ("dhcp", "auto" for SLAAC, or CIDR) and ipv6_gateway (static only; else defaults)
   # }
 }
+
+# vzdump jobs (backup-jobs.tf). Import an existing job before its first plan; the key is its job ID.
+backup_jobs = {
+  # "backup-3f2a9c1e-5b7d" = {
+  #   schedule = "21:00"
+  #   storage  = "pbs1"
+  #   all      = true          # or vmid = [101, 102], or pool = "..."
+  #   exclude  = [105]
+  #   # copy every other setting the job has: mode, compress, prune_backups, notes_template, comment, ...
+  # }
+}
