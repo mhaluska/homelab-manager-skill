@@ -1,0 +1,15 @@
+# Lists shared by check-updates.yml, patch-linux.yml and the dist-upgrade playbooks. Plugin-managed: don't edit
+# them here; in group_vars, autoremove_protect replaces the first list and failed_units_ignore adds units.
+
+# autoremove never removes these (shell-style patterns) without a look first: losing them can lock Ansible out
+# (GitHub issue #58). Override with autoremove_protect in group_vars.
+hm_autoremove_protect: [sssd*, libsss*, libnss-*, libpam-*, nss-*, pam*, freeipa-*, ipa-*, krb5-*, libkrb5*,
+                        realmd, adcli, winbind*, oddjob*, openssh-*, ssh, sudo*, polkit*, systemd*, dbus*,
+                        network*, netplan*, ifupdown*, NetworkManager*, dhcp*, isc-dhcp-*, resolvconf,
+                        cloud-init, python3, python3-apt, python3-dnf*, chrony*, ntp*]
+
+# units that can't work in an LXC container (kernel modules, kernel filesystems, audit) and fail on every boot
+# there: not counted as new failures in LXC guests; add your own in group_vars failed_units_ignore.
+lxc_failed_units_ignore: [auth-rpcgss-module.service, systemd-modules-load.service, systemd-binfmt.service,
+                          proc-sys-fs-binfmt_misc.mount, sys-kernel-config.mount, sys-kernel-debug.mount,
+                          sys-kernel-tracing.mount, systemd-journald-audit.socket]

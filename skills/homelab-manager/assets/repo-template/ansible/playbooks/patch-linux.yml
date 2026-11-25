@@ -276,6 +276,7 @@
   max_fail_percentage: 0
   any_errors_fatal: true
   become: true
+  vars_files: [vars/patch-lists.yml]   # hm_autoremove_protect, lxc_failed_units_ignore
   vars:
     security_only: false
     allow_reboot: false
@@ -287,17 +288,6 @@
     snapshot_name: "prepatch-{{ now().strftime('%Y%m%d') }}"
     # never restarted automatically (a reboot or the user's own step instead): restarting these drops sessions
     restart_exclude: [dbus.service, dbus-broker.service, systemd-logind.service]
-    # autoremove never removes these (shell-style patterns) without a look first: losing them can lock Ansible
-    # out (GitHub issue #58). Override with autoremove_protect in group_vars; the same list is in check-updates.yml
-    hm_autoremove_protect: [sssd*, libsss*, libnss-*, libpam-*, nss-*, pam*, freeipa-*, ipa-*, krb5-*, libkrb5*,
-                            realmd, adcli, winbind*, oddjob*, openssh-*, ssh, sudo*, polkit*, systemd*, dbus*,
-                            network*, netplan*, ifupdown*, NetworkManager*, dhcp*, isc-dhcp-*, resolvconf,
-                            cloud-init, python3, python3-apt, python3-dnf*, chrony*, ntp*]
-    # units that can't work in an LXC container (kernel modules, kernel filesystems, audit) and fail on every
-    # boot there: not counted as new failures in LXC guests; add your own in group_vars failed_units_ignore
-    lxc_failed_units_ignore: [auth-rpcgss-module.service, systemd-modules-load.service, systemd-binfmt.service,
-                              proc-sys-fs-binfmt_misc.mount, sys-kernel-config.mount, sys-kernel-debug.mount,
-                              sys-kernel-tracing.mount, systemd-journald-audit.socket]
 
   pre_tasks:
     - name: reboot is never, if_required or always
