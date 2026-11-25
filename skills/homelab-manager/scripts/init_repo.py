@@ -230,6 +230,13 @@ def upgrades(target: Path) -> list[tuple[str, callable]]:
             out.append((f"add the template's permission rules to .claude/settings.json ({', '.join(missing)}); "
                         "nothing is removed",
                         lambda: merge_settings(TEMPLATE / ".claude" / "settings.json", settings, TIGHTENING)))
+    import scheduled_check   # the user installed it: keep it on this plugin version (GitHub issue #150)
+    if (target / "homelab.yaml").exists() and scheduled_check.outdated(target):
+        def repoint():
+            err = scheduled_check.repoint(target)
+            if err:
+                print(f"scheduled check: launchctl refused the new job: {err}", file=sys.stderr)
+        out.append(("point the scheduled check (LaunchAgent) at this plugin version, at the same time", repoint))
     cfg = target / "homelab.yaml"
     if cfg.exists():
         r = subprocess.run([hmlib.yq_bin(), "-o=json", ".issues // {} | keys", str(cfg)], capture_output=True,
