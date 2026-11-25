@@ -73,3 +73,14 @@ pveum acl modify /storage/<backup-storage> --tokens 'homelab@pve!rw' --roles Hom
 ```
 Pool-based jobs also need `VM.Backup` on `/pool/<pool>`. Without this grant, edit jobs in the GUI
 (Datacenter → Backup).
+
+### PCI passthrough (optional)
+
+Only for VMs with `pci_devices` (a GPU, NIC or HBA through a resource mapping, Datacenter → Resource Mappings).
+Using a mapping needs `Mapping.Use` on it; grant it per mapping, `<mapping>` being its ID (e.g. `gpu`):
+```bash
+pveum role add HomelabMappingUse -privs "Mapping.Use"
+pveum acl modify /mapping/pci/<mapping> --users homelab@pve --roles HomelabMappingUse
+pveum acl modify /mapping/pci/<mapping> --tokens 'homelab@pve!rw' --roles HomelabMappingUse
+```
+Raw PCI IDs (no mapping) need `root@pam`; the skill doesn't use them.

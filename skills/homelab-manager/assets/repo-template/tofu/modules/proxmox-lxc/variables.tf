@@ -62,6 +62,24 @@ variable "ipv4_gateway" {
   type    = string
   default = null
 }
+variable "ipv6_address" {
+  type        = string
+  default     = null
+  description = "null: no IPv6 settings (as before); \"dhcp\" (DHCPv6), \"auto\" (SLAAC) or CIDR, e.g. fd00:10::21/64"
+  validation {
+    condition     = var.ipv6_address == null || try(contains(["dhcp", "auto"], var.ipv6_address) || strcontains(var.ipv6_address, ":") && can(regex("/\\d{1,3}$", var.ipv6_address)) && can(cidrhost(var.ipv6_address, 0)), false)
+    error_message = "ipv6_address must be \"dhcp\", \"auto\" (SLAAC) or an IPv6 address with its prefix length, e.g. fd00:10::21/64."
+  }
+}
+variable "ipv6_gateway" {
+  type        = string
+  default     = null
+  description = "Only with a static ipv6_address (dhcp and auto take the router's advertisement)."
+  validation {
+    condition     = var.ipv6_gateway == null || try(strcontains(var.ipv6_gateway, ":") && can(cidrhost("${var.ipv6_gateway}/128", 0)), false)
+    error_message = "ipv6_gateway must be an IPv6 address without a prefix length, e.g. fe80::1."
+  }
+}
 variable "dns_servers" {
   type        = list(string)
   default     = []

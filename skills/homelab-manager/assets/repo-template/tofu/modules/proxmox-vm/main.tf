@@ -62,6 +62,19 @@ resource "proxmox_virtual_environment_vm" "this" {
 
   serial_device {}
 
+  # PCI passthrough through resource mappings (Datacenter → Resource Mappings) only: raw device IDs need root@pam.
+  machine = var.machine
+  dynamic "hostpci" {
+    for_each = var.pci_devices
+    content {
+      device  = "hostpci${hostpci.key}"
+      mapping = hostpci.value.mapping
+      pcie    = hostpci.value.pcie
+      rombar  = hostpci.value.rombar
+      xvga    = hostpci.value.xvga
+    }
+  }
+
   initialization {
     datastore_id = var.datastore
     ip_config {
@@ -69,21 +82,68 @@ resource "proxmox_virtual_environment_vm" "this" {
         address = var.ipv4_address
         gateway = var.ipv4_address == "dhcp" ? null : var.ipv4_gateway
       }
+      dynamic "ipv6" {
+        for_each = var.ipv6_address == null ? [] : [1]
+        content {
+          address = var.ipv6_address
+          gateway = contains(["dhcp", "auto"], var.ipv6_address) ? null : var.ipv6_gateway
+        }
+      }
     }
     dns {
       servers = length(var.dns_servers) > 0 ? var.dns_servers : null
       domain  = var.dns_domain
     }
-    user_account {
-      username = var.admin_user
-      keys     = var.ssh_public_keys
+    # A user-data snippet replaces the built-in user data (the provider refuses both), so it must create the
+    # admin user and keys itself. Vendor data merges with it.
+    dynamic "user_account" {
+      for_each = var.cloud_init_user_snippet == null ? [1] : []
+      content {
+        username = var.admin_user
+        keys     = var.ssh_public_keys
+      }
     }
+    vendor_data_file_id = try(proxmox_virtual_environment_file.cloud_init["vendor"].id, null)
+    user_data_file_id   = try(proxmox_virtual_environment_file.cloud_init["user"].id, null)
   }
 
   lifecycle {
     # The template is only the starting point. A new template version must never
     # rebuild running VMs, and cloud-init user data only applies at first boot.
-    ignore_changes = [clone, initialization[0].user_account]
+    ignore_changes = [clone, initialization[0].user_account, initialization[0].vendor_data_file_id,
+    initialization[0].user_data_file_id]
+    precondition {
+      condition     = !anytrue([for d in var.pci_devices : d.pcie]) || startswith(coalesce(var.machine, "pc"), "q35")
+      error_message = "VM ${var.name}: pci_devices with pcie = true need machine = \"q35\"."
+    }
+  }
+}
+
+# Cloud-init snippets (vendor and user data) from tofu/snippets/, uploaded over SSH to the node's snippets storage
+# under a name with the VMID, so entries never share a file. Like the user account they count at first boot only:
+# later edits of the file are not uploaded. The VM keeps pointing at the uploaded file, so it must stay while the
+# VM exists (Proxmox reads it whenever it rebuilds the cloud-init drive).
+resource "proxmox_virtual_environment_file" "cloud_init" {
+  for_each     = { for k, f in { vendor = var.cloud_init_snippet, user = var.cloud_init_user_snippet } : k => f if f != null }
+  content_type = "snippets"
+  datastore_id = var.snippets_datastore
+  node_name    = var.node
+
+  source_file {
+    path      = each.value
+    file_name = "vm-${var.vm_id}-${each.key}-data.yaml"
+  }
+
+  lifecycle {
+    ignore_changes = [source_file]
+    precondition {
+      condition     = var.snippets_datastore != null
+      error_message = "VM ${var.name}: a cloud-init snippet needs defaults.snippets_datastore (homelab.yaml proxmox.snippets_storage, a storage with snippets content)."
+    }
+    precondition {
+      condition     = fileexists(each.value)
+      error_message = "VM ${var.name}: cloud-init snippet ${each.value} not found (files live in tofu/snippets/)."
+    }
   }
 }
 

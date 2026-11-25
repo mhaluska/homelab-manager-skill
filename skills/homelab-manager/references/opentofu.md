@@ -3,19 +3,39 @@
 Layout: `tofu/modules/{proxmox-vm,proxmox-lxc,cloud-image-base}`, one environment per
 directory under `tofu/environments/` (default `homelab`; another site: its name, proxmox.md "Several sites").
 Provider: `bpg/proxmox`.
-Desired state is data in `homelab.auto.tfvars`; edit data, not module calls.
+Desired state is data in `homelab.auto.tfvars`; edit data, not module calls. Besides guests and base images it
+holds `lxc_templates` (proxmox.md "LXC containers") and `backup_jobs` (`backup-jobs.tf`, proxmox.md "Backup jobs").
 
 ## Entry attributes
 
 Optional per `vms`/`containers` entry (the default is what the template always did, so leaving them out changes
 nothing): `ipv4_gateway` (else `defaults.ipv4_gateway`; a guest on another VLAN needs its own), `on_boot` (true),
-`protection` (false), `description`; VMs also `cpu_type` (`x86-64-v2-AES`); containers `dns_servers`/`dns_domain`
-(else the node's DNS). `protection = true` sets the Proxmox protection flag: Proxmox refuses to delete the guest or
+`protection` (false), `description`; VMs also `cpu_type` (`x86-64-v2-AES`), `pci_devices` and `machine`
+(proxmox.md "PCI passthrough"); containers `dns_servers`/`dns_domain` (else the node's DNS). `protection = true` sets the Proxmox protection flag: Proxmox refuses to delete the guest or
 its disks, so a plan that destroys it fails at apply. Offer it for guests whose loss hurts (DNS, the NAS, the
 state bucket); turning it off is its own change and plan.
 
-The variables refuse a bad `ipv4_address` (not `dhcp` or address/prefix), `vlan_id` outside 1–4094, a VMID below
-100, an extra disk on `scsi0` or an unknown bus, and an unknown `checksum_algorithm`; the error names the entry.
+IPv6 (both kinds): `ipv6_address` is `auto` (SLAAC), `dhcp` (DHCPv6) or address/prefix (`fd00:10::21/64`);
+`ipv6_gateway` (else `defaults.ipv6_gateway`, often the router's link-local `fe80::1`) is used only with a static
+address, since SLAAC and DHCPv6 take it from the router advertisement. Without `ipv6_address` the guest gets no
+IPv6 settings (as before). On an existing VM it only changes the cloud-init drive, which the guest reads at a later
+boot; read the plan and tell the user (a container gets it right away).
+
+Cloud-init snippets (VMs): `cloud_init_snippet` names a file in `tofu/snippets/` (example:
+`example-vendor-data.yaml`) passed as vendor data, which merges with the built-in user data, so the admin user
+and keys keep working. `cloud_init_user_snippet` passes user data instead, which replaces the admin user and keys:
+the file must create them itself, or the VM is locked out. Propose vendor data unless the user needs user data.
+Both need `defaults.snippets_datastore` (homelab.yaml `proxmox.snippets_storage`, per site; a storage whose
+content includes `snippets` in `discovery/proxmox.json`, else the user enables it: Datacenter → Storage → Edit →
+Content) and SSH to the node (providers.tf, the agent's key). The file is uploaded as `vm-<vmid>-vendor-data.yaml`
+(or `-user-data`), on the VM's node. Like the user account it counts at creation only: editing the file or the
+attribute later changes nothing on the VM (Ansible does that). Removing the attribute from an existing VM deletes
+the uploaded file the VM still points to, and Proxmox then can't rebuild its cloud-init drive (the VM may not
+start): keep it in the entry for the VM's life.
+
+The variables refuse a bad `ipv4_address` (not `dhcp` or address/prefix), a bad `ipv6_address` or `ipv6_gateway`,
+`vlan_id` outside 1–4094, a VMID below 100, an extra disk on `scsi0` or an unknown bus, and an unknown
+`checksum_algorithm`; the error names the entry.
 A static address without a gateway, or with one outside its subnet, is a warning in the plan ("Check block
 assertion failed"): set the entry's `ipv4_gateway`, or tell the user the guest has no default route.
 
@@ -62,9 +82,9 @@ Classify each change. Common causes of unexpected **replace** with bpg:
 | `clone` block | (ignored in our module) | check a hand-written resource didn't miss `ignore_changes` |
 | LXC `operating_system`, `unprivileged` | container rebuild | revert, or approved rebuild |
 | LXC `dns_servers`/`dns_domain` on an existing container | may rebuild with some provider versions | read the plan; revert unless a rebuild is approved |
-
 A destroy or replace of a guest with `protection = true` fails at apply: turn protection off in a separate,
-approved change first.
+approved change first. A destroy of `…proxmox_virtual_environment_file.cloud_init` while its VM stays means a
+snippet attribute was removed: put it back (the VM still uses the file).
 
 Unexpected `~ update` on many resources usually means a provider upgrade or a default
 changed — explain, don't apply blindly.

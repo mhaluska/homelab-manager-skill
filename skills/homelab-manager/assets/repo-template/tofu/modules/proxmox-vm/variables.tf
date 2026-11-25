@@ -64,6 +64,24 @@ variable "ipv4_gateway" {
   type    = string
   default = null
 }
+variable "ipv6_address" {
+  type        = string
+  default     = null
+  description = "null: no IPv6 settings (as before); \"dhcp\" (DHCPv6), \"auto\" (SLAAC) or CIDR, e.g. fd00:10::21/64"
+  validation {
+    condition     = var.ipv6_address == null || try(contains(["dhcp", "auto"], var.ipv6_address) || strcontains(var.ipv6_address, ":") && can(regex("/\\d{1,3}$", var.ipv6_address)) && can(cidrhost(var.ipv6_address, 0)), false)
+    error_message = "ipv6_address must be \"dhcp\", \"auto\" (SLAAC) or an IPv6 address with its prefix length, e.g. fd00:10::21/64."
+  }
+}
+variable "ipv6_gateway" {
+  type        = string
+  default     = null
+  description = "Only with a static ipv6_address (dhcp and auto take the router's advertisement)."
+  validation {
+    condition     = var.ipv6_gateway == null || try(strcontains(var.ipv6_gateway, ":") && can(cidrhost("${var.ipv6_gateway}/128", 0)), false)
+    error_message = "ipv6_gateway must be an IPv6 address without a prefix length, e.g. fe80::1."
+  }
+}
 variable "dns_servers" {
   type    = list(string)
   default = []
@@ -97,4 +115,38 @@ variable "protection" {
   default     = false
   nullable    = false
   description = "Proxmox protection flag: the guest and its disks can't be removed until it is turned off again."
+}
+variable "cloud_init_snippet" {
+  type        = string
+  default     = null
+  description = "Path of a cloud-init vendor data file, merged with the built-in user data (admin user, keys). Ignored after creation."
+}
+variable "cloud_init_user_snippet" {
+  type        = string
+  default     = null
+  description = "Path of a cloud-init user data file. It replaces the built-in user data: it must create the admin user and keys itself. Ignored after creation."
+}
+variable "machine" {
+  type        = string
+  default     = null
+  description = "Machine type, e.g. q35 (needed for pcie devices); null leaves it to the provider, as before."
+}
+variable "pci_devices" {
+  type = list(object({
+    mapping = string                # a PCI resource mapping (Datacenter → Resource Mappings), not a raw ID
+    pcie    = optional(bool, false) # PCIe port: needs machine q35
+    rombar  = optional(bool)
+    xvga    = optional(bool) # primary GPU of the VM
+  }))
+  default  = []
+  nullable = false
+  validation {
+    condition     = length(var.pci_devices) <= 16 && alltrue([for d in var.pci_devices : can(regex("^[A-Za-z][A-Za-z0-9_.-]*$", d.mapping))])
+    error_message = "pci_devices: at most 16, each naming a PCI resource mapping by its ID, e.g. gpu."
+  }
+}
+variable "snippets_datastore" {
+  type        = string
+  default     = null
+  description = "Storage with snippets content the snippet files are uploaded to (over SSH, on var.node)."
 }
