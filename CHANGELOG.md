@@ -1,5 +1,79 @@
 # Changelog
 
+## Unreleased
+- `init_repo.py --sync-managed` no longer adds the template's `permissions.allow` rules back to `.claude/settings.json`
+  after the user removed them: `--sync-managed`, and `--components`/`--add-components` on an existing repo, merge only
+  `deny` and `ask` rules. A new repo still gets the git `add`/`commit` allow rules at setup; repos set up before
+  0.56.0 are offered them with the declinable upgrade note `settings-allow-git` ([#157](https://github.com/mhaluska/homelab-manager-skill/issues/157)).
+- Packer build choices live in `homelab.yaml`: `templates.sshd_hardening` (default true) and
+  `templates.unattended_updates` (`distro`, `security` or `off`; default `distro`), per site under
+  `sites[].templates`. Builds write them into the site's pkrvars file, and `config_set.py` refuses values Packer
+  would refuse. An upgrade note moves a choice recorded in `docs/templates.md` into `homelab.yaml` ([#158](https://github.com/mhaluska/homelab-manager-skill/issues/158)).
+- Security audit: `security-audit.yml` also reads each Proxmox Backup Server's ACLs, user and token ids and datastore
+  names, and the names (never the content) of the Proxmox nodes' storage encryption keys; it now runs on
+  `proxmox_nodes` by default. `security_audit.py` judges them: a backup client or API token that can prune or
+  delete backups (`DatastoreAdmin`/`Admin` medium, `DatastorePowerUser` low; fix: `DatastoreBackup` plus a PBS
+  prune job), and a `pbs` storage without an encryption key (low; medium when its PBS is on another site or outside
+  the site's ranges). PBS leaves "Still to check by hand" ([#148](https://github.com/mhaluska/homelab-manager-skill/issues/148)).
+- New `playbooks/patch-windows.yml` installs Windows updates one host at a time with `ansible.windows.win_updates`:
+  SecurityUpdates and CriticalUpdates unless `-e categories=…`, no reboot unless `-e reboot=true`, a stop at the
+  first failure, and an optional Proxmox snapshot first as in patch-linux.yml. `--check` lists what would be
+  installed; only the target's `windows` hosts are patched. An upgrade note offers it to repos with the windows
+  component ([#153](https://github.com/mhaluska/homelab-manager-skill/issues/153)).
+- New hook `playbooks/hooks/k8s-health.yml` for rolling Kubernetes patches: after each node the roll waits until the
+  node is Ready and uncordoned, every node is Ready and no pod is Pending (`k8s_pending_ignore`), or it stops ([#155](https://github.com/mhaluska/homelab-manager-skill/issues/155)).
+- `pve_guest.py shutdown` shuts a guest down cleanly within `--timeout` (default 180 s) and never forces it;
+  `pve_guest.py stop` stops it hard. The guard asks for both ([#155](https://github.com/mhaluska/homelab-manager-skill/issues/155)).
+- `check_env.py` warns about the skill's Proxmox tokens without an expiry or expiring within 30 days, and fails on an
+  expired one. Proxmox records no creation time, so there is no age limit ([#155](https://github.com/mhaluska/homelab-manager-skill/issues/155)).
+- New template doc `docs/recovery.md`: what to keep ready, a lost Mac, a lost OpenTofu state, rebuilding the keychain
+  items, and a restore test (a backup restored to a new VMID with new MACs on an isolated bridge, booted, checked and
+  removed, each step with the user's yes). An upgrade note offers it to existing repos ([#155](https://github.com/mhaluska/homelab-manager-skill/issues/155), [#151](https://github.com/mhaluska/homelab-manager-skill/issues/151)).
+- Storage health in OVERVIEW.md: `proxmox_inventory.py` records each node's ZFS pools (state, errors, last scrub,
+  faulted disks), disk SMART health and wear, replication jobs and, where a storage uses the cluster's own Ceph,
+  Ceph health, with the read-only token; a read a node refuses is one note, not an error. OVERVIEW.md gets a
+  Storage health section per site and warns about a pool not ONLINE or with errors, no scrub within
+  `overview.scrub_max_age_days` (35), a disk failing SMART or worn `overview.disk_wearout_max_pct` (80) % or more,
+  Ceph not HEALTH_OK, and a replication job that fails or is over an hour late ([#152](https://github.com/mhaluska/homelab-manager-skill/issues/152)).
+- PBS datastores: with an optional read-only PBS token (new key `pbs: [{server, token}]`, secret kind `pbs_token`,
+  role DatastoreAudit, see `docs/proxmox-tokens.md`), the inventory reads GC, prune and verify job runs and how
+  many snapshots are verified for each datastore behind a `pbs` storage; the PBS certificate is pinned to the
+  storage's fingerprint. OVERVIEW.md lists them under Backups and warns about a failed job, a GC or prune older
+  than `overview.pbs_max_age_days` (7), failed verifications, or a snapshot waiting longer than that to be
+  verified ([#151](https://github.com/mhaluska/homelab-manager-skill/issues/151)).
+- OpenTofu template: IPv6 for VMs and containers (`ipv6_address`: `auto` for SLAAC, `dhcp`, or address/prefix;
+  `ipv6_gateway`), checked like the IPv4 values; without `ipv6_address` a guest plans as before ([#155](https://github.com/mhaluska/homelab-manager-skill/issues/155)).
+- Cloud-init snippets per VM: `cloud_init_snippet` names a file in `tofu/snippets/` passed as vendor data, which
+  merges with the built-in admin user and keys; `cloud_init_user_snippet` passes user data that replaces them.
+  Files are uploaded to `proxmox.snippets_storage` and count at creation only, like the user account ([#154](https://github.com/mhaluska/homelab-manager-skill/issues/154)).
+- PCI passthrough through resource mappings only (`pci_devices = [{ mapping = "gpu", pcie = true }]`,
+  `machine = "q35"`): raw device IDs need `root@pam`. A VM with devices names its node; `docs/proxmox-tokens.md`
+  has the optional `Mapping.Use` grant ([#155](https://github.com/mhaluska/homelab-manager-skill/issues/155)).
+- LXC templates downloaded by OpenTofu: `lxc_templates` entries (URL and required checksum) and
+  `template = "<key>"` in a container instead of `template_file_id` ([#155](https://github.com/mhaluska/homelab-manager-skill/issues/155)).
+- `backup-jobs.tf` manages vzdump backup jobs as `backup_jobs` data keyed by job ID; `references/proxmox.md` has
+  the import steps, with IDs from the snapshot's `backup_jobs` ([#151](https://github.com/mhaluska/homelab-manager-skill/issues/151)).
+- The VM and container modules set `migrate = true`: changing a guest's `node` migrates it instead of destroying
+  and re-creating it, as `references/proxmox.md` already assumed. The first plan may show `migrate` changing on
+  every guest; it only changes state.
+- `tofu_import_plan.py` turns guests OpenTofu doesn't manage yet into `import {}` blocks and `vms`/`containers`
+  entries that copy what Proxmox has now, MAC address included; a comment above each entry lists what the first
+  plan will still change, and guests the modules can't represent are listed for `docs/decisions.md`. It prints by
+  default; `--write` adds to `imports.tf` and `homelab.auto.tfvars` without touching existing entries. VM and LXC
+  entries take an optional `mac_address`, and `proxmox_inventory.py --details` keeps the settings an entry copies
+  (re-run it before the first import plan) ([#149](https://github.com/mhaluska/homelab-manager-skill/issues/149)).
+- `proxmox_inventory.py` without `--details` keeps the previous snapshot's backup source, so OVERVIEW.md no longer
+  loses the "Last backup" column and backup-age warnings until the next `--details` run.
+- New `scheduled_check.py`: an optional LaunchAgent (`install --time HH:MM`, `status`, `uninstall`; the guard asks
+  for install and uninstall, and for `launchctl` loading a job) runs a fixed read-only check every day: the Proxmox
+  snapshot refreshed with the read-only token and OVERVIEW.md rendered in memory. A macOS notification names new
+  warnings or a step that could not run; it commits nothing and runs no SSH or Ansible. `--sync-managed` points an
+  installed job at the new plugin version ([#150](https://github.com/mhaluska/homelab-manager-skill/issues/150)).
+- Exit codes (references/discovery.md "Exit codes"): 1 means the script ran and found something, 4 that it could
+  not run. An unreachable Proxmox API now exits 4 (`proxmox_inventory.py`, `pve_guest.py`, `pve_snapshot.py`),
+  as does `routeros_audit.py` when no device answers (was 2); a missing report counts as stale in
+  `drift_report.py --stale` and `overview.py --check` (1, was 2) ([#156](https://github.com/mhaluska/homelab-manager-skill/issues/156)).
+
 ## 0.60.0 — 2026-11-25
 - Evals: each case's `place-files.sh` scaffolds the current template with `init_repo.py` and merges only the
   case's own `homelab-values.yaml` and data, so fixtures no longer go stale with the template. New cases:
