@@ -52,6 +52,8 @@ module "vm" {
   vlan_id         = each.value.vlan_id
   ipv4_address    = each.value.ipv4_address
   ipv4_gateway    = each.value.ipv4_gateway != null ? each.value.ipv4_gateway : var.defaults.ipv4_gateway
+  ipv6_address    = each.value.ipv6_address
+  ipv6_gateway    = each.value.ipv6_gateway != null ? each.value.ipv6_gateway : var.defaults.ipv6_gateway
   dns_servers     = var.defaults.dns_servers
   dns_domain      = var.defaults.dns_domain
   admin_user      = var.defaults.admin_user
@@ -82,6 +84,8 @@ module "lxc" {
   vlan_id          = each.value.vlan_id
   ipv4_address     = each.value.ipv4_address
   ipv4_gateway     = each.value.ipv4_gateway != null ? each.value.ipv4_gateway : var.defaults.ipv4_gateway
+  ipv6_address     = each.value.ipv6_address
+  ipv6_gateway     = each.value.ipv6_gateway != null ? each.value.ipv6_gateway : var.defaults.ipv6_gateway
   dns_servers      = each.value.dns_servers
   dns_domain       = each.value.dns_domain
   unprivileged     = each.value.unprivileged

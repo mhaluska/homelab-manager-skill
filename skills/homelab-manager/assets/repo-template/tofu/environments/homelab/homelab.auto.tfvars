@@ -16,6 +16,7 @@
 #   dns_servers     = ["10.0.10.1"]
 #   dns_domain      = "home.arpa"
 #   ipv4_gateway    = "10.0.10.1"
+#   ipv6_gateway    = "fe80::1"              # optional, for entries with a static ipv6_address
 # }
 
 base_images = {
@@ -39,7 +40,8 @@ vms = {
   #   tags           = ["rocky"]
   #   ansible_groups = ["rocky"]
   #   # optional: ipv4_gateway (else defaults), vlan_id, cpu_type ("x86-64-v2-AES"), on_boot (true),
-  #   # protection (false; true: Proxmox refuses to delete it), description, started (true), extra_disks
+  #   # protection (false; true: Proxmox refuses to delete it), description, started (true), extra_disks,
+  #   # ipv6_address ("dhcp", "auto" for SLAAC, or CIDR) and ipv6_gateway (static only; else defaults)
   # }
 }
 
@@ -49,6 +51,7 @@ containers = {
   #   template_file_id = "local:vztmpl/debian-13-standard_13.1-2_amd64.tar.zst"
   #   ipv4_address     = "10.0.10.31/24"
   #   # optional: ipv4_gateway, vlan_id, dns_servers / dns_domain (else the node's), on_boot (true),
-  #   # protection (false), description, cores, memory_mib, swap_mib, disk_gib, unprivileged, nesting
+  #   # protection (false), description, cores, memory_mib, swap_mib, disk_gib, unprivileged, nesting,
+  #   # ipv6_address ("dhcp", "auto" for SLAAC, or CIDR) and ipv6_gateway (static only; else defaults)
   # }
 }

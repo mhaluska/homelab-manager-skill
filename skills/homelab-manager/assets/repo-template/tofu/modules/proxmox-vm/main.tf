@@ -69,6 +69,13 @@ resource "proxmox_virtual_environment_vm" "this" {
         address = var.ipv4_address
         gateway = var.ipv4_address == "dhcp" ? null : var.ipv4_gateway
       }
+      dynamic "ipv6" {
+        for_each = var.ipv6_address == null ? [] : [1]
+        content {
+          address = var.ipv6_address
+          gateway = contains(["dhcp", "auto"], var.ipv6_address) ? null : var.ipv6_gateway
+        }
+      }
     }
     dns {
       servers = length(var.dns_servers) > 0 ? var.dns_servers : null

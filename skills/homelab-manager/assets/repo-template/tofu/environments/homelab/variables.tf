@@ -21,6 +21,7 @@ variable "defaults" {
     dns_servers     = optional(list(string), [])
     dns_domain      = optional(string)
     ipv4_gateway    = optional(string)
+    ipv6_gateway    = optional(string) # static ipv6_address entries
   })
 }
 
@@ -61,6 +62,8 @@ variable "vms" {
     vlan_id        = optional(number)
     ipv4_address   = optional(string, "dhcp")
     ipv4_gateway   = optional(string) # empty: defaults.ipv4_gateway
+    ipv6_address   = optional(string) # empty: no IPv6 settings; "dhcp", "auto" (SLAAC) or CIDR
+    ipv6_gateway   = optional(string) # static ipv6_address only; empty: defaults.ipv6_gateway
     cpu_type       = optional(string) # empty: x86-64-v2-AES
     description    = optional(string) # empty: "Managed by OpenTofu (homelab-infrastructure)"
     tags           = optional(list(string), [])
@@ -73,6 +76,10 @@ variable "vms" {
   validation {
     condition     = length([for k, v in var.vms : k if !(v.ipv4_address == "dhcp" || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$", v.ipv4_address)) && can(cidrhost(v.ipv4_address, 0)))]) == 0
     error_message = "vms ${join(", ", [for k, v in var.vms : k if !(v.ipv4_address == "dhcp" || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$", v.ipv4_address)) && can(cidrhost(v.ipv4_address, 0)))])}: ipv4_address must be \"dhcp\" or an IPv4 address with its prefix length, e.g. 10.0.10.21/24."
+  }
+  validation {
+    condition     = length([for k, v in var.vms : k if !(v.ipv6_address == null || try(contains(["dhcp", "auto"], v.ipv6_address) || strcontains(v.ipv6_address, ":") && can(regex("/\\d{1,3}$", v.ipv6_address)) && can(cidrhost(v.ipv6_address, 0)), false)) || !(v.ipv6_gateway == null || try(strcontains(v.ipv6_gateway, ":") && can(cidrhost("${v.ipv6_gateway}/128", 0)), false))]) == 0
+    error_message = "vms ${join(", ", [for k, v in var.vms : k if !(v.ipv6_address == null || try(contains(["dhcp", "auto"], v.ipv6_address) || strcontains(v.ipv6_address, ":") && can(regex("/\\d{1,3}$", v.ipv6_address)) && can(cidrhost(v.ipv6_address, 0)), false)) || !(v.ipv6_gateway == null || try(strcontains(v.ipv6_gateway, ":") && can(cidrhost("${v.ipv6_gateway}/128", 0)), false))])}: ipv6_address must be \"dhcp\", \"auto\" (SLAAC) or an IPv6 address with its prefix length, e.g. fd00:10::21/64; ipv6_gateway an IPv6 address, e.g. fe80::1."
   }
   validation {
     condition     = length([for k, v in var.vms : k if v.vlan_id != null && !try(v.vlan_id >= 1 && v.vlan_id <= 4094 && v.vlan_id == floor(v.vlan_id), false)]) == 0
@@ -104,6 +111,8 @@ variable "containers" {
     vlan_id          = optional(number)
     ipv4_address     = optional(string, "dhcp")
     ipv4_gateway     = optional(string)           # empty: defaults.ipv4_gateway
+    ipv6_address     = optional(string)           # empty: no IPv6 settings; "dhcp", "auto" (SLAAC) or CIDR
+    ipv6_gateway     = optional(string)           # static ipv6_address only; empty: defaults.ipv6_gateway
     dns_servers      = optional(list(string), []) # empty: the node's DNS settings
     dns_domain       = optional(string)
     description      = optional(string) # empty: "Managed by OpenTofu (homelab-infrastructure)"
@@ -119,6 +128,10 @@ variable "containers" {
   validation {
     condition     = length([for k, v in var.containers : k if !(v.ipv4_address == "dhcp" || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$", v.ipv4_address)) && can(cidrhost(v.ipv4_address, 0)))]) == 0
     error_message = "containers ${join(", ", [for k, v in var.containers : k if !(v.ipv4_address == "dhcp" || can(regex("^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$", v.ipv4_address)) && can(cidrhost(v.ipv4_address, 0)))])}: ipv4_address must be \"dhcp\" or an IPv4 address with its prefix length, e.g. 10.0.10.31/24."
+  }
+  validation {
+    condition     = length([for k, v in var.containers : k if !(v.ipv6_address == null || try(contains(["dhcp", "auto"], v.ipv6_address) || strcontains(v.ipv6_address, ":") && can(regex("/\\d{1,3}$", v.ipv6_address)) && can(cidrhost(v.ipv6_address, 0)), false)) || !(v.ipv6_gateway == null || try(strcontains(v.ipv6_gateway, ":") && can(cidrhost("${v.ipv6_gateway}/128", 0)), false))]) == 0
+    error_message = "containers ${join(", ", [for k, v in var.containers : k if !(v.ipv6_address == null || try(contains(["dhcp", "auto"], v.ipv6_address) || strcontains(v.ipv6_address, ":") && can(regex("/\\d{1,3}$", v.ipv6_address)) && can(cidrhost(v.ipv6_address, 0)), false)) || !(v.ipv6_gateway == null || try(strcontains(v.ipv6_gateway, ":") && can(cidrhost("${v.ipv6_gateway}/128", 0)), false))])}: ipv6_address must be \"dhcp\", \"auto\" (SLAAC) or an IPv6 address with its prefix length, e.g. fd00:10::31/64; ipv6_gateway an IPv6 address, e.g. fe80::1."
   }
   validation {
     condition     = length([for k, v in var.containers : k if v.vlan_id != null && !try(v.vlan_id >= 1 && v.vlan_id <= 4094 && v.vlan_id == floor(v.vlan_id), false)]) == 0

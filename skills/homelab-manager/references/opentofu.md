@@ -14,8 +14,15 @@ nothing): `ipv4_gateway` (else `defaults.ipv4_gateway`; a guest on another VLAN 
 its disks, so a plan that destroys it fails at apply. Offer it for guests whose loss hurts (DNS, the NAS, the
 state bucket); turning it off is its own change and plan.
 
-The variables refuse a bad `ipv4_address` (not `dhcp` or address/prefix), `vlan_id` outside 1–4094, a VMID below
-100, an extra disk on `scsi0` or an unknown bus, and an unknown `checksum_algorithm`; the error names the entry.
+IPv6 (both kinds): `ipv6_address` is `auto` (SLAAC), `dhcp` (DHCPv6) or address/prefix (`fd00:10::21/64`);
+`ipv6_gateway` (else `defaults.ipv6_gateway`, often the router's link-local `fe80::1`) is used only with a static
+address, since SLAAC and DHCPv6 take it from the router advertisement. Without `ipv6_address` the guest gets no
+IPv6 settings (as before). On an existing VM it only changes the cloud-init drive, which the guest reads at a later
+boot; read the plan and tell the user (a container gets it right away).
+
+The variables refuse a bad `ipv4_address` (not `dhcp` or address/prefix), a bad `ipv6_address` or `ipv6_gateway`,
+`vlan_id` outside 1–4094, a VMID below 100, an extra disk on `scsi0` or an unknown bus, and an unknown
+`checksum_algorithm`; the error names the entry.
 A static address without a gateway, or with one outside its subnet, is a warning in the plan ("Check block
 assertion failed"): set the entry's `ipv4_gateway`, or tell the user the guest has no default route.
 
