@@ -56,6 +56,34 @@ class ConfigSetTests(unittest.TestCase):
         run("config_set.py", "vmid_scheme={vlan}{octet:03d}", cwd=self.d)          # not a flow map: a string
         self.assertEqual(json.loads(yq(".vmid_scheme", self.f)), "{vlan}{octet:03d}")
 
+    def test_template_build_settings(self):   # GitHub issue #158: Packer refuses other values
+        cfg = json.loads(yq(".templates", self.f))
+        self.assertIs(cfg["sshd_hardening"], True)
+        self.assertEqual(cfg["unattended_updates"], "distro")
+        r = run("config_set.py", "templates.unattended_updates=off", "templates.sshd_hardening=false", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('  unattended_updates: "off"', self.f.read_text())          # quoted: off is a YAML word
+        self.assertEqual(json.loads(yq(".templates.unattended_updates", self.f)), "off")
+        self.assertIs(json.loads(yq(".templates.sshd_hardening", self.f)), False)
+        before = self.f.read_text()
+        for bad in ("templates.unattended_updates=weekly", "templates.sshd_hardening=1",
+                    "templates.sshd_hardening=no"):
+            r = run("config_set.py", bad, cwd=self.d)
+            self.assertEqual(r.returncode, 1, bad)
+            self.assertIn("Nothing was written", r.stderr, bad)
+        self.assertEqual(self.f.read_text(), before)
+        self.f.write_text(before.replace("sites: []  ", "sites: [{name: home}, {name: offsite}]  ", 1))
+        r = run("config_set.py", "sites[offsite].templates.unattended_updates=security", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = run("config_set.py", "sites[offsite].templates.unattended_updates=daily", cwd=self.d)
+        self.assertIn("sites[offsite].templates.unattended_updates must be", r.stderr)
+        sys.path.insert(0, str(SCRIPTS))
+        import hmlib
+        cfg = hmlib.load_config(self.d)
+        self.assertEqual(hmlib.site_config(cfg, "offsite")["templates"]["unattended_updates"], "security")
+        self.assertIs(hmlib.site_config(cfg, "offsite")["templates"]["sshd_hardening"], False)   # the top level's
+        self.assertEqual(hmlib.site_config(cfg)["templates"]["unattended_updates"], "off")
+
     def test_list_entry_selectors(self):  # issue 99
         self.f.write_text(
             "network:\n  vlans:\n    - {id: 10, name: LAN, cidr: 10.0.10.0/24}\n"

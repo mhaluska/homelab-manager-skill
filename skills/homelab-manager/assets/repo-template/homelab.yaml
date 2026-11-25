@@ -82,6 +82,8 @@ templates:
     ip: ""                                  # e.g. 10.0.10.250/24
     gateway: ""
     bridge: ""
+  sshd_hardening: true                      # new templates allow SSH keys only (no password logins)
+  unattended_updates: distro                # distro (as the image ships) | security | off (patch playbooks only)
 
 opentofu:
   environment: homelab

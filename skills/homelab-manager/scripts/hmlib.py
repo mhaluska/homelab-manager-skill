@@ -259,6 +259,27 @@ def site_config(cfg: dict, name: str | None = None) -> dict:
     return out
 
 
+# Packer build settings under templates: (and sites[].templates), written into the site's pkrvars file (#158)
+TEMPLATE_BUILD = {"sshd_hardening": (True, False), "unattended_updates": ("distro", "security", "off")}
+
+
+def template_build_errors(cfg: dict) -> list[str]:
+    """Values of templates.sshd_hardening / unattended_updates (top level or a site's) Packer would refuse."""
+    where = [("templates", cfg.get("templates"))]
+    raw = cfg.get("sites")
+    for i, s in enumerate(raw if isinstance(raw, list) else []):
+        if isinstance(s, dict):
+            where.append((f"sites[{s.get('name') or i}].templates", s.get("templates")))
+    out = []
+    for prefix, tpl in where:
+        for key, allowed in TEMPLATE_BUILD.items():
+            v = tpl.get(key) if isinstance(tpl, dict) else None
+            if v is None or v == "" or (type(v) is type(allowed[0]) and v in allowed):   # 1 is not true
+                continue
+            out.append(f"{prefix}.{key} must be {' or '.join(json.dumps(a) for a in allowed)}, not {json.dumps(v)}.")
+    return out
+
+
 def default_env(cfg: dict) -> str:
     return str(get(cfg, "opentofu.environment", "homelab") or "homelab")
 
