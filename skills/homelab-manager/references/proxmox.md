@@ -56,8 +56,11 @@ manages with `started = true` is started again by the next apply: say so, or set
 
 ## Migrate (cluster only)
 
-Change `node` in the entry → for bpg this is an in-place migration when the VM's storage
-allows it (shared storage, or local with online migration). To a node with other storage (`proxmox.nodes`)
+Change `node` in the entry → an in-place migration (the modules set `migrate = true`; without it bpg destroys and
+re-creates the guest; an environment with its own modules from before 0.61.0 lacks it: check the plan says
+update, not replace) when the guest's storage allows it (shared storage, or local with online migration). The
+first plan after 0.61.0 may show `migrate` changing on every guest: state only, nothing happens on Proxmox. To a node
+with other storage (`proxmox.nodes`)
 the disks would have to move too: read the plan; if it says replace, stop. HA-managed guests: migrate through `ha-manager` instead and tell the user.
 Approval required.
 

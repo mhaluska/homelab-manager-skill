@@ -1,6 +1,7 @@
 resource "proxmox_virtual_environment_vm" "this" {
   name        = var.name
   node_name   = var.node
+  migrate     = true # a node change migrates the guest; without it the provider re-creates it
   vm_id       = var.vm_id
   description = var.description
   tags        = sort(distinct(concat(["tofu"], var.tags)))
