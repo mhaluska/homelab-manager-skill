@@ -35,6 +35,15 @@ Every run also records each node's subscription (status, level, next due date) a
 server of each network storage (NFS, CIFS, PBS); `--details` also records each guest's newest successful backup and a
 newer failure (`last_backup`, `backup_error`) from the nodes' vzdump task logs: the read-only token can't list backup
 volumes (that needs VM.Backup), but reads task logs with Sys.Audit (PVEAuditor). OVERVIEW.md uses all of these.
+Storage health, every run (Sys.Audit, PVEAuditor): each node's ZFS pools (`zfs`: state, errors, last scrub, faulted
+disks) and disks (`disks`: SMART health, `wear_pct` used — Proxmox's `wearout` is the life left), `replication` jobs
+(last sync, failures) and `ceph` health when a storage uses the cluster's own Ceph (rbd/cephfs without `monhost`).
+A read that is refused or fails (a node without Ceph or replication answers an error) is one line in
+`storage_health`, not in `errors`. The datastores behind `pbs` storages (`pbs_datastores`: GC, prune and verify job
+runs, snapshots verified, failed and the oldest unverified) need a read-only PBS token: `pbs: [{server, token}]` in
+homelab.yaml (server as the storage names it), secret kind `pbs_token`, role DatastoreAudit
+(`docs/proxmox-tokens.md`); the certificate is pinned to the storage's fingerprint. Without one, `storage_health.pbs`
+says "no token" and OVERVIEW.md asks for it; never read PBS another way.
 `cpu_usage` is a fraction of allocated vCPUs at that instant, not an average.
 
 If it fails: 401 → wrong token or secret; 403 → the script reads the token's effective rights and
@@ -271,6 +280,13 @@ health with its cause (accepted per host: `bmc_health_accept`), RouterOS finding
 Recovery and dependencies per site (GitHub issue #89), only from what the repo records, nothing guessed from names:
 - **Last backup**: a Guests column and, under Backups, the guests in a job with no successful backup within
   `overview.backup_max_age_days` (default 7) or whose newest backup failed, from `proxmox_inventory.py --details`.
+- **Storage health** (GitHub issue #152): ZFS pools, disks, replication and Ceph. A warning: a pool not ONLINE, with
+  data errors or a faulted disk, a scrub that found errors or none within `overview.scrub_max_age_days` (35); a disk
+  whose SMART health failed or worn `overview.disk_wearout_max_pct` (80) or more; Ceph not HEALTH_OK; a replication
+  job with failed syncs or its next sync over an hour overdue.
+- **PBS datastores** (under Backups, GitHub issue #151): a warning when a GC, prune or verify job failed, the last GC
+  or prune ran over `overview.pbs_max_age_days` (7) before, snapshots failed verification, or one has waited longer
+  than that to be verified. An archive datastore with no new backups is fine (guest backup ages are judged above).
 - **Start order**: each node's autostart guests in the order Proxmox starts them (`startup` order, then VMID;
   HA-managed ones by the HA manager), the cluster's quorum, the running guests nothing starts again, and what each
   guest does for others (gateway of VLANs, storage server, cluster member, critical).
@@ -289,8 +305,9 @@ A Contents list after At a glance links every section and each site's sub-sectio
 several sites, so anchors are unique on GitHub and GitLab); each site ends with "↑ Contents"; Guests, Containers
 and Other scanned addresses tables longer than 15 rows are collapsed with their row count.
 At a glance names every warning category Health shows, most severe first: BMCs not OK (an accepted cause doesn't
-count), RouterOS and security audit findings of medium severity and above, failed update checks, hosts with security updates, guests in
-no backup job, guests without a recent successful backup, expiries within 30 days, full storage, node memory.
+count), ZFS pools, disks and Ceph, RouterOS and security audit findings of medium severity and above, failed update
+checks, hosts with security updates, expiries within 30 days, guests in no backup job, guests without a recent
+successful backup, PBS datastores, replication jobs, full storage, node memory.
 - Regenerate it after every verified change (operating loop step 9) and commit it with that change. The output is
   deterministic (no "generated at" time), so the diff shows what changed. `--check` exits 1 when it is stale; so
   does `drift_report.py --stale` when the repo has an OVERVIEW.md.
