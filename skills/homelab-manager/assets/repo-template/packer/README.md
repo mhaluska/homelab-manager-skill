@@ -4,7 +4,8 @@ Versioned VM templates built from official cloud images.
 
 1. OpenTofu imports the official cloud image as a **base** template (`tofu/…/homelab.auto.tfvars` → `base_images`).
 2. Packer `proxmox-clone` clones the base, boots it with a temporary static IP, installs
-   cloud-init + QEMU guest agent + updates, cleans it, and saves a **new** template
+   cloud-init + QEMU guest agent + updates, makes SSH key-only (`sshd_hardening`), sets automatic updates
+   (`unattended_updates`: distro, security or off), cleans and trims it, and saves a **new** template
    `tpl-<distro><version>-<date>` with a new VMID. Existing templates are never overwritten.
 3. The build is recorded in `docs/templates.md`.
 

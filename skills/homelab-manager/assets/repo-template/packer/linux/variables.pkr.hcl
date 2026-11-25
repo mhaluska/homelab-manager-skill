@@ -31,3 +31,19 @@ variable "build_gateway" { type = string }
 variable "base_vm_id" { type = number }
 variable "vm_id" { type = number }
 variable "build_date" { type = string } # YYYYMMDD, part of the template name
+
+# --- hardening (the defaults suit most homelabs; override with -var)
+variable "sshd_hardening" {
+  type        = bool
+  default     = true
+  description = "Key-only SSH: PasswordAuthentication no, PermitRootLogin prohibit-password (/etc/ssh/sshd_config.d/01-homelab.conf)."
+}
+variable "unattended_updates" {
+  type        = string
+  default     = "distro"
+  description = "distro: leave the image as it comes (Ubuntu installs security updates, Debian and Rocky don't); security: install security updates automatically, no reboots; off: turn automatic updates off (patching through Ansible only)."
+  validation {
+    condition     = contains(["distro", "security", "off"], var.unattended_updates)
+    error_message = "The unattended_updates variable must be distro, security or off."
+  }
+}

@@ -13,4 +13,5 @@ cloud-init clean --logs --seed
 for h in /root /home/*; do rm -f "$h/.ssh/authorized_keys" "$h/.bash_history"; done
 find /var/log -type f -exec truncate -s 0 {} \;
 rm -rf /tmp/* /var/tmp/*
+fstrim -av || true   # hand freed blocks back to thin storage: a smaller template
 sync

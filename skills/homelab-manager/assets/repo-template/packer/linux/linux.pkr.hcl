@@ -48,6 +48,10 @@ build {
   provisioner "shell" {
     execute_command = "chmod +x {{ .Path }}; sudo env {{ .Vars }} {{ .Path }}"
     script          = "${path.root}/scripts/provision.sh"
+    env = {
+      HM_SSHD_HARDENING     = var.sshd_hardening ? "1" : "0"
+      HM_UNATTENDED_UPDATES = var.unattended_updates
+    }
   }
 
   provisioner "shell" {
