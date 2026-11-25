@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+- OpenTofu: VMs can boot with UEFI and have a TPM. `vms` entries take `bios` (`seabios` | `ovmf`), `efi_disk`
+  (`datastore`, `type` 4m or 2m, `pre_enrolled_keys`) and `tpm_state` (`datastore`, `version` v2.0 or v1.2); the
+  disks default to the root disk's storage. The EFI disk's type and keys and the TPM version are ignored after
+  creation: changing them would make the provider replace the VM or empty its EFI disk (Secure Boot keys,
+  TPM-sealed secrets). `pci_devices` items take `rom_file`. `tofu_import_plan.py` imports UEFI VMs and PCI devices
+  passed through by resource mapping; a raw PCI ID still leaves the VM unmanaged, with how to switch it to a
+  mapping (`references/proxmox.md` "PCI passthrough"). Leaving the attributes out plans what the old modules
+  planned ([#149](https://github.com/mhaluska/homelab-manager-skill/issues/149)).
+
 ## 0.63.0 — 2026-11-25
 - Guests with more than one NIC: `vms` and `containers` entries take `extra_nics`, the NICs after the first (net1,
   net2, … in order: bridge, VLAN, MAC, firewall, MTU, addresses and gateway; VMs also `model`, `queues`,
