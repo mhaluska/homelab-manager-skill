@@ -1,0 +1,24 @@
+# This case's homelab.yaml values; place-files.sh merges them into the scaffolded homelab.yaml.
+site:
+  domain: home.arpa
+network:
+  authorized_ranges:
+    - 10.0.10.0/24
+  excluded_hosts:
+    - 10.0.10.1
+  dns_servers:
+    - 10.0.10.1
+  gateway: 10.0.10.1
+proxmox:
+  endpoint: https://pve1.home.arpa:8006
+  default_node: pve1
+  default_storage: local-zfs
+  image_storage: local
+  default_bridge: vmbr0
+defaults:
+  admin_user: marek
+  ssh_public_keys:
+    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyOnly marek@macmini
+secrets:   # keychain items no real Mac has: the run must not reach a real token
+  proxmox-ro: {service: homelab-eval/proxmox-ro, kind: proxmox_token}
+  proxmox-rw: {service: homelab-eval/proxmox-rw, kind: proxmox_token}
