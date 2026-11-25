@@ -30,7 +30,10 @@ QNAP NAS entries carry `firmware` and `apps` instead of package counts (referenc
    - **Cluster groups** (`clusters:` in homelab.yaml, plus anything obviously clustered:
      k8s, etcd, Galera/Patroni, Proxmox nodes) — separate run per cluster, `serial: 1`,
      with that cluster's `pre_hook`/`post_hook` from `homelab.yaml` (drain/uncordon, maintenance mode):
-     `-e target=k8s_workers -e pre_hook=playbooks/hooks/k8s-drain.yml -e post_hook=playbooks/hooks/k8s-uncordon.yml`.
+     `-e target=k8s_workers -e pre_hook=playbooks/hooks/k8s-drain.yml -e post_hook=playbooks/hooks/k8s-uncordon.yml
+     -e health_check=playbooks/hooks/k8s-health.yml`. The health check (on this Mac, read-only) waits until the node is
+     Ready and uncordoned, every node is Ready and no pod is Pending (`k8s_pending_ignore`: regexes on
+     `<namespace>/<name>` for pods that stay Pending for their own reasons), else the roll stops there.
      Hook paths are relative to `ansible/`. Hooks run on this Mac without sudo (`kubectl` with the
      user's kubeconfig); check `kubectl get nodes` works and node names match inventory names
      (or set `k8s_node_name`) before starting. Keep a full update from upgrading Kubernetes:

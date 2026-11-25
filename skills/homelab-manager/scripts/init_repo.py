@@ -80,7 +80,8 @@ COMPONENTS = {
                     "ansible/playbooks/routeros-routerboot-upgrade.yml",
                     "ansible/inventory/managed/group_vars/qnap.yml", "ansible/playbooks/qnap-containers.yml"]),
     "kubernetes": ("Kubernetes clusters (rolling patching with drain/uncordon)", ["ansible"],
-                   ["ansible/playbooks/hooks/k8s-drain.yml", "ansible/playbooks/hooks/k8s-uncordon.yml"]),
+                   ["ansible/playbooks/hooks/k8s-drain.yml", "ansible/playbooks/hooks/k8s-uncordon.yml",
+                    "ansible/playbooks/hooks/k8s-health.yml"]),
 }
 CORE = ["homelab.yaml", "README.md", "CLAUDE.md", "skill_issues.md", ".gitignore", ".claude/", "docs/README.md",
         "docs/decisions.md", "scripts/", "discovery/"]
