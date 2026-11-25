@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.64.0 — 2026-11-25
 - OpenTofu: VMs can boot with UEFI and have a TPM. `vms` entries take `bios` (`seabios` | `ovmf`), `efi_disk`
   (`datastore`, `type` 4m or 2m, `pre_enrolled_keys`) and `tpm_state` (`datastore`, `version` v2.0 or v1.2); the
   disks default to the root disk's storage. The EFI disk's type and keys and the TPM version are ignored after
