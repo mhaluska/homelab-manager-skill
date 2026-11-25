@@ -29,6 +29,8 @@ class EvalFixtureTests(unittest.TestCase):
     def test_no_template_copies_in_fixtures(self):
         """files/ holds only what the case needs; the template comes from init_repo.py in place-files.sh."""
         for case in self.cases():
+            if "init_repo.py" not in (case / "place-files.sh").read_text():
+                continue   # an old repository on purpose (upgrade-old-repo) or an empty one (the init cases)
             for p in (case / "files").rglob("*") if (case / "files").is_dir() else []:
                 rel = p.relative_to(case / "files")
                 if p.is_file() and (TEMPLATE / rel).is_file():

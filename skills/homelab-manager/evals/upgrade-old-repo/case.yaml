@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: upgrade-old-repo
+expected_outcome: |
+  Runs init_repo.py --sync-managed --dry-run first, shows the one-time updates (template files replaced whole)
+  apart from the opt-in suggestions of newer releases, explains each suggestion briefly, and asks before
+  changing anything; no file in the repository is modified before the user's yes.
+context:
+  scaffold_script: place-files.sh
