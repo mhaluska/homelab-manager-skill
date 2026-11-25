@@ -19,11 +19,11 @@
 # }
 
 base_images = {
-  # "base-rocky9-20261116" = {
+  # "base-rocky9-20261112" = {
   #   distro          = "rocky"
   #   vm_id           = 9000
-  #   image_url       = "https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2"
-  #   image_file_name = "rocky9-genericcloud-20261116.qcow2"
+  #   image_url       = "https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base-9.9-20261112.0.x86_64.qcow2"   # dated, never latest
+  #   image_file_name = "rocky9-genericcloud-20261112.qcow2"
   #   checksum        = "<sha256 from CHECKSUM file>"   # required (allow_unverified_image = true skips the check)
   # }
 }

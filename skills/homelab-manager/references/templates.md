@@ -20,14 +20,17 @@ never rebuilds existing VMs.
 
 ## Official images (verify URLs and checksums at build time — they move)
 
-| Distro | Image | Checksums | Default user |
+| Distro | Dated image (pin this in tfvars) | Checksums | Default user |
 |---|---|---|---|
-| Rocky 9 | `https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2` | `CHECKSUM` in same dir | `rocky` |
-| Rocky 10 | `…/rocky/10/images/x86_64/Rocky-10-GenericCloud-Base.latest.x86_64.qcow2` | `CHECKSUM` | `rocky` |
-| Debian 13 | `https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2` | `SHA512SUMS` | `debian` |
-| Ubuntu 24.04 | `https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img` (qcow2) | `SHA256SUMS` | `ubuntu` |
+| Rocky 9 | `https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base-9.<minor>-<YYYYMMDD>.0.x86_64.qcow2` (after the next point release: `…/vault/rocky/9.<minor>/images/x86_64/`) | `CHECKSUM` in same dir | `rocky` |
+| Debian 13 | `https://cloud.debian.org/images/cloud/trixie/<YYYYMMDD-NNNN>/debian-13-genericcloud-amd64-<YYYYMMDD-NNNN>.qcow2` | `SHA512SUMS` | `debian` |
+| Ubuntu 24.04 | `https://cloud-images.ubuntu.com/noble/<YYYYMMDD>/noble-server-cloudimg-amd64.img` (qcow2) | `SHA256SUMS` | `ubuntu` |
 
-Prefer a dated/versioned URL over `latest` in tfvars. `checksum` is required (`checksum_algorithm = "sha512"` for
+List the directory (`curl -fsSL <dir>/`) for the newest dated build. Rocky 10 and other x86-64-v3 distros are not in
+the template: they don't boot on the `x86-64-v2-AES` CPU type the base and the VMs use (a VM entry can set
+`cpu_type`, the base and Packer can't yet).
+
+Use a dated URL in tfvars, never `latest`: the checksum is of one build, and `latest` moves on. `checksum` is required (`checksum_algorithm = "sha512"` for
 Debian's SHA512SUMS): Proxmox refuses a tampered or truncated download. Fetch the checksum file with `curl -fsSL`
 (no secrets involved). `allow_unverified_image = true` skips the check; only for a base imported before 0.54.0.
 

@@ -13,7 +13,7 @@ variable "vm_id" {
 }
 variable "image_url" {
   type        = string
-  description = "Official cloud image (qcow2), e.g. https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2"
+  description = "Official cloud image (qcow2), a dated build whose checksum is set, e.g. https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base-9.9-20261112.0.x86_64.qcow2"
 }
 variable "image_file_name" {
   type        = string
