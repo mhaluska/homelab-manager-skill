@@ -5,6 +5,20 @@ directory under `tofu/environments/` (default `homelab`; another site: its name,
 Provider: `bpg/proxmox`.
 Desired state is data in `homelab.auto.tfvars`; edit data, not module calls.
 
+## Entry attributes
+
+Optional per `vms`/`containers` entry (the default is what the template always did, so leaving them out changes
+nothing): `ipv4_gateway` (else `defaults.ipv4_gateway`; a guest on another VLAN needs its own), `on_boot` (true),
+`protection` (false), `description`; VMs also `cpu_type` (`x86-64-v2-AES`); containers `dns_servers`/`dns_domain`
+(else the node's DNS). `protection = true` sets the Proxmox protection flag: Proxmox refuses to delete the guest or
+its disks, so a plan that destroys it fails at apply. Offer it for guests whose loss hurts (DNS, the NAS, the
+state bucket); turning it off is its own change and plan.
+
+The variables refuse a bad `ipv4_address` (not `dhcp` or address/prefix), `vlan_id` outside 1–4094, a VMID below
+100, an extra disk on `scsi0` or an unknown bus, and an unknown `checksum_algorithm`; the error names the entry.
+A static address without a gateway, or with one outside its subnet, is a warning in the plan ("Check block
+assertion failed"): set the entry's `ipv4_gateway`, or tell the user the guest has no default route.
+
 ## Running
 
 Always through the secrets wrapper, from the environment directory. `$STATE` = the
@@ -47,6 +61,10 @@ Classify each change. Common causes of unexpected **replace** with bpg:
 | disk shrink | impossible in place | revert, or approved rebuild |
 | `clone` block | (ignored in our module) | check a hand-written resource didn't miss `ignore_changes` |
 | LXC `operating_system`, `unprivileged` | container rebuild | revert, or approved rebuild |
+| LXC `dns_servers`/`dns_domain` on an existing container | may rebuild with some provider versions | read the plan; revert unless a rebuild is approved |
+
+A destroy or replace of a guest with `protection = true` fails at apply: turn protection off in a separate,
+approved change first.
 
 Unexpected `~ update` on many resources usually means a provider upgrade or a default
 changed — explain, don't apply blindly.

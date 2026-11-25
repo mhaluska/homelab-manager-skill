@@ -92,7 +92,8 @@ For guests listed as "Not managed by OpenTofu" in the drift report:
    ```
    (LXC: `module.lxc["name"].proxmox_virtual_environment_container.this`.)
 3. Plan. The goal is `1 to import, 0 to add, 0 to change, 0 to destroy`. Iterate on the
-   entry until updates are only cosmetic (tags, description) and there is **no replace**.
+   entry until updates are only cosmetic (tags) and there is **no replace**; copy `cpu_type`, `on_boot`,
+   `description` and `protection` from the real config (opentofu.md "Entry attributes").
    `clone` is ignored after creation so imported VMs don't need a template.
 4. Approval, apply, remove the `import` block, commit.
 Never import by recreating. If a guest can't be represented without replacement, leave it
