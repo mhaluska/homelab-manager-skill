@@ -127,6 +127,25 @@ resource "proxmox_virtual_environment_vm" "this" {
     }
   }
 
+  # UEFI: the EFI disk holds the UEFI variables (boot entries, Secure Boot keys), the TPM state a vTPM's secrets
+  # (BitLocker, measured boot). Both default to the root disk's storage.
+  bios = var.bios
+  dynamic "efi_disk" {
+    for_each = var.efi_disk == null ? [] : [var.efi_disk]
+    content {
+      datastore_id      = coalesce(efi_disk.value.datastore, var.datastore)
+      type              = efi_disk.value.type
+      pre_enrolled_keys = efi_disk.value.pre_enrolled_keys
+    }
+  }
+  dynamic "tpm_state" {
+    for_each = var.tpm_state == null ? [] : [var.tpm_state]
+    content {
+      datastore_id = coalesce(tpm_state.value.datastore, var.datastore)
+      version      = tpm_state.value.version
+    }
+  }
+
   # The cloud-init drive (ide2): addresses, DNS and the admin user at first boot. An imported VM without one keeps
   # none (cloud_init_drive = false): its settings then come from the guest itself.
   dynamic "initialization" {
@@ -188,8 +207,13 @@ resource "proxmox_virtual_environment_vm" "this" {
   lifecycle {
     # The template is only the starting point. A new template version must never
     # rebuild running VMs, and cloud-init user data only applies at first boot.
+    # The EFI disk's type and pre_enrolled_keys and the TPM version count at creation only: for a new type or version
+    # the provider replaces the whole VM, for new pre_enrolled_keys it writes a new, empty EFI disk. Either loses the
+    # UEFI variables (Secure Boot keys, boot entries) or the TPM's secrets (BitLocker). A datastore change stays
+    # managed: the provider moves the disk with its data.
     ignore_changes = [clone, initialization[0].user_account, initialization[0].vendor_data_file_id,
-    initialization[0].user_data_file_id]
+      initialization[0].user_data_file_id, efi_disk[0].type, efi_disk[0].pre_enrolled_keys,
+    tpm_state[0].version]
     precondition {
       condition     = !anytrue([for d in var.pci_devices : d.pcie]) || startswith(coalesce(var.machine, "pc"), "q35")
       error_message = "VM ${var.name}: pci_devices with pcie = true need machine = \"q35\"."

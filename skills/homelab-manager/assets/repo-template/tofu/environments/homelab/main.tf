@@ -89,6 +89,9 @@ module "vm" {
 
   pci_devices = each.value.pci_devices
   machine     = each.value.machine
+  bios        = each.value.bios
+  efi_disk    = each.value.efi_disk
+  tpm_state   = each.value.tpm_state
 
   # settings an imported VM keeps (tofu_import_plan.py); null: the module's default, as before
   os_type             = each.value.os_type

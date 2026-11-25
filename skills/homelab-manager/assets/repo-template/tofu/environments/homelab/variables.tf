@@ -123,6 +123,12 @@ variable "vms" {
     # PCI passthrough by resource mapping (Datacenter → Resource Mappings); the VM then needs an explicit node
     pci_devices = optional(list(object({ mapping = string, pcie = optional(bool, false), rombar = optional(bool), xvga = optional(bool) })), [])
     machine     = optional(string) # e.g. q35 (pcie devices need it); empty: as before
+    # UEFI (a Windows 11 VM: bios ovmf, efi_disk 4m with pre_enrolled_keys, tpm_state v2.0, machine q35); empty:
+    # SeaBIOS, no EFI disk, no TPM. bios seabios or ovmf; efi_disk type 4m (empty) or 2m, tpm_state version v2.0
+    # (empty) or v1.2, both counting at creation only; a datastore left empty: the root disk's
+    bios      = optional(string)
+    efi_disk  = optional(object({ datastore = optional(string), type = optional(string), pre_enrolled_keys = optional(bool) }))
+    tpm_state = optional(object({ datastore = optional(string), version = optional(string) }))
     # settings an imported VM keeps (tofu_import_plan.py; references/opentofu.md "Entry attributes");
     # empty: as before
     os_type             = optional(string) # empty: l26 (Linux)
@@ -174,6 +180,10 @@ variable "vms" {
   validation {
     condition     = length([for k, v in var.vms : k if length(v.pci_devices) > 0 && (v.node == null || !alltrue([for d in v.pci_devices : can(regex("^[A-Za-z][A-Za-z0-9_.-]*$", d.mapping))]) || anytrue([for d in v.pci_devices : d.pcie]) && !startswith(coalesce(v.machine, "pc"), "q35"))]) == 0
     error_message = "vms ${join(", ", [for k, v in var.vms : k if length(v.pci_devices) > 0 && (v.node == null || !alltrue([for d in v.pci_devices : can(regex("^[A-Za-z][A-Za-z0-9_.-]*$", d.mapping))]) || anytrue([for d in v.pci_devices : d.pcie]) && !startswith(coalesce(v.machine, "pc"), "q35"))])}: pci_devices need the VM's node set (a device belongs to one node), each mapping named by its ID (e.g. gpu), and machine = \"q35\" for pcie = true."
+  }
+  validation {
+    condition     = length([for k, v in var.vms : k if !contains(["seabios", "ovmf"], coalesce(v.bios, "seabios")) || !contains(["2m", "4m"], try(coalesce(v.efi_disk.type, "4m"), "4m")) || !contains(["v2.0", "v1.2"], try(coalesce(v.tpm_state.version, "v2.0"), "v2.0"))]) == 0
+    error_message = "vms ${join(", ", [for k, v in var.vms : k if !contains(["seabios", "ovmf"], coalesce(v.bios, "seabios")) || !contains(["2m", "4m"], try(coalesce(v.efi_disk.type, "4m"), "4m")) || !contains(["v2.0", "v1.2"], try(coalesce(v.tpm_state.version, "v2.0"), "v2.0"))])}: bios must be seabios or ovmf (UEFI), efi_disk type 4m or 2m, tpm_state version v2.0 or v1.2."
   }
   validation {
     condition     = length([for k, v in var.vms : k if length(v.extra_nics) > 31 || !alltrue([for n in v.extra_nics : contains(["virtio", "e1000", "e1000e", "rtl8139", "vmxnet3"], coalesce(n.model, "virtio")) && (n.vlan_id == null || try(n.vlan_id >= 1 && n.vlan_id <= 4094 && n.vlan_id == floor(n.vlan_id), false)) && (n.mac_address == null || can(regex("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$", n.mac_address)))])]) == 0

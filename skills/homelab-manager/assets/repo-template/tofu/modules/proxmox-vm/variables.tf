@@ -168,6 +168,41 @@ variable "pci_devices" {
     error_message = "pci_devices: at most 16, each naming a PCI resource mapping by its ID, e.g. gpu."
   }
 }
+variable "bios" {
+  type        = string
+  default     = "seabios"
+  nullable    = false
+  description = "Firmware: seabios or ovmf (UEFI; give it an efi_disk)."
+  validation {
+    condition     = contains(["seabios", "ovmf"], var.bios)
+    error_message = "bios must be seabios or ovmf (UEFI)."
+  }
+}
+variable "efi_disk" {
+  type = object({
+    datastore         = optional(string)       # null: the root disk's
+    type              = optional(string, "4m") # 4m (Secure Boot) or 2m (older VMs)
+    pre_enrolled_keys = optional(bool, false)  # Secure Boot with the distribution and Microsoft keys (4m)
+  })
+  default     = null
+  description = "EFI disk of an OVMF VM (UEFI variables); null: none. type and pre_enrolled_keys count at creation only."
+  validation {
+    condition     = var.efi_disk == null || try(contains(["2m", "4m"], var.efi_disk.type), false)
+    error_message = "efi_disk type must be 4m or 2m."
+  }
+}
+variable "tpm_state" {
+  type = object({
+    datastore = optional(string)         # null: the root disk's
+    version   = optional(string, "v2.0") # v2.0 (Windows 11) or v1.2
+  })
+  default     = null
+  description = "TPM state disk (a vTPM); null: none. version counts at creation only."
+  validation {
+    condition     = var.tpm_state == null || try(contains(["v2.0", "v1.2"], var.tpm_state.version), false)
+    error_message = "tpm_state version must be v2.0 or v1.2."
+  }
+}
 variable "snippets_datastore" {
   type        = string
   default     = null
