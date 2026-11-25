@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.62.0 — 2026-11-25
 - Importing existing guests: the OpenTofu modules carry what an older guest has, so the first plan of a
   `tofu_import_plan.py` entry shows only the `tofu` tag and the description (on a real site: 83 of 95 guests,
   up from 2). New optional attributes, which plan as before when left out: for VMs `os_type`, `sockets`, `numa`,
