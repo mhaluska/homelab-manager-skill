@@ -7,11 +7,13 @@ Reads the site's discovery/proxmox.json (proxmox_inventory.py --details, 0.61.0 
 homelab.auto.tfvars (tofu/environments/<env>). For each guest that has no entry there yet it prints an import block
 and a `vms` / `containers` entry for the template's modules, with what Proxmox has now: node, cores, memory, swap,
 disks (size, datastore, extra_disks), bridge, VLAN tag, MAC address, static address and gateway, DNS (LXC), tags,
-cpu_type, on_boot, protection, description, started, unprivileged and nesting. Above each entry a comment names
-what the first plan will still change (settings the modules don't carry: sockets, NUMA, disk cache, start order,
-...). A guest the modules can't represent without a rebuild or lost hardware (passthrough, several NICs, a root disk
-other than scsi0, UEFI, a non-Linux OS type, LXC mount points, ...) gets no entry: it stays unmanaged, with a line
-for docs/decisions.md.
+cpu_type, on_boot, protection, description, started, unprivileged and nesting, and what an older guest has that a
+cloned one doesn't (0.62.0: sockets, NUMA, CPU flags, ballooning, disk cache/ssd/iothread/discard/backup, start
+order, OS type, machine, no cloud-init drive or serial port, a CD-ROM, NIC firewall/MTU/queues, LXC features, mount
+points and console). Above an entry a comment names what the first plan will still change (the few settings the
+modules don't carry, e.g. disk I/O limits). A guest the modules can't represent without a rebuild or lost hardware
+(passthrough, several NICs, a root disk other than scsi0, UEFI, mount points numbered with a gap, ...) gets no
+entry: it stays unmanaged, with a line for docs/decisions.md.
 
 Read-only by default (stdout). --write creates or extends imports.tf in the environment and adds the entries inside
 the `vms` / `containers` maps of homelab.auto.tfvars; it never changes an existing entry or import block. Then the
@@ -28,9 +30,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hmlib  # noqa: E402
 
-CONFIG_VERSION = 2          # proxmox_inventory.CONFIG_VERSION that carries cpu, protection, swap, DNS, hostname
+CONFIG_VERSION = 3          # proxmox_inventory.CONFIG_VERSION that carries cpu, protection, swap, DNS, hostname (2)
+#                             and an LXC's console settings (3)
 LXC_OS_TYPES = {"alpine", "archlinux", "centos", "debian", "devuan", "fedora", "gentoo", "nixos", "opensuse",
                 "ubuntu", "unmanaged"}   # bpg operating_system.type
+VM_OS_TYPES = {"l24", "l26", "other", "solaris", "w2k", "w2k3", "w2k8", "win7", "win8", "win10", "win11", "wvista",
+               "wxp"}
+DISK_FIELDS = ("discard", "iothread", "ssd", "cache", "backup")   # extra_disks fields of 0.62.0 (with disk_cache)
 KEY_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,61}[A-Za-z0-9])?$")   # a map key the modules use as name
 MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 VM_EXTRA_RE = re.compile(r"^(scsi([1-9]|[12][0-9]|30)|virtio([0-9]|1[0-5])|sata[0-5])$")
@@ -98,13 +104,17 @@ def assignments(text: str, masked: str, start: int, end: int) -> list[tuple[str,
             m = ASSIGN_RE.match(masked, i, end) if line_start and depth == 0 else None
             line_start = False
             if m:
-                v = m.end()
-                if v < end and masked[v] in "{[":
-                    e = closing(masked, v)
-                    e = end if e < 0 or e >= end else e + 1
-                else:
-                    e = masked.find("\n", v, end)
-                    e = v + len(masked[v:end if e < 0 else e].rstrip())
+                v = e = m.end()
+                inner = 0     # the value ends at a newline outside its brackets, or at the enclosing block's bracket
+                while e < end and not (masked[e] == "\n" and inner == 0):
+                    if masked[e] in "{[(":
+                        inner += 1
+                    elif masked[e] in "}])":
+                        if inner == 0:
+                            break
+                        inner -= 1
+                    e += 1
+                e = v + len(masked[v:e].rstrip())
                 out.append((text[m.start(1):m.end(1)].strip('"'), v, e))
                 i = e
                 continue
@@ -239,7 +249,16 @@ def common(e: Entry, conf: dict):
     if flag(conf, "protection"):
         e.set("protection", True)
     if conf.get("startup"):
-        e.notes.append(f"startup {conf['startup']}: the modules set no start order, the plan removes it")
+        names, start, parts = {"order": "order", "up": "up_delay", "down": "down_delay"}, {}, \
+            str(conf["startup"]).split(",")
+        for part in parts:   # [order=]N,up=N,down=N
+            k, _, v = part.strip().rpartition("=")
+            if k in ("", "order", "up", "down") and re.fullmatch(r"\d+", v):
+                start[names[k or "order"]] = int(v)
+        if len(start) == len(parts):
+            e.set("startup", start)
+        else:
+            e.notes.append(f"startup {conf['startup']}: not order, up and down in seconds, the plan removes it")
 
 
 def network(e: Entry, conf: dict, ctx: dict, nic: str, ip: str | None, gw: str | None, ip6: str | None,
@@ -258,9 +277,12 @@ def network(e: Entry, conf: dict, ctx: dict, nic: str, ip: str | None, gw: str |
     if mac:
         e.set("mac_address", mac)
     if flag(o, "firewall"):
-        e.notes.append(f"{nic} firewall=1: the modules turn the NIC's firewall off")
-    for k in ("queues", "mtu", "rate", "link_down"):
-        if o.get(k):
+        e.set("firewall", True)
+    for k in ("mtu", "queues") if e.kind == "vms" else ("mtu",):
+        if re.fullmatch(r"\d+", o.get(k) or "") and int(o[k]) > 0:
+            e.set(k, int(o[k]))
+    for k in ("rate", "link_down") if e.kind == "vms" else ("rate", "link_down", "queues"):
+        if o.get(k) not in (None, "", "0"):
             e.notes.append(f"{nic} {k}={o[k]}: the modules don't set it, the plan removes it")
     if ip and ip not in ("dhcp", "manual"):
         e.set("ipv4_address", ip)
@@ -292,38 +314,39 @@ def vm_entry(g: dict, ctx: dict) -> Entry:
     e.set("memory_mib", num(conf.get("memory"), 512))
     sockets = num(conf.get("sockets"), 1)
     if sockets != 1:
-        e.notes.append(f"sockets {sockets}: the module sets 1 socket, so the VM gets {num(conf.get('cores'), 1)} "
-                       "vCPUs instead of " + str(sockets * num(conf.get("cores"), 1)))
+        e.set("sockets", sockets)
     cputype, copts = options(conf.get("cpu"))
     cputype = copts.get("cputype", cputype) or "kvm64"
     e.set("cpu_type", cputype)
     if copts.get("flags"):
-        e.notes.append(f"CPU flags {copts['flags']}: the module sets none")
+        e.set("cpu_flags", [f for f in copts["flags"].split(";") if f])
     if flag(conf, "numa"):
-        e.notes.append("numa=1: the module turns NUMA off")
-    if conf.get("balloon") not in (None, "0"):
-        e.notes.append(f"balloon {conf['balloon']}: the module sets no ballooning minimum")
+        e.set("numa", True)
+    if re.fullmatch(r"\d+", str(conf.get("balloon") or "")) and int(conf["balloon"]) > 0:
+        e.set("memory_floating_mib", int(conf["balloon"]))
     if str(conf.get("tablet", "1")) == "0":
-        e.notes.append("tablet=0: the module leaves the provider's default USB tablet on")
+        e.set("tablet_device", False)
     agent_on, aopts = options(conf.get("agent"))
     if agent_on != "1" and not flag(aopts, "enabled"):
         e.notes.append("guest agent off: the module turns it on")
-    for k in ("fstrim_cloned_disks", "type", "freeze-fs-on-backup"):
+    if flag(aopts, "fstrim_cloned_disks"):
+        e.set("agent_trim", True)
+    for k in ("type", "freeze-fs-on-backup"):
         if k in aopts:
             e.notes.append(f"agent {k}={aopts[k]}: the module doesn't set it")
     if (conf.get("scsihw") or "lsi") != "virtio-scsi-single":
-        e.notes.append(f"SCSI controller {conf.get('scsihw') or 'lsi (default)'}: the module sets virtio-scsi-single")
-    if (conf.get("ostype") or "other") != "l26":
-        e.blockers.append(f"OS type {conf.get('ostype') or 'other'}: the module sets l26 (Linux)")
+        e.set("scsi_hardware", conf.get("scsihw") or "lsi")
+    ostype = str(conf.get("ostype") or "other")
+    if ostype not in VM_OS_TYPES:
+        e.blockers.append(f"OS type {ostype}: not one the provider knows")
+    elif ostype != "l26":
+        e.set("os_type", ostype)
     if conf.get("bios") == "ovmf" or any(k.startswith("efidisk") for k in conf):
         e.blockers.append("UEFI (bios ovmf, EFI disk): the module has no EFI disk")
     if any(k.startswith("tpmstate") for k in conf):
         e.blockers.append("TPM state disk: the module has none")
-    machine = str(conf.get("machine") or "")
-    if "q35" in machine:
-        e.blockers.append(f"machine {machine}: the module sets none (i440fx), which changes the guest's PCI layout")
-    elif machine:
-        e.notes.append(f"machine {machine}: the module sets none, the VM gets the current i440fx at its next start")
+    if conf.get("machine"):
+        e.set("machine", str(conf["machine"]))
     passthrough = sorted(k for k in conf if re.fullmatch(r"(hostpci|usb)\d+", k))
     if passthrough:
         e.blockers.append("passthrough (" + ", ".join(passthrough) + "): the module has none")
@@ -345,12 +368,9 @@ def vm_entry(g: dict, ctx: dict) -> Entry:
             e.blockers.append(f"scsi0 size {o.get('size')}: not a whole number of GiB")
         else:
             e.set("disk_gib", size)
-        want = {"discard": "on", "iothread": "1", "ssd": "1"}
-        for k, v in want.items():
-            if str(o.get(k, "0")) != v:
-                e.notes.append(f"scsi0 {k}={o.get(k, 'off')}: the module sets {k}={v}")
-        disk_notes(e, "scsi0", o)
-    extra, cloudinit = [], False
+        for k, v in disk_options(e, "scsi0", o, root=True).items():
+            e.set(f"disk_{k}", v)
+    extra, cloudinit, cdrom = [], False, None
     for k in sorted(conf, key=disk_order):
         if not DISK_RE.match(k) or k == "scsi0":
             continue
@@ -362,7 +382,7 @@ def vm_entry(g: dict, ctx: dict) -> Entry:
             continue
         if o.get("media") == "cdrom":
             if k == "ide2":
-                e.notes.append(f"CD-ROM on ide2 ({vol or 'empty'}): the module puts its cloud-init drive there")
+                cdrom = vol or "none"
             else:
                 e.notes.append(f"CD-ROM on {k}: the module has none, the plan removes it")
             continue
@@ -380,20 +400,22 @@ def vm_entry(g: dict, ctx: dict) -> Entry:
         store = vol.split(":", 1)[0]
         if store != datastore:
             disk["datastore"] = store
+        disk.update(disk_options(e, k, o, root=False))
         extra.append(disk)
-        for kk, v in {"discard": "on", "iothread": "1"}.items():
-            if str(o.get(kk, "0")) != v:
-                e.notes.append(f"{k} {kk}={o.get(kk, 'off')}: the module sets {kk}={v}")
-        if flag(o, "ssd"):
-            e.notes.append(f"{k} ssd=1: the module doesn't set ssd on extra disks")
-        disk_notes(e, k, o)
     if extra:
         e.set("extra_disks", extra)
     if not cloudinit:
-        e.notes.append("no cloud-init drive: the module adds one on ide2 (cloud-init in the guest, if installed, "
-                       "would apply its network and DNS settings at the next boot)")
-    if not any(str(conf.get(k, "")).startswith("socket") for k in conf if k.startswith("serial")):
-        e.notes.append("no serial socket: the module adds serial0")
+        e.set("cloud_init_drive", False)   # its network and DNS settings come from the guest
+        if cdrom:
+            e.set("cdrom", cdrom)
+    elif cdrom:
+        e.notes.append(f"CD-ROM on ide2 ({cdrom}) next to a cloud-init drive: the module has no CD-ROM then")
+    serials = sorted(k for k in conf if re.fullmatch(r"serial\d+", k))
+    if not serials:
+        e.set("serial_socket", False)
+    elif serials != ["serial0"] or conf["serial0"] != "socket":
+        e.notes.append(f"serial ports {', '.join(f'{k} {conf[k]}' for k in serials)}: the module has one, "
+                       "serial0 socket")
 
     n = nets(conf)
     if not n:
@@ -423,15 +445,66 @@ def disk_order(k: str):
     return (m.group(1), int(m.group(2))) if m else (k, 0)
 
 
-def disk_notes(e: Entry, k: str, o: dict):
-    if o.get("cache") not in (None, "none"):
-        e.notes.append(f"{k} cache={o['cache']}: the module sets no cache")
-    for kk in ("backup", "replicate"):
-        if str(o.get(kk, "1")) == "0":
-            e.notes.append(f"{k} {kk}=0: the module sets {kk}=1")
+CACHE_MODES = {"directsync", "writethrough", "writeback", "unsafe"}
+
+
+def disk_options(e: Entry, k: str, o: dict, root: bool) -> dict:
+    """The disk's options where they differ from the module's defaults (root disk: discard on, iothread, ssd; extra
+    disks: discard on, iothread), as the entry's disk_* attributes or extra_disks fields."""
+    out = {}
+    if o.get("discard") != "on":
+        out["discard"] = "ignore"
+    if not flag(o, "iothread"):
+        out["iothread"] = False
+    if flag(o, "ssd") != root:
+        out["ssd"] = flag(o, "ssd")
+    if o.get("cache") in CACHE_MODES:
+        out["cache"] = o["cache"]
+    elif o.get("cache") not in (None, "none"):
+        e.notes.append(f"{k} cache={o['cache']}: the module doesn't know it")
+    if str(o.get("backup", "1")) == "0":
+        out["backup"] = False
+    if str(o.get("replicate", "1")) == "0":
+        e.notes.append(f"{k} replicate=0: the module sets replicate=1")
     for kk in ("aio", "mbps_rd", "mbps_wr", "iops_rd", "iops_wr", "serial", "wwn", "ro"):
         if o.get(kk):
             e.notes.append(f"{k} {kk}={o[kk]}: the module doesn't set it")
+    return out
+
+
+MP_FLAGS = {"backup": "backup", "ro": "read_only", "acl": "acl", "quota": "quota", "replicate": "replicate",
+            "shared": "shared"}
+
+
+def mount_points(e: Entry, conf: dict) -> list[dict]:
+    """The container's mp0, mp1, ... as mount_points entries (the module numbers them in list order)."""
+    keys = sorted((k for k in conf if re.fullmatch(r"mp\d+", k)), key=lambda k: int(k[2:]))
+    if keys != [f"mp{i}" for i in range(len(keys))]:
+        e.blockers.append("mount points " + ", ".join(keys) + " have a gap: the module numbers them mp0, mp1, ... "
+                          "in list order")
+        return []
+    out = []
+    for k in keys:
+        vol, o = options(conf[k])
+        mp = {"volume": vol, "path": o.get("mp", "")}
+        if not vol or not mp["path"].startswith("/"):
+            e.blockers.append(f"{k} {conf[k]}: no volume or path")
+            continue
+        if "size" in o or not vol.startswith("/"):   # a volume (a host path: a bind mount, usually no size)
+            size = whole(gib(o.get("size")))
+            if size is None:
+                e.blockers.append(f"{k} size {o.get('size')}: not a whole number of GiB")
+                continue
+            mp["size_gib"] = size
+        for opt, name in MP_FLAGS.items():
+            if opt in o:
+                mp[name] = flag(o, opt)
+        if o.get("mountoptions"):
+            mp["mount_options"] = [m for m in o["mountoptions"].split(";") if m]
+        for opt in sorted(set(o) - set(MP_FLAGS) - {"mp", "size", "mountoptions"}):
+            e.notes.append(f"{k} {opt}={o[opt]}: the module doesn't set it")
+        out.append(mp)
+    return out
 
 
 def lxc_entry(g: dict, ctx: dict) -> Entry:
@@ -464,20 +537,34 @@ def lxc_entry(g: dict, ctx: dict) -> Entry:
     for k in ("acl", "quota", "replicate"):   # mountoptions: the provider keeps them (no change in the plan)
         if o.get(k) and not (k == "replicate" and o[k] == "1"):
             e.notes.append(f"rootfs {k}={o[k]}: the module doesn't set it")
-    mps = sorted((k for k in conf if re.fullmatch(r"mp\d+", k)), key=lambda k: int(k[2:]))
+    mps = mount_points(e, conf)
     if mps:
-        e.blockers.append("mount points (" + ", ".join(mps) + "): the module has none, the plan would remove them")
+        e.set("mount_points", mps)
     devs = sorted(k for k in conf if re.fullmatch(r"dev\d+", k))
     if devs:
         e.blockers.append("device passthrough (" + ", ".join(devs) + "): the module has none")
     if not flag(conf, "unprivileged"):
         e.set("unprivileged", False)
-    _, feats = options(conf.get("features"))
-    if not flag(feats, "nesting"):
-        e.set("nesting", False)
-    for k, v in feats.items():
-        if k != "nesting" and v not in ("0", ""):
-            e.notes.append(f"feature {k}={v}: the module sets only nesting, the plan removes it")
+    if not conf.get("features"):      # no features line: the module would add one; nesting = false for an older
+        e.set("nesting", False)       # template without the features attribute
+        e.set("features", False)
+    else:
+        _, feats = options(conf.get("features"))
+        if not flag(feats, "nesting"):
+            e.set("nesting", False)
+        for k, v in feats.items():
+            if k in ("keyctl", "fuse", "mknod") and flag(feats, k):
+                e.set(k, True)
+            elif k == "mount" and v:
+                e.set("mount_types", [t for t in v.split(";") if t])
+            elif k not in ("nesting", "keyctl", "fuse", "mknod", "mount") and v not in ("0", ""):
+                e.notes.append(f"feature {k}={v}: the module doesn't set it, the plan removes it")
+    # the console block: else the first plan removes Proxmox's defaults from the state (tty, 2 ttys)
+    e.set("console_mode", str(conf.get("cmode") or "tty"))
+    if re.fullmatch(r"\d+", str(conf.get("tty") or "")) and int(conf["tty"]) != 2:
+        e.set("tty_count", int(conf["tty"]))
+    if str(conf.get("console", "1")) == "0":
+        e.set("console", False)
     if conf.get("arch") not in (None, "amd64"):
         e.notes.append(f"arch {conf['arch']}: the module doesn't set it")
     n = nets(conf)
@@ -525,9 +612,19 @@ def render_entry(e: Entry, indent: str = "  ") -> str:
     lines = [f"{indent}# {e.g['vmid']} {e.key}" + (": imported as is" if not e.notes else
                                                     ": the first plan will also change")]
     lines += [f"{indent}#   - {one_line(n)}" for n in e.notes]
-    width = max(len(n) for n, _ in e.attrs)
     lines.append(f"{indent}{hcl(e.key)} = {{")
-    lines += [f"{indent}  {n.ljust(width)} = {hcl(v)}" for n, v in e.attrs]
+    multi = [isinstance(v, list) and len(v) > 1 and all(isinstance(x, dict) for x in v) for _, v in e.attrs]
+    width = 0
+    for i, (n, v) in enumerate(e.attrs):
+        if multi[i]:   # one object per line; like tofu fmt, the `=` of single-line runs around it align apart
+            lines.append(f"{indent}  {n} = [")
+            lines += [f"{indent}    {hcl(x)}," for x in v]
+            lines.append(f"{indent}  ]")
+            continue
+        if i == 0 or multi[i - 1]:
+            run = next((j for j in range(i, len(e.attrs)) if multi[j]), len(e.attrs))
+            width = max(len(m) for m, _ in e.attrs[i:run])
+        lines.append(f"{indent}  {n.ljust(width)} = {hcl(v)}")
     lines.append(f"{indent}}}")
     return "\n".join(lines)
 
@@ -580,7 +677,7 @@ def plan(cfg: dict, site_name: str | None, wanted: list[str]) -> dict:
     if (snap.get("config_version") or 0) < CONFIG_VERSION or any(
             "config" not in g for g in guests if not g.get("template")):
         raise hmlib.ConfigError(f"the snapshot lacks guest configs this script copies (cpu type, protection, swap, "
-                                f"DNS): run {rerun} first.")
+                                f"DNS, an LXC's console): run {rerun} first.")
     text = tfvars.read_text()
     tv = read_tfvars(text)
     variables = env_dir / "variables.tf"
@@ -609,7 +706,22 @@ def plan(cfg: dict, site_name: str | None, wanted: list[str]) -> dict:
         elif e.key in used.get(e.kind, set()):
             e.blockers.insert(0, f"{e.kind} already has an entry named {e.key} (another VMID): rename one first")
         unsupported = [n for n, _ in e.attrs if e.kind in supported and n not in supported[e.kind]]
+        if e.kind == "vms" and "disk_cache" not in supported.get("vms", {"disk_cache"}):   # extra disks: no options
+            for n, v in e.attrs:
+                if n == "extra_disks" and any(f in d for d in v for f in DISK_FIELDS):
+                    unsupported.append("extra_disks options")
+                    for d in v:
+                        for f in DISK_FIELDS:
+                            d.pop(f, None)
         if unsupported:
+            attrs = dict(e.attrs)
+            for n in unsupported:   # what an older template would change for the worse: no entry then
+                why = {"mount_points": "the plan would remove them", "os_type": f"{attrs.get(n)} would become l26",
+                       "machine": "the default i440fx changes the guest's PCI layout" if "q35" in str(
+                           attrs.get(n)) else ""}.get(n)
+                if why:
+                    e.blockers.append(f"{n}: not in this environment's variables.tf (older template; "
+                                      f"init_repo.py --sync-managed updates it), {why}")
             e.attrs = [(n, v) for n, v in e.attrs if n not in unsupported]
             e.notes.append(f"{', '.join(unsupported)}: not in this environment's variables.tf (older template; "
                            "init_repo.py --sync-managed updates it), so the plan changes it")
@@ -635,7 +747,7 @@ def report(p: dict) -> str:
         out.append("# homelab.auto.tfvars has no `defaults` block yet: fill it from homelab.yaml before planning.")
     if p["entries"]:
         out.append("# Every first plan also adds the tag `tofu` and the default description where a guest has none,")
-        out.append("# and shows import noise that sets nothing on Proxmox: vm_id, timeout_start, an LXC's console.")
+        out.append("# and shows import noise that sets nothing on Proxmox: vm_id, timeout_start, migrate.")
         out += ["", f"# --- {rel}/imports.tf ---"]
         out += [render_import(e) for e in p["entries"]]
         for kind in ("vms", "containers"):

@@ -890,6 +890,8 @@ class PveNodePlanTests(unittest.TestCase):  # issue 23
                                             "cmode": "shell", "tty": "4", "console": "0", "lock": "backup"}),
                          {"cpu": "host", "protection": "1", "swap": "512", "serial0": "socket", "cmode": "shell",
                           "tty": "4", "console": "0"})
+        import tofu_import_plan                                 # the snapshot carries what the import plan reads
+        self.assertEqual(pinv.CONFIG_VERSION, tofu_import_plan.CONFIG_VERSION)
         plan, _ = self.p.make_plan({**self.inv, "details_at": "t1"}, "pve1")
         self.assertIn("guest config from t1", self.p.render(plan, []))
 
