@@ -221,6 +221,9 @@ HEREDOC_RUNNERS = SCRIPT_RUNNERS | {"ssh", "eval", "xargs", "osascript"}
 SHELL_KEYWORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "}"}
 
 
+CASE_RE = re.compile(r"""case[ \t]+("[^"]*"|'[^']*'|[^\s;]+)[ \t]+in(?=[\s;])""")
+
+
 class Shell:
     """Split a command into simple commands the way the shell would: separators inside quotes don't
     split, $(…) and `…` are commands of their own, comments are dropped, and heredoc bodies are
@@ -357,14 +360,59 @@ class Shell:
             else:
                 i += 1
 
+    def case_pattern(self, i: int) -> int:
+        """At a case item: skip blank lines, comments and the pattern up to its `)`; at `esac`, stop before it."""
+        s, n = self.s, len(self.s)
+        while i < n:
+            if s[i] in " \t\n":
+                i += 1
+            elif s[i] == "#":
+                nl = s.find("\n", i)
+                i = n if nl < 0 else nl
+            else:
+                break
+        if s.startswith("esac", i):
+            return i
+        while i < n and s[i] != ")":
+            if s[i] in "'\"":
+                q = s.find(s[i], i + 1)
+                i = n if q < 0 else q + 1
+            else:
+                i += 2 if s[i] == "\\" else 1
+        return i + 1
+
     def parse(self, i: int, stop: str | None) -> int:
         s, n = self.s, len(self.s)
         buf: list[str] = []
         pending: list = []
         line_start = len(self.segments)
         depth = 0
+        cases = 0           # open `case … esac` blocks
+        patterns = False    # at a case item's pattern (`a|b)`), which is no command
         while i < n:
             c = s[i]
+            if patterns:
+                i = self.case_pattern(i)
+                if s.startswith("esac", i) and (i + 4 == n or s[i + 4] in " \t\n;)&|"):
+                    cases, i = cases - 1, i + 4
+                patterns = False
+                continue
+            at_word = not "".join(buf).strip()
+            if at_word and cases and s.startswith("esac", i) and (i + 4 == n or s[i + 4] in " \t\n;)&|"):
+                cases, i = cases - 1, i + 4     # the last item without `;;`
+                continue
+            if at_word and (m := CASE_RE.match(s, i)):
+                buf.append(m.group(0))
+                self.substitutions(i, m.end())
+                self.flush(buf)
+                cases, patterns, i = cases + 1, True, m.end()
+                continue
+            if cases and (s.startswith(";;", i) or s.startswith(";&", i)):
+                self.flush(buf)
+                self._pipe = False
+                i += 3 if s.startswith(";;&", i) else 2
+                patterns = True
+                continue
             if stop == "`" and c == "`" or stop == ")" and c == ")" and depth == 0:
                 self.flush(buf)
                 return i + 1

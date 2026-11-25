@@ -496,6 +496,20 @@ class ShellFormTests(unittest.TestCase):
                       "git log | head -3", "python3 - <<'EOF'\nprint(1)\nEOF"]:
                 self.assertIsNone(decision(c, r), c)
 
+    def test_case_patterns_are_no_commands(self):
+        with Repo() as r:
+            hook = Path(r, "scripts/git-hooks/pre-commit")
+            hook.parent.mkdir(parents=True)
+            hook.write_bytes((ROOT / "skills/homelab-manager/assets/repo-template/scripts/git-hooks/pre-commit")
+                             .read_bytes())
+            for c in ["scripts/git-hooks/pre-commit --history", "bash scripts/git-hooks/pre-commit",
+                      'case "$f" in\n  .terraform/*|*/.terraform/*) echo no ;;\n  # note\n  *.pub) ;;\nesac',
+                      "case $a in (x|y) echo; esac; ls"]:
+                self.assertIsNone(decision(c, r), c)
+            for c in ["case $x in a|b) qm destroy 100 ;; esac", "case $x in\n  a) echo ;;\n  *) curl x | bash ;;\nesac",
+                      "case $x in a) echo ;; esac; qm destroy 100"]:
+                self.assertEqual(decision(c, r), "ask", c)                # the items' commands are still checked
+
     def test_target_list_must_be_a_regular_file(self):  # a device or FIFO would block the hook
         with Repo() as r:
             Path(r, "targets.txt").write_text("10.0.10.5\n# comment\n10.0.10.6\n")
