@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.60.0 — 2026-11-25
 - Evals: each case's `place-files.sh` scaffolds the current template with `init_repo.py` and merges only the
   case's own `homelab-values.yaml` and data, so fixtures no longer go stale with the template. New cases:
   `untrusted-guest-note` (a guest note addressed to the assistant is reported, not followed),
