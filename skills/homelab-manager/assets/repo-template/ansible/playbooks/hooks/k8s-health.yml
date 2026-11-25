@@ -1,0 +1,112 @@
+# Cluster health check for patch-linux.yml (-e health_check=playbooks/hooks/k8s-health.yml): a Kubernetes node,
+# with pre_hook k8s-drain.yml and post_hook k8s-uncordon.yml (the post-hook runs first, so the node should be
+# schedulable again here). Runs on this Mac with the kubeconfig kubectl uses (kubernetes.core, never sudo).
+# Read-only; a failed check stops the roll before the next node. Settings (homelab.yaml clusters: entry, passed
+# with -e, or group_vars):
+#   k8s_node_name        the node's name in Kubernetes (default: the inventory name)
+#   k8s_pending_ignore   pods allowed to stay Pending, regexes on <namespace>/<name> (default: none)
+#   health_retries / health_delay   how long the node and the pods get to settle (default 30 × 10 s)
+- name: Node {{ k8s_node_name | default(inventory_hostname) }} is Ready and schedulable
+  kubernetes.core.k8s_info:
+    kind: Node
+    name: "{{ k8s_node_name | default(inventory_hostname) }}"
+  register: hm_k8s_node
+  until: hm_k8s_ok | bool
+  retries: "{{ health_retries | default(30) }}"
+  delay: "{{ health_delay | default(10) }}"
+  failed_when: false
+  vars:
+    hm_k8s_ok: >-
+      {{ hm_k8s_node.resources | default([]) | length == 1
+         and (hm_k8s_node.resources[0].status.conditions | default([]) | selectattr('type', 'eq', 'Ready')
+              | map(attribute='status') | first | default('')) == 'True'
+         and not (hm_k8s_node.resources[0].spec.unschedulable | default(false)) }}
+  delegate_to: localhost
+  become: false
+
+- name: The node came back
+  ansible.builtin.assert:
+    that: hm_k8s_node.resources | default([]) | length == 1 and ready == 'True' and not cordoned
+    fail_msg: >-
+      {{ 'Kubernetes has no node ' ~ node ~ ' (' ~ (hm_k8s_node.msg | default('not found')) ~ '): set k8s_node_name'
+         if hm_k8s_node.resources | default([]) | length != 1 else
+         'Node ' ~ node ~ (' is not Ready (' ~ (ready or 'no Ready condition') ~ ')' if ready != 'True' else '')
+         ~ (' is still cordoned: the post-hook (k8s-uncordon.yml) did not run or failed' if cordoned else '') }}.
+  vars:
+    node: "{{ k8s_node_name | default(inventory_hostname) }}"
+    res: "{{ hm_k8s_node.resources | default([{}]) | first | default({}) }}"
+    ready: "{{ res.status.conditions | default([]) | selectattr('type', 'eq', 'Ready') | map(attribute='status')
+               | first | default('') }}"
+    cordoned: "{{ res.spec.unschedulable | default(false) | bool }}"
+  delegate_to: localhost
+  become: false
+
+- name: Every node is Ready
+  kubernetes.core.k8s_info:
+    kind: Node
+  register: hm_k8s_nodes
+  until: hm_k8s_not_ready | length == 0
+  retries: "{{ health_retries | default(30) }}"
+  delay: "{{ health_delay | default(10) }}"
+  failed_when: false
+  vars:
+    hm_k8s_not_ready: &hm_not_ready >-
+      {%- set out = [] -%}
+      {%- for n in hm_k8s_nodes.resources | default([]) -%}
+        {%- if (n.status.conditions | default([]) | selectattr('type', 'eq', 'Ready') | map(attribute='status')
+               | first | default('')) != 'True' -%}
+          {%- set _ = out.append(n.metadata.name) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+  delegate_to: localhost
+  become: false
+
+- name: No other node went down
+  ansible.builtin.assert:
+    that: hm_k8s_nodes.resources | default([]) | length > 0 and hm_k8s_not_ready | length == 0
+    fail_msg: >-
+      {{ ('Cannot list the nodes: ' ~ (hm_k8s_nodes.msg | default('no answer'))) if hm_k8s_nodes.resources | default([]) | length == 0
+         else 'Nodes not Ready: ' ~ hm_k8s_not_ready | join(', ') }}
+  vars:
+    hm_k8s_not_ready: *hm_not_ready
+  delegate_to: localhost
+  become: false
+
+- name: No pods Pending (the drained node's pods were scheduled again)
+  kubernetes.core.k8s_info:
+    kind: Pod
+    field_selectors: [status.phase=Pending]
+  register: hm_k8s_pending
+  until: hm_k8s_pending is not failed and hm_k8s_still_pending | length == 0
+  retries: "{{ health_retries | default(30) }}"
+  delay: "{{ health_delay | default(10) }}"
+  failed_when: false
+  vars:
+    hm_k8s_still_pending: &hm_pending >-
+      {%- set ign = k8s_pending_ignore | default([], true) -%}
+      {%- set ign = ign.split(',') if ign is string else ign -%}
+      {%- set out = [] -%}
+      {%- for p in hm_k8s_pending.resources | default([]) -%}
+        {%- set id = p.metadata.namespace ~ '/' ~ p.metadata.name -%}
+        {%- if not (ign | length > 0 and id is match('(' ~ ign | join(')$|(') ~ ')$')) -%}
+          {%- set _ = out.append(id) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+  delegate_to: localhost
+  become: false
+
+- name: Every pod was scheduled
+  ansible.builtin.assert:
+    that: hm_k8s_pending is not failed and hm_k8s_still_pending | length == 0
+    fail_msg: >-
+      {{ ('Cannot list the pods: ' ~ (hm_k8s_pending.msg | default('no answer'))) if hm_k8s_pending is failed
+         else 'Pods still Pending: ' ~ hm_k8s_still_pending[:20] | join(', ')
+              ~ (' …' if hm_k8s_still_pending | length > 20 else '')
+              ~ '. `kubectl describe pod` says why (resources, a volume bound to the drained node, a taint);'
+              ~ ' a pod that stays Pending for its own reasons can be listed in k8s_pending_ignore.' }}
+  vars:
+    hm_k8s_still_pending: *hm_pending
+  delegate_to: localhost
+  become: false

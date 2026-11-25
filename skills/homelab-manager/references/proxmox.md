@@ -48,6 +48,11 @@ step (ansible.md), done after the VMs are verified.
 
 Declarative: `started = false/true` in the entry. One-off reboot of a single VM is fine
 via API with approval; the guard asks for `qm reboot/stop/shutdown`.
+One-off power changes through the API (provisioning token, `--site N` for another site): `pve_guest.py start <guest…>`
+starts stopped guests; `pve_guest.py shutdown <guest…> [--timeout 180]` shuts running ones down cleanly (ACPI or the
+guest agent; a guest still running after the timeout is reported and left running, never forced);
+`pve_guest.py stop <guest…>` cuts the power, only after a shutdown failed. The guard asks for both. A guest OpenTofu
+manages with `started = true` is started again by the next apply: say so, or set `started = false` in its entry.
 
 ## Migrate (cluster only)
 
@@ -126,6 +131,8 @@ changing anything, show the user the jobs (`jq .backup_jobs discovery/proxmox.js
   grant in the repo's `docs/proxmox-tokens.md` ("Backup jobs": which rights, and why only on the backup storage) —
   the user runs it on a node — or the GUI instead:
   Datacenter → Backup → the job → Edit → add the guests. Re-run `proxmox_inventory.py` and drift afterwards.
+- **Restore test** ("are the backups restorable?"): the repo's `docs/recovery.md` "Restore test": a copy on a
+  new VMID with new MACs on an isolated bridge, boot, check, remove; each step a command the user approves.
 
 ## Secure Boot certificates (Microsoft 2023 CA)
 

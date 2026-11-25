@@ -71,7 +71,8 @@ COMPONENTS = {
                  "ansible/playbooks/hooks/vrrp-health.yml",
                  "ansible/inventory/managed/group_vars/proxmox_nodes.yml", "ansible/roles/"]),
     "discovery": ("Network discovery with nmap in authorized ranges", [], []),
-    "windows": ("Windows hosts (Ansible over OpenSSH)", ["ansible"], ["ansible/inventory/managed/group_vars/windows.yml"]),
+    "windows": ("Windows hosts (Ansible over OpenSSH)", ["ansible"], ["ansible/inventory/managed/group_vars/windows.yml",
+                                                                         "ansible/playbooks/patch-windows.yml"]),
     "appliances": ("Appliances: NAS, firewall, switches, BMCs (inventory + read-only checks)", ["ansible"],
                    ["ansible/inventory/managed/group_vars/appliances.yml", "ansible/inventory/managed/group_vars/bmc.yml",
                     "ansible/playbooks/bmc-info.yml", "ansible/inventory/managed/group_vars/unifi.yml",
@@ -80,10 +81,11 @@ COMPONENTS = {
                     "ansible/playbooks/routeros-routerboot-upgrade.yml",
                     "ansible/inventory/managed/group_vars/qnap.yml", "ansible/playbooks/qnap-containers.yml"]),
     "kubernetes": ("Kubernetes clusters (rolling patching with drain/uncordon)", ["ansible"],
-                   ["ansible/playbooks/hooks/k8s-drain.yml", "ansible/playbooks/hooks/k8s-uncordon.yml"]),
+                   ["ansible/playbooks/hooks/k8s-drain.yml", "ansible/playbooks/hooks/k8s-uncordon.yml",
+                    "ansible/playbooks/hooks/k8s-health.yml"]),
 }
 CORE = ["homelab.yaml", "README.md", "CLAUDE.md", "skill_issues.md", ".gitignore", ".claude/", "docs/README.md",
-        "docs/decisions.md", "scripts/", "discovery/"]
+        "docs/decisions.md", "docs/recovery.md", "scripts/", "discovery/"]
 # Owned by the plugin: kept identical to the template by --sync-managed (headers say so). None at the moment.
 MANAGED: list[str] = []
 # Were plugin-managed in older versions; removed by --sync-managed if still unedited-managed (header present).

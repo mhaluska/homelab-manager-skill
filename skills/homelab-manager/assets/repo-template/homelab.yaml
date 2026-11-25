@@ -114,6 +114,7 @@ clusters: []
 #    ansible_group: k8s_workers
 #    pre_hook: playbooks/hooks/k8s-drain.yml
 #    post_hook: playbooks/hooks/k8s-uncordon.yml
+#    health_check: playbooks/hooks/k8s-health.yml    # nodes Ready, no pods Pending; k8s_pending_ignore
 #  - name: proxy                      # keepalived/VRRP pair: holder of the VIP last, always rebooted, health-gated
 #    ansible_group: proxies
 #    vip: 10.0.10.10

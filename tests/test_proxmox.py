@@ -350,6 +350,38 @@ class PveSnapshotTests(unittest.TestCase):  # issue 37
         self.assertEqual(pve_guest.start(self.pve, g[0], timeout=0, sleep=lambda _: None), "paused")
         self.assertEqual(state["starts"], 1)
 
+    def test_guest_shutdown_and_stop(self):  # GitHub issue #155
+        import pve_guest
+        state = {"st": "running", "task": "OK"}
+        orig = self.pve.get
+
+        def get(path, _method="GET", **params):
+            if path.endswith("/status/current"):
+                return {"status": state["st"]}
+            if path.endswith("/tasks/UPID:pve1:1/status"):
+                return {"status": "stopped", "exitstatus": state["task"]}
+            if path.endswith("/status/shutdown") and state["task"] == "OK":
+                state["st"] = "stopped"
+            if path.endswith("/status/stop"):
+                state["st"] = "stopped"
+            return orig(path, _method, **params)
+        self.pve.get = get
+        g = self.s.find_guests(self.pve, ["web01"])[0]
+        self.assertEqual(pve_guest.shutdown(self.pve, g, timeout=60, sleep=lambda _: None), ("stopped", None))
+        self.assertIn(("POST", "/nodes/pve1/qemu/101/status/shutdown", {"timeout": 60}), self.calls)
+        self.assertNotIn("forceStop", str(self.calls))                 # never forced
+        n = len(self.calls)                                            # stopped already: nothing is sent
+        self.assertEqual(pve_guest.shutdown(self.pve, g, sleep=lambda _: None), ("stopped", None))
+        self.assertEqual(pve_guest.stop(self.pve, g, sleep=lambda _: None), ("stopped", None))
+        self.assertFalse([c for c in self.calls[n:] if c[0] != "GET"])
+        state.update(st="running", task="VM quit/powerdown failed - got timeout")   # the guest ignored it
+        st, err = pve_guest.shutdown(self.pve, g, timeout=1, sleep=lambda _: None)
+        self.assertEqual(st, "running")
+        self.assertIn("got timeout", err)
+        state["task"] = "OK"
+        self.assertEqual(pve_guest.stop(self.pve, g, sleep=lambda _: None), ("stopped", None))
+        self.assertIn(("POST", "/nodes/pve1/qemu/101/status/stop", {}), self.calls)
+
     def test_failed_task_raises(self):
         self.pve.get = lambda path, **_: {"status": "stopped", "exitstatus": "snapshot feature is not available"}
         with self.assertRaises(SystemExit) as e:
@@ -786,6 +818,63 @@ class ProxmoxTlsAndPermissionTests(unittest.TestCase):
             self.pve({"/pool/lab": {"VM.Audit": 1}}).get("/cluster/status")
         self.assertIn("/pool/lab", str(e.exception))
         self.assertIn("pveum user token permissions homelab@pve ro", str(e.exception))
+
+    def test_token_expiry(self):  # GitHub issue #155: Proxmox has no token creation time, only `expire`
+        ce, now, day = self.check_env, 1_800_000_000, 86400
+        ids = {"read_only": "homelab@pve!ro", "provisioning": "homelab@pve!rw"}
+        users = [{"userid": "homelab@pve", "expire": 0,
+                  "tokens": [{"tokenid": "ro", "expire": now + 400 * day}, {"tokenid": "rw", "expire": now + 400 * day}]},
+                 {"userid": "root@pam", "tokens": [{"tokenid": "other", "expire": 0}]}]   # not the skill's: ignored
+        row = ce.token_expiry_row("proxmox:tokens", ids, users, now)
+        self.assertTrue(row["ok"], row)
+        self.assertIn("homelab@pve!ro in 400 days", row["detail"])
+        users[0]["tokens"][1]["expire"] = 0                                               # rw never expires
+        users[0]["tokens"][0]["expire"] = now + 10 * day                                  # ro soon
+        row = ce.token_expiry_row("proxmox:tokens", ids, users, now)
+        self.assertIsNone(row["ok"])
+        self.assertIn("expiring: homelab@pve!ro in 10 days", row["detail"])
+        self.assertIn("no expiry: homelab@pve!rw", row["detail"])
+        users[0]["expire"] = now + 5 * day                                                # the user's expiry counts too
+        self.assertIn("homelab@pve!rw in 5 days", ce.token_expiry_row("t", ids, users, now)["detail"])
+        users[0]["expire"] = now - day
+        row = ce.token_expiry_row("t", ids, users, now)
+        self.assertIs(row["ok"], False)
+        self.assertIn("expired: homelab@pve!ro, homelab@pve!rw", row["detail"])
+        row = ce.token_expiry_row("t", {"read_only": "homelab@pve!gone"}, users, now)
+        self.assertIn("not listed by Proxmox: homelab@pve!gone", row["detail"])
+
+        cfg = {"proxmox": {"endpoint": "https://pve1.example:8006"},
+               "secrets": {"proxmox-ro": {"service": "homelab/proxmox-ro"}, "proxmox-rw": {"service": "homelab/proxmox-rw"}}}
+        values = {"proxmox-ro": "homelab@pve!ro=s3cret-ro", "proxmox-rw": "homelab@pve!rw=s3cret-rw"}
+        calls = []
+
+        class Fake:
+            def get(self, path, **params):
+                calls.append((path, params))
+                return [{"userid": "homelab@pve", "tokens": [{"tokenid": "ro"}, {"tokenid": "rw", "expire": now + 99 * day}]}]
+
+        def connect(px, token):
+            self.assertEqual(token, "homelab@pve!ro=s3cret-ro")                         # the read-only token
+            return Fake()
+        with unittest.mock.patch.object(self.hmlib, "read_secret", side_effect=lambda c, n: values[n]):
+            rows = ce.check_token_expiry(cfg, now=now, connect=connect)
+        self.assertEqual(calls, [("/access/users", {"full": 1})])
+        self.assertEqual(rows[0]["check"], "proxmox:tokens")
+        self.assertIsNone(rows[0]["ok"])
+        self.assertIn("no expiry: homelab@pve!ro", rows[0]["detail"])
+        self.assertNotIn("s3cret", json.dumps(rows))
+
+        error = self.inv.PveError("Proxmox API refused /access/users (401): the token 'homelab@pve!ro' is wrong")
+
+        def refused(px, token):
+            class R:
+                def get(self, path, **_):
+                    raise error
+            return R()
+        with unittest.mock.patch.object(self.hmlib, "read_secret", side_effect=lambda c, n: values[n]):
+            self.assertIs(ce.check_token_expiry(cfg, now=now, connect=refused)[0]["ok"], False)
+        with unittest.mock.patch.object(self.hmlib, "read_secret", side_effect=self.hmlib.ConfigError("locked")):
+            self.assertIn("not readable", ce.check_token_expiry(cfg, now=now, connect=connect)[0]["detail"])
 
     def test_fallback_endpoints(self):  # GitHub issue 98
         from unittest import mock

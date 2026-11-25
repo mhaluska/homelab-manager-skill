@@ -28,6 +28,11 @@ never values). Run it after setup, after macOS updates, and whenever a secret re
 - GitHub: `gh` keeps its token in the keychain (`gh auth login`); never print it (`gh auth token` is denied).
 - Rotation: user creates the new token, updates the keychain item (`-U` overwrites),
   `check_env.py`, then revokes the old one.
+- Expiry: `check_env.py` reads each site's skill tokens with the read-only token (`proxmox:tokens` rows) and warns
+  about a token without an expiry or one (or its user) expiring within 30 days; an expired one fails. Proxmox
+  records no creation time, so a token's age is unknown: an expiry is how rotation gets a date. Suggest one when
+  the user next rotates a token (`pveum user token add … --expire <epoch>`, or `pveum user token modify <user>
+  <tokenid> --expire <epoch>` on a node; the user runs it) and rotating before it passes; never set it for them.
 
 ## Security audit ("run a security audit")
 

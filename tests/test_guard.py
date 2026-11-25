@@ -254,6 +254,11 @@ class GuardInfraTests(unittest.TestCase):
         self.assertEqual(decision("ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=pve1", self.d), "ask")
         self.assertEqual(decision("ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=pve1 "
                                   "-e allow_reboot=true", self.d), "ask")
+        win = "ansible-playbook playbooks/patch-windows.yml -e target=windows"           # GitHub issue #153
+        self.assertEqual(decision(win, self.d), "ask")
+        self.assertEqual(decision(win + " -e reboot=true -e categories=SecurityUpdates", self.d), "ask")
+        self.assertIsNone(decision(win + " --check", self.d))                             # lists what it would install
+        self.assertIsNone(decision(win + " -e reboot=true --check", self.d))
         self.assertIsNone(decision("ansible-playbook playbooks/check-updates.yml", self.d))
         self.assertIsNone(decision("ansible-playbook playbooks/security-audit.yml -e target=site_a", self.d))  # #139
         self.assertIsNone(decision("python3 scripts/security_audit.py --site a --report", self.d))
@@ -914,6 +919,14 @@ class GuardConfigTests(unittest.TestCase):
         for cmd in ("python3 /p/pve_snapshot.py prune web01 --older-than 30 --dry-run",
                     "python3 /p/pve_snapshot.py rollback 101 --name x --dry-run",
                     "python3 /p/lxd_snapshot.py prune app1 --older-than 30 --dry-run"):
+            self.assertIsNone(self.d(cmd), cmd)
+
+    def test_pve_guest_shutdown_and_stop_ask(self):  # GitHub issue #155
+        for cmd in ("python3 /p/pve_guest.py shutdown web01", "python3 /p/pve_guest.py shutdown 101 --timeout 300",
+                    "python3 /p/pve_guest.py stop web01 --site offsite", "python3 /p/pve_guest.py --site b stop 101"):
+            self.assertEqual(self.d(cmd), "ask", cmd)
+        for cmd in ("python3 /p/pve_guest.py status web01 --json", "python3 /p/pve_guest.py start web01",
+                    "python3 /p/pve_guest.py status stopwatch"):
             self.assertIsNone(self.d(cmd), cmd)
 
     def test_lxd_snapshot_delete_and_restore_ask(self):  # issue 44

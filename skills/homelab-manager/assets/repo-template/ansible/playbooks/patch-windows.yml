@@ -1,0 +1,192 @@
+# Windows updates, one host at a time (GitHub issue #153).
+#
+#   ansible-playbook playbooks/patch-windows.yml -e target=<group|host> --check     # what would be installed
+#   ansible-playbook playbooks/patch-windows.yml -e target=<group|host> [-e categories=SecurityUpdates,CriticalUpdates]
+#       [-e reboot=true] [-e snapshot=true -e hm_scripts=$HM/scripts [-e snapshot_missing=skip]]
+#       [-e health_services=<service,…>] [-e health_timeout=300]
+#
+# target: a group, a host or a list (commas or colons, as in check-updates.yml); only its hosts in the windows group
+# are patched, so -e target=all never reaches Linux hosts. Nothing runs without a target.
+# --check searches only (ansible.windows.win_updates in check mode) and lists, per host, the updates that would be
+# installed: nothing is downloaded, installed or snapshotted.
+# categories: win_updates category names, comma-separated or a list (default SecurityUpdates, CriticalUpdates;
+# check-updates.yml also counts UpdateRollups).
+# reboot: false (default) installs and reports reboot_pending; true lets win_updates reboot the host whenever an
+# update needs it and carry on installing until none is left (win_reboot_timeout, default 1800 s per reboot).
+# Always one host at a time and the run stops at the first failure: domain controllers, failover clusters and
+# other clustered roles must never restart together.
+# snapshot=true: as in patch-linux.yml, first checks that every target maps to a Proxmox guest that can be
+# snapshotted (pve_snapshot.py check per site, read-only) and refuses otherwise before anything is patched;
+# -e snapshot_missing=skip patches the others without one (a physical host, a guest of another hypervisor).
+# Then a disk-only snapshot snapshot_name (default prepatch-<date>) of each guest right before its updates; the
+# guest is the inventory short name or the host var proxmox_vmid, a site_<name> group uses that site's Proxmox.
+# Remove the snapshots after a good run with pve_snapshot.py delete (the user's yes): they keep growing.
+# health_services: Windows services that must be running after the updates (e.g. NTDS,DNS on a domain
+# controller); each gets health_timeout seconds (default 300) after a reboot. Automatic services that ran before
+# and are stopped afterwards are reported too.
+- name: Check the target and the snapshots (before any host is patched)
+  hosts: "{{ (target | default('__no_target__') | replace(',', ':')) ~ ':&windows' }}"
+  gather_facts: false
+  become: false
+  vars:
+    # Proxmox guest per site (their site_<name> group; none = the default site ''): VMIDs are unique per site only
+    hm_snap_by_site: >-
+      {%- set out = {} -%}
+      {%- for h in ansible_play_hosts_all -%}
+        {%- set st = hostvars[h].group_names | select('match', '^site_') | map('regex_replace', '^site_', '')
+                     | first | default('') -%}
+        {%- set _ = out.setdefault(st, {}).update(
+              {h: (hostvars[h].proxmox_vmid | default(hostvars[h].inventory_hostname_short)) | string}) -%}
+      {%- endfor -%}
+      {{ out }}
+    # inventory host → why it can't be snapshotted
+    hm_snap_bad: >-
+      {%- set out = {} -%}
+      {%- for res in hm_snap_check.results | default([]) if res.stdout is defined -%}
+        {%- set r = res.stdout | from_json -%}
+        {%- set why = r.not_a_guest | combine(r.no_snapshot) -%}
+        {%- for h, id in hm_snap_by_site[res.item].items() if id in why -%}
+          {%- set _ = out.update({h: (res.item ~ ': ' if res.item else '') ~ why[id]}) -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out }}
+  tasks:
+    - name: Refuse to run without an explicit target
+      ansible.builtin.assert:
+        that: target is defined and target | length > 0
+        fail_msg: "Pass -e target=<group or host>."
+      run_once: true
+
+    - name: snapshot=true needs the skill's scripts
+      ansible.builtin.assert:
+        that: hm_scripts is defined and (snapshot_missing | default('fail')) in ['fail', 'skip']
+        fail_msg: "Pass -e hm_scripts=<skill dir>/scripts with snapshot=true (pve_snapshot.py); snapshot_missing is fail or skip."
+      run_once: true
+      when: snapshot | default(false) | bool
+
+    - name: snapshot=true — can every target be snapshotted? (pve_snapshot.py check per site, read-only)
+      ansible.builtin.command:
+        argv: >-
+          {{ ['python3', hm_scripts ~ '/pve_snapshot.py', 'check', '--json'] + (['--site', item] if item else [])
+             + hm_snap_by_site[item].values() | unique }}
+        chdir: "{{ playbook_dir }}/../.."
+      loop: "{{ hm_snap_by_site.keys() | list }}"
+      register: hm_snap_check
+      failed_when: hm_snap_check.rc not in [0, 1]
+      changed_when: false
+      check_mode: false
+      delegate_to: localhost
+      run_once: true
+      when: snapshot | default(false) | bool
+
+    - name: snapshot=true — refuse unless every target can be snapshotted (or snapshot_missing=skip)
+      ansible.builtin.assert:
+        that: hm_snap_bad | length == 0 or (snapshot_missing | default('fail')) == 'skip'
+        fail_msg: >-
+          Can't snapshot: {% for h, why in hm_snap_bad.items() %}{{ h }} ({{ why }}){{ '; ' if not loop.last }}{%
+          endfor %}. Nothing was snapshotted or patched. Leave them out of the target, or patch them without a
+          snapshot with -e snapshot_missing=skip (the user's yes).
+      run_once: true
+      when: snapshot | default(false) | bool
+
+    - name: Hosts patched without a snapshot (snapshot_missing=skip)
+      ansible.builtin.set_fact:
+        hm_snapshot_skip: "{{ hm_snap_bad[inventory_hostname] | default('') }}"
+      when: snapshot | default(false) | bool
+
+- name: Install Windows updates
+  hosts: "{{ (target | default('__no_target__') | replace(',', ':')) ~ ':&windows' }}"
+  serial: 1
+  max_fail_percentage: 0
+  any_errors_fatal: true
+  gather_facts: false
+  vars:
+    categories: [SecurityUpdates, CriticalUpdates]
+    reboot: false
+    snapshot: false
+    snapshot_name: "prepatch-{{ now().strftime('%Y%m%d') }}"
+    hm_categories: "{{ (categories.split(',') if categories is string else categories) | map('trim') | select | list }}"
+    hm_known_categories: [Application, Connectors, CriticalUpdates, DefinitionUpdates, DeveloperKits, FeaturePacks,
+                          Guidance, SecurityUpdates, ServicePacks, Tools, UpdateRollups, Updates, Upgrades]
+    hm_health_services: >-
+      {{ (health_services.split(',') if health_services is string else health_services) | default([], true)
+         | map('trim') | select | list }}
+
+  pre_tasks:
+    - name: categories are win_updates category names
+      ansible.builtin.assert:
+        that: hm_categories | length > 0 and hm_categories | difference(hm_known_categories) | length == 0
+        fail_msg: >-
+          categories={{ categories }}: use one or more of {{ hm_known_categories | join(', ') }}
+          (comma-separated).
+      run_once: true
+
+    - name: Automatic services running before the updates
+      ansible.windows.win_service_info:
+      register: hm_svc_before
+      check_mode: false
+
+    - name: Pre-patch snapshot (snapshot=true; not in --check)
+      ansible.builtin.command:
+        argv: >-
+          {{ ['python3', hm_scripts ~ '/pve_snapshot.py', 'create', (proxmox_vmid | default(inventory_hostname_short)) | string]
+             + (['--site', hm_site] if hm_site else []) + ['--name', snapshot_name] }}
+        chdir: "{{ playbook_dir }}/../.."
+      vars:
+        hm_site: "{{ group_names | select('match', '^site_') | map('regex_replace', '^site_', '') | first | default('') }}"
+      delegate_to: localhost
+      changed_when: "'done' in snap.stdout"
+      register: snap
+      when: snapshot | bool and hm_snapshot_skip | default('') | length == 0 and not ansible_check_mode
+
+  tasks:
+    # In check mode win_updates only searches: `updates` lists what an install run would install
+    - name: Install updates ({{ hm_categories | join(', ') }}){{ ' — search only (--check)' if ansible_check_mode else '' }}
+      ansible.windows.win_updates:
+        category_names: "{{ hm_categories }}"
+        state: installed
+        reboot: "{{ reboot | bool }}"
+        reboot_timeout: "{{ win_reboot_timeout | default(1800) }}"
+      register: hm_win
+
+    - name: Required services running
+      ansible.windows.win_service_info:
+        name: "{{ item }}"
+      loop: "{{ hm_health_services }}"
+      register: hm_health
+      until: (hm_health.services | default([]) | first | default({})).state | default('') == 'started'
+      retries: "{{ ((health_timeout | default(300) | int) / 10) | round(0, 'ceil') | int }}"
+      delay: 10
+      check_mode: false
+
+    - name: Automatic services running after the updates
+      ansible.windows.win_service_info:
+      register: hm_svc_after
+      check_mode: false
+      when: not ansible_check_mode
+
+    - name: Automatic services that ran before still run
+      ansible.builtin.assert:
+        that: stopped | length == 0
+        fail_msg: >-
+          Automatic services that ran before the updates are stopped now: {{ stopped | join(', ') }}. Check the
+          host's System event log; start them, or rerun the rest without this host once the cause is known.
+      vars:
+        running: "{{ hm_svc_before.services | selectattr('start_mode', 'in', ['auto', 'delayed'])
+                     | selectattr('state', 'eq', 'started') | map(attribute='name') | list }}"
+        stopped: "{{ hm_svc_after.services | selectattr('name', 'in', running)
+                     | rejectattr('state', 'eq', 'started') | map(attribute='name') | list }}"
+      when: not ansible_check_mode
+
+  post_tasks:
+    - name: Result
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: {{ ('would install ' ~ (hm_win.found_update_count | default(0)))
+          if ansible_check_mode else ('installed ' ~ (hm_win.installed_update_count | default(0))
+          ~ ', failed ' ~ (hm_win.failed_update_count | default(0))) }}
+          ({{ titles | join('; ') or 'nothing' }}){{ (', snapshot ' ~ snapshot_name) if snap is changed else '' }}{{
+          (', no snapshot: ' ~ hm_snapshot_skip) if snapshot | bool and hm_snapshot_skip | default('') | length > 0
+          else '' }}, reboot_pending={{ hm_win.reboot_required | default(false) }}
+      vars:
+        titles: "{{ hm_win.updates | default({}) | dict2items | map(attribute='value.title') | list }}"

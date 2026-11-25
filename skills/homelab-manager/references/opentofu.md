@@ -42,7 +42,7 @@ State holds resource details (and sometimes cloud-init data), so it never goes i
 - **local** (default): `~/.local/share/homelab/tofu-state/<site>/<env>.tfstate` on this Mac
   (`opentofu.local.path` overrides; with several environments it must contain `{env}`, as must a set
   `opentofu.s3.key` — tofu_init.py refuses otherwise), directory mode 700, file locking. Make sure Time Machine (or
-  another backup) covers it; losing it means re-importing every resource.
+  another backup) covers it; losing it means re-importing every resource (the repo's `docs/recovery.md`).
 - **s3**: any S3-compatible bucket — MinIO, Garage, AWS (`opentofu.s3.*`), locking via a lockfile
   next to the state (`use_lockfile`), credentials `ACCESS_KEY_ID:SECRET_ACCESS_KEY` in the keychain
   (`homelab/s3-state`, kind `s3_credentials`). Turn on bucket versioning so old states can be restored.

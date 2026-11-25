@@ -100,6 +100,8 @@ RULES: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"\bpvesh\s+(create|set|delete)\b"), ASK, "Writes to the Proxmox API."),
     (re.compile(r"pve_snapshot\.py\b(?![^\n;&|]*--dry-run)[^\n;&|]*\s(delete|rollback|restore|prune)\b"), ASK,
      "Deletes guest snapshots or rolls a guest back to one (its changes since are lost)."),
+    (re.compile(r"pve_guest\.py\b[^\n;&|]*\s(shutdown|stop)\b"), ASK,
+     "Shuts a Proxmox guest down or stops it hard (its services go down; stop is like pulling the power)."),
     # --- LXD / Incus (containers on a NAS or an LXD/Incus host) -------------------------
     (re.compile(r"lxd_snapshot\.py\b(?![^\n;&|]*--dry-run)[^\n;&|]*\s(delete|restore|rollback|prune)\b"), ASK,
      "Deletes an LXD/Incus snapshot or restores an instance to one (its changes since are lost)."),
