@@ -254,6 +254,11 @@ class GuardInfraTests(unittest.TestCase):
         self.assertEqual(decision("ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=pve1", self.d), "ask")
         self.assertEqual(decision("ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=pve1 "
                                   "-e allow_reboot=true", self.d), "ask")
+        win = "ansible-playbook playbooks/patch-windows.yml -e target=windows"           # GitHub issue #153
+        self.assertEqual(decision(win, self.d), "ask")
+        self.assertEqual(decision(win + " -e reboot=true -e categories=SecurityUpdates", self.d), "ask")
+        self.assertIsNone(decision(win + " --check", self.d))                             # lists what it would install
+        self.assertIsNone(decision(win + " -e reboot=true --check", self.d))
         self.assertIsNone(decision("ansible-playbook playbooks/check-updates.yml", self.d))
         self.assertIsNone(decision("ansible-playbook playbooks/security-audit.yml -e target=site_a", self.d))  # #139
         self.assertIsNone(decision("python3 scripts/security_audit.py --site a --report", self.d))

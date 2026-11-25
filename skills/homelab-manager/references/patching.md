@@ -254,9 +254,22 @@ repair required!`) and every guest on it was down until restored from backup (Gi
 
 ## Windows
 
-`ansible.windows.win_updates` — search is in check-updates.yml. Installing is a separate,
-approved play (`category_names: [SecurityUpdates, CriticalUpdates]`, `reboot: false` unless
-allowed). Domain controllers and other clustered Windows roles: one at a time.
+Search: check-updates.yml (read-only). Install: `playbooks/patch-windows.yml` (`ansible.windows.win_updates`),
+always one host at a time, stopping at the first failure, so domain controllers and clustered roles never restart
+together. Only the target's hosts in the `windows` group are patched; a run without `-e target` does nothing.
+1. Show what would be installed: `ansible-playbook playbooks/patch-windows.yml -e target=<group|host> --check`
+   (searches only: no download, install or snapshot). Report per host: the update titles, the count.
+2. Plan for the user: the categories (default `SecurityUpdates,CriticalUpdates`; `-e categories=…` takes any
+   win_updates category, e.g. `UpdateRollups`), the reboot policy (default none: `reboot_pending` is reported;
+   `-e reboot=true` lets win_updates reboot whenever an update needs it and install on until none is left), the
+   order (domain controllers one after another, the one holding the FSMO roles last) and `health_services` (e.g.
+   `-e health_services=NTDS,DNS` on a domain controller: each must run again within `health_timeout`, default 300 s).
+   Offer the pre-patch snapshot as for Linux (`-e snapshot=true -e hm_scripts=$HM/scripts`): every target must map
+   to a Proxmox guest that can be snapshotted, else the run refuses before patching; `-e snapshot_missing=skip`
+   (the user's yes) patches physical hosts and other hypervisors' guests without one.
+3. Run it with the user's yes (the guard asks). After each host: automatic services that ran before must still
+   run, or the run stops there. Remove the `prepatch-<date>` snapshots after a good run (`pve_snapshot.py delete`).
+4. Refresh `check-updates.yml -e target=<same>` and report what is left (failed updates, `reboot_pending`).
 
 ## Appliances
 
