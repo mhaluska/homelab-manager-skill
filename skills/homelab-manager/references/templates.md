@@ -5,7 +5,15 @@ Two layers, both immutable:
 1. **Base** — the official cloud image imported as a Proxmox template by OpenTofu
    (`base_images` in tfvars, VMIDs in `vmid_ranges.base_images`). Name `base-<distro><ver>-<date>`.
 2. **Template** — Packer `proxmox-clone` of a base: updated packages, `qemu-guest-agent`,
-   `cloud-init`, cleaned. Name `tpl-<distro><ver>-<date>`, VMIDs in `vmid_ranges.templates`.
+   `cloud-init`, key-only SSH, cleaned and trimmed. Name `tpl-<distro><ver>-<date>`, VMIDs in `vmid_ranges.templates`.
+
+Packer variables (`-var`, or in `site.pkrvars.hcl` for every build): `sshd_hardening` (default true: a drop-in
+`/etc/ssh/sshd_config.d/01-homelab.conf` with `PasswordAuthentication no`, `PermitRootLogin prohibit-password`;
+cloud-init keys keep working) and `unattended_updates` (`distro` by default: as the image ships, which on Ubuntu
+installs security updates; `security`: automatic security updates on every distro, never a reboot; `off`: only
+the patch playbooks update). Ask the user before changing either for a site; record the choice in
+`docs/templates.md`. Templates built earlier keep what they had: say so when a VM from one shows up in a
+security audit with password logins.
 
 VMs clone a specific template VMID; `clone` is ignored after creation, so a new template
 never rebuilds existing VMs.
