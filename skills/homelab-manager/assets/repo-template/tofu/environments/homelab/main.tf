@@ -68,6 +68,9 @@ module "vm" {
   snippets_datastore      = var.defaults.snippets_datastore
   cloud_init_snippet      = each.value.cloud_init_snippet == null ? null : "${path.root}/../../snippets/${each.value.cloud_init_snippet}"
   cloud_init_user_snippet = each.value.cloud_init_user_snippet == null ? null : "${path.root}/../../snippets/${each.value.cloud_init_user_snippet}"
+
+  pci_devices = each.value.pci_devices
+  machine     = each.value.machine
 }
 
 module "lxc" {

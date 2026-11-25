@@ -73,6 +73,21 @@ then clones there and migrates the clone, which only works when the VM's storage
 (e.g. `local-zfs` on each ZFS node). A node with other storage (LVM) needs its own template, built on that node
 (templates.md "A node with its own storage"); its entry uses that template's VMID and no `template_node`.
 
+## PCI passthrough (GPU, NIC, HBA)
+
+Only through resource mappings: a raw PCI ID needs `root@pam`, which the skill's tokens are not.
+1. The user creates the mapping on Proxmox (Datacenter → Resource Mappings → PCI Devices → Add: an ID like `gpu`,
+   the device on each node that has it; IOMMU must be on). The skill does not.
+2. The provisioning token needs `Mapping.Use` on that mapping: the "PCI passthrough" grant in
+   `docs/proxmox-tokens.md` (missing there: copy it from the template's), run by the user on a node.
+3. Entry: `node` set explicitly (the validation refuses a VM with devices but no node), `pci_devices =
+   [{ mapping = "gpu", pcie = true }]` (`hostpci0`, `hostpci1`, … in list order; also `rombar`, `xvga` for the
+   primary GPU), and `machine = "q35"` for `pcie = true`. Adding devices to an existing VM is an in-place change
+   that needs a power cycle (approval item); `machine` on an existing VM changes its hardware: ask first.
+A VM with a passed-through device can't live-migrate and runs only on nodes where the mapping has a device, so it
+stays pinned to its `node`; a move ("Migrate") is offline and only to another node of the mapping. Don't put it
+under HA unless every HA node has the device mapped.
+
 ## LXC containers
 
 `containers` map in tfvars. Template file IDs come from the node's `vztmpl` content

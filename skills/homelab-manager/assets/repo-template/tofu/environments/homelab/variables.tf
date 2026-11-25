@@ -77,6 +77,9 @@ variable "vms" {
     # keys); user data replaces it and must create the admin user and keys itself
     cloud_init_snippet      = optional(string)
     cloud_init_user_snippet = optional(string)
+    # PCI passthrough by resource mapping (Datacenter → Resource Mappings); the VM then needs an explicit node
+    pci_devices = optional(list(object({ mapping = string, pcie = optional(bool, false), rombar = optional(bool), xvga = optional(bool) })), [])
+    machine     = optional(string) # e.g. q35 (pcie devices need it); empty: as before
   }))
   default = {}
   validation {
@@ -102,6 +105,10 @@ variable "vms" {
   validation {
     condition     = length([for k, v in var.vms : k if !alltrue([for f in [v.cloud_init_snippet, v.cloud_init_user_snippet] : f == null || can(regex("^[A-Za-z0-9][A-Za-z0-9._-]*$", f))])]) == 0
     error_message = "vms ${join(", ", [for k, v in var.vms : k if !alltrue([for f in [v.cloud_init_snippet, v.cloud_init_user_snippet] : f == null || can(regex("^[A-Za-z0-9][A-Za-z0-9._-]*$", f))])])}: cloud_init_snippet and cloud_init_user_snippet name a file in tofu/snippets/ (no path), e.g. \"docker-host.yaml\"."
+  }
+  validation {
+    condition     = length([for k, v in var.vms : k if length(v.pci_devices) > 0 && (v.node == null || !alltrue([for d in v.pci_devices : can(regex("^[A-Za-z][A-Za-z0-9_.-]*$", d.mapping))]) || anytrue([for d in v.pci_devices : d.pcie]) && !startswith(coalesce(v.machine, "pc"), "q35"))]) == 0
+    error_message = "vms ${join(", ", [for k, v in var.vms : k if length(v.pci_devices) > 0 && (v.node == null || !alltrue([for d in v.pci_devices : can(regex("^[A-Za-z][A-Za-z0-9_.-]*$", d.mapping))]) || anytrue([for d in v.pci_devices : d.pcie]) && !startswith(coalesce(v.machine, "pc"), "q35"))])}: pci_devices need the VM's node set (a device belongs to one node), each mapping named by its ID (e.g. gpu), and machine = \"q35\" for pcie = true."
   }
 }
 

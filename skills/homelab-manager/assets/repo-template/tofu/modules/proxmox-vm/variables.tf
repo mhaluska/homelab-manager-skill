@@ -126,6 +126,25 @@ variable "cloud_init_user_snippet" {
   default     = null
   description = "Path of a cloud-init user data file. It replaces the built-in user data: it must create the admin user and keys itself. Ignored after creation."
 }
+variable "machine" {
+  type        = string
+  default     = null
+  description = "Machine type, e.g. q35 (needed for pcie devices); null leaves it to the provider, as before."
+}
+variable "pci_devices" {
+  type = list(object({
+    mapping = string                # a PCI resource mapping (Datacenter → Resource Mappings), not a raw ID
+    pcie    = optional(bool, false) # PCIe port: needs machine q35
+    rombar  = optional(bool)
+    xvga    = optional(bool) # primary GPU of the VM
+  }))
+  default  = []
+  nullable = false
+  validation {
+    condition     = length(var.pci_devices) <= 16 && alltrue([for d in var.pci_devices : can(regex("^[A-Za-z][A-Za-z0-9_.-]*$", d.mapping))])
+    error_message = "pci_devices: at most 16, each naming a PCI resource mapping by its ID, e.g. gpu."
+  }
+}
 variable "snippets_datastore" {
   type        = string
   default     = null

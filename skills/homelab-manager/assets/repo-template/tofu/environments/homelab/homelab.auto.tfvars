@@ -44,7 +44,8 @@ vms = {
   #   # protection (false; true: Proxmox refuses to delete it), description, started (true), extra_disks,
   #   # ipv6_address ("dhcp", "auto" for SLAAC, or CIDR) and ipv6_gateway (static only; else defaults),
   #   # cloud_init_snippet (vendor data file in tofu/snippets/, first boot only; cloud_init_user_snippet
-  #   # replaces the admin user and keys)
+  #   # replaces the admin user and keys), pci_devices ([{ mapping = "gpu", pcie = true }], needs node and
+  #   # machine = "q35")
   # }
 }
 

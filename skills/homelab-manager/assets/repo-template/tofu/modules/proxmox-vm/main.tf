@@ -62,6 +62,19 @@ resource "proxmox_virtual_environment_vm" "this" {
 
   serial_device {}
 
+  # PCI passthrough through resource mappings (Datacenter → Resource Mappings) only: raw device IDs need root@pam.
+  machine = var.machine
+  dynamic "hostpci" {
+    for_each = var.pci_devices
+    content {
+      device  = "hostpci${hostpci.key}"
+      mapping = hostpci.value.mapping
+      pcie    = hostpci.value.pcie
+      rombar  = hostpci.value.rombar
+      xvga    = hostpci.value.xvga
+    }
+  }
+
   initialization {
     datastore_id = var.datastore
     ip_config {
@@ -99,6 +112,10 @@ resource "proxmox_virtual_environment_vm" "this" {
     # rebuild running VMs, and cloud-init user data only applies at first boot.
     ignore_changes = [clone, initialization[0].user_account, initialization[0].vendor_data_file_id,
     initialization[0].user_data_file_id]
+    precondition {
+      condition     = !anytrue([for d in var.pci_devices : d.pcie]) || startswith(coalesce(var.machine, "pc"), "q35")
+      error_message = "VM ${var.name}: pci_devices with pcie = true need machine = \"q35\"."
+    }
   }
 }
 
