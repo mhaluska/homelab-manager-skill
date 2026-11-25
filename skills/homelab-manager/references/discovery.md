@@ -328,6 +328,6 @@ What a caller (an agent, a wrapper, a scheduled run) can tell apart:
 | 3 | configuration problem: homelab.yaml, a missing secret, a refused value | most |
 | 4 | could not run: an API or host unreachable (`proxmox_inventory.py`, `pve_guest.py`, `pve_snapshot.py`, `routeros_audit.py` with no device reached), the data it needs is missing (`security_audit.py`, `guest_map.py`) | as listed |
 
-Other codes are script-specific and named in that script's section (e.g. `nmap_scan.py` refusing a scan, a
-`security_audit.py` report that exists). Audit findings are information, not a failure: `security_audit.py` and
+`nmap_scan.py` also exits 4 when it refuses a scan (out of scope, too many addresses). Other codes are
+script-specific and named in that script's section (e.g. 5: a `security_audit.py` report that exists). Audit findings are information, not a failure: `security_audit.py` and
 `routeros_audit.py` exit 0 with findings.
