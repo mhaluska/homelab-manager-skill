@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+- Evals: each case's `place-files.sh` scaffolds the current template with `init_repo.py` and merges only the
+  case's own `homelab-values.yaml` and data, so fixtures no longer go stale with the template. New cases:
+  `untrusted-guest-note` (a guest note addressed to the assistant is reported, not followed),
+  `plan-review-unexpected-replace` (a renamed map key would destroy a VM: stop and propose a `moved` block),
+  `secrets-read-only-token` (reads use the read-only token from the keychain, nothing secret is printed) and
+  `upgrade-old-repo` (dry run first, nothing changed before the user's yes).
+- `tests/test_evals.py` checks every case has its parts, keeps no template copies and scaffolds a repository
+  that `--sync-managed` reports up to date.
+
 ## 0.59.0 — 2026-11-25
 - OpenTofu template: the variables refuse a bad `ipv4_address`, a `vlan_id` outside 1–4094, a VMID below 100, an
   extra disk on `scsi0` or an unknown bus, and an unknown `checksum_algorithm`, naming the entry. A static address
