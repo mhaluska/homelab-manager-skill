@@ -1,8 +1,33 @@
 #!/usr/bin/env bash
-# Refuse commits that contain state files, private keys or tokens (the same names .gitignore keeps out).
+# Refuse commits that contain state files, private keys or tokens (the same names .gitignore keeps out),
+# passwords written as literal values, and Ansible vault files that are not encrypted.
+#
+#     scripts/git-hooks/pre-commit              # as the hook: checks the staged changes
+#     scripts/git-hooks/pre-commit --history    # the same checks over every commit of every branch (an audit)
+#
+# A line that must stay as it is (a documented example, a test value) passes with `pre-commit: allow` on it.
 set -euo pipefail
 fail=0
-while IFS= read -r -d '' f; do   # NUL-separated: names with spaces or newlines stay whole
+history=0
+[ "${1:-}" = "--history" ] && history=1
+
+names() {   # NUL-separated: names with spaces or newlines stay whole
+  if [ $history = 1 ]; then
+    git log --all --format= --name-only -z --diff-filter=ACMR | sort -zu
+  else
+    git diff --cached --name-only -z --diff-filter=ACMR
+  fi
+}
+changes() {   # the hook's own folder is skipped: its patterns would otherwise match themselves
+  if [ $history = 1 ]; then
+    git log --all -p -U0 --format= --diff-filter=ACMR -- . ':(exclude)scripts/git-hooks'
+  else
+    git diff --cached -U0 --diff-filter=ACMR -- . ':(exclude)scripts/git-hooks'
+  fi
+}
+
+while IFS= read -r -d '' f; do
+  [ -n "$f" ] || continue
   base=${f##*/}
   case "$f" in
     .terraform/*|*/.terraform/*)
@@ -12,10 +37,15 @@ while IFS= read -r -d '' f; do   # NUL-separated: names with spaces or newlines 
     *.pub) ;;
     *.tfstate|*.tfstate.*|*.tfplan|*.tfplan.json|*.pem|*.key|*.p12|*.pfx|id_*|.env|.env.*|*.secret.*|.vault_pass*|vault-password*)
       echo "pre-commit: refusing to commit $f (state/key/secret file)"; fail=1 ;;
+    vault.yml|vault.yaml|vault_*.yml|vault_*.yaml|*.vault.yml|*.vault.yaml)
+      # an Ansible vault file must be encrypted (ansible-vault encrypt); only the staged copy is checked
+      if [ $history = 0 ] && [ "$(git show ":$f" 2>/dev/null | head -c 14)" != '$ANSIBLE_VAULT' ]; then
+        echo "pre-commit: refusing to commit $f (vault file that is not encrypted: ansible-vault encrypt it)"; fail=1
+      fi ;;
   esac
-done < <(git diff --cached --name-only -z --diff-filter=ACMR)
-# The hook's own folder is skipped: its patterns would otherwise match themselves.
-if git diff --cached -U0 --diff-filter=ACMR -- . ':(exclude)scripts/git-hooks' | grep -nE \
+done < <(names)
+
+if changes | grep -v 'pre-commit: allow' | grep -nE \
   -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' \
   -e 'PVEAPIToken[=]' \
   -e '[A-Za-z0-9._-]+@[A-Za-z0-9.-]+![A-Za-z0-9._-]+=[0-9a-f]{8}-[0-9a-f]{4}-' \
@@ -23,8 +53,22 @@ if git diff --cached -U0 --diff-filter=ACMR -- . ':(exclude)scripts/git-hooks' |
   -e 'github_pat_[A-Za-z0-9_]{40,}' \
   -e '(AKIA|ASIA)[0-9A-Z]{16}' \
   -e 'ansible_(ssh_)?(become_)?pass(word)?:[[:space:]]*[^{[:space:]]' >/dev/null; then
-  echo "pre-commit: staged changes look like they contain a secret (private key, Proxmox/GitHub/S3 token or password)."
+  echo "pre-commit: changes look like they contain a secret (private key, Proxmox/GitHub/S3 token or password)."
   echo "            Move it to the keychain and reference it via homelab.yaml secrets."
+  fail=1
+fi
+
+# password/secret/token/api_key assigned a literal value (YAML, HCL, INI, shell, compose environment), not a
+# reference (var., lookup(), {{ vault_… }}, a keychain name homelab/…) and at least 8 characters long
+value='["'\'']?[^"'\''[:space:]{$<(#][^[:space:]"'\'']{7,}'
+if changes | grep -v 'pre-commit: allow' | grep -E \
+  -e '^\+[[:space:]]*(-[[:space:]]+)?(export[[:space:]]+)?["'\'']?([a-z0-9_]*[Pp]assword|[a-z0-9_]*[Pp]asswd|[a-z0-9_]*[Pp]assphrase|[Ss]ecret|client_secret|api_?key|secret_?key|access_?key|[Tt]oken)["'\'']?[[:space:]]*[:=][[:space:]]*'"$value" \
+  -e '^\+[[:space:]]*(-[[:space:]]+)?(export[[:space:]]+)?[A-Z0-9_]*(PASSWORD|PASSWD|SECRET|TOKEN|API_KEY)[[:space:]]*[:=][[:space:]]*'"$value" \
+  | grep -vE '[:=][[:space:]]*["'\'']?(var\.|local\.|each\.|data\.|module\.|lookup\(|env\(|!vault|vault_|homelab/|[A-Za-z_][A-Za-z0-9_.]*\(|true|false|null|none|changeme|CHANGEME|REPLACE)' \
+  | sed -E 's/([:=][[:space:]]*["'\'']?.{2}).*/\1…/' | awk 'NR <= 5 { print } END { exit NR == 0 }'; then
+  echo "pre-commit: the lines above (values cut) set a password, secret or token to a literal value."
+  echo "            Keep it in the keychain or ansible-vault; a line that is fine as it is passes with"
+  echo "            'pre-commit: allow' in a comment on it."
   fail=1
 fi
 exit $fail
