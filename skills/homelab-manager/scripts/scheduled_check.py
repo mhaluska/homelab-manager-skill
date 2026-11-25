@@ -135,7 +135,8 @@ def notify(text: str, title: str) -> None:
 def glance_warnings(text: str) -> list[str]:
     """The categories of the "Warnings (details under Health)" line at the top of a rendered OVERVIEW.md."""
     m = re.search(r"^Warnings \(details under \[Health\]\(#health\)\): (.*)\.$", text, re.M)
-    return [w.strip() for w in m.group(1).split(" · ")] if m else []
+    plain = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", m.group(1)) if m else ""   # links mean nothing there
+    return [w.strip() for w in plain.split(" · ") if w.strip()]
 
 
 def keychain_unlocked() -> bool:
@@ -176,6 +177,7 @@ def cmd_run(root: Path | None = None) -> int:
         return 3
     root = Path(cfg["_root"])
     name = hmlib.get(cfg, "site.name", "") or root.name
+    title = name if "homelab" in name.lower() else f"homelab {name}"
     warnings, problems = run_steps(cfg, root)
     stamp = dt.datetime.now().isoformat(timespec="seconds")
     print(f"{stamp} warnings: {len(warnings)}; could not run: {len(problems)}")
@@ -188,9 +190,9 @@ def cmd_run(root: Path | None = None) -> int:
         before = set()
     new = [w for w in warnings if w not in before]
     if problems:
-        notify("; ".join(problems), f"homelab {name}: check could not run")
+        notify("; ".join(problems), f"{title}: check could not run")
     elif new:
-        notify("; ".join(new) + " (OVERVIEW.md → Health)", f"homelab {name}: new warnings")
+        notify("; ".join(new) + " (OVERVIEW.md → Health)", f"{title}: new warnings")
     sf.parent.mkdir(parents=True, exist_ok=True)
     hmlib.atomic_write(sf, json.dumps({"at": stamp, "warnings": warnings, "problems": problems}, indent=1) + "\n")
     return hmlib.UNREACHABLE if problems else (1 if warnings else 0)

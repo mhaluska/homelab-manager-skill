@@ -85,8 +85,8 @@ class ScheduledCheckTests(unittest.TestCase):
         self.assertFalse([t for t, _ in init_repo.upgrades(self.repo) if "scheduled check" in t])
 
     def test_glance_warnings(self):
-        text = "# x\n\n## At a glance\n\n1 site.\nWarnings (details under [Health](#health)): 2 ZFS pools · 1 disk.\n"
-        self.assertEqual(sc.glance_warnings(text), ["2 ZFS pools", "1 disk"])
+        text = "# x\n\n## At a glance\n\n1 site.\nWarnings (details under [Health](#health)): 2 ZFS pools · 1 disk · 5 expiries (see [Expirations](#expirations)).\n"
+        self.assertEqual(sc.glance_warnings(text), ["2 ZFS pools", "1 disk", "5 expiries (see Expirations)"])
         self.assertEqual(sc.glance_warnings("# x\n"), [])
 
     def test_run_notifies_new_warnings_once_and_steps_that_could_not_run(self):
