@@ -242,8 +242,8 @@ CONFIG_KEYS = {"agent", "ostype", "ciuser", "sshkeys", "boot", "machine", "bios"
                "unprivileged", "features",   # LXC: a privileged container with nesting is a security finding (#139)
                # what an OpenTofu entry copies (tofu_import_plan.py, GitHub issue #149)
                "cpu", "protection", "balloon", "numa", "tablet", "swap", "hostname", "nameserver", "searchdomain",
-               "arch"}
-CONFIG_VERSION = 2   # 2: the config holds the keys tofu_import_plan.py copies (0.61.0)
+               "arch", "cmode", "tty", "console"}
+CONFIG_VERSION = 3   # 2: the config holds the keys tofu_import_plan.py copies (0.61.0); 3: + LXC console (0.62.0)
 
 
 def guest_config(conf: dict) -> dict:

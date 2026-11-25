@@ -887,8 +887,9 @@ class PveNodePlanTests(unittest.TestCase):  # issue 23
         self.assertEqual(pinv.keep_details({**old, "guest_ip_sources": sources},
                                            {"guests": [{"vmid": 101, "type": "vm"}]})["guest_ip_sources"], sources)
         self.assertEqual(pinv.guest_config({"cpu": "host", "protection": "1", "swap": "512", "serial0": "socket",
-                                            "lock": "backup"}),
-                         {"cpu": "host", "protection": "1", "swap": "512", "serial0": "socket"})
+                                            "cmode": "shell", "tty": "4", "console": "0", "lock": "backup"}),
+                         {"cpu": "host", "protection": "1", "swap": "512", "serial0": "socket", "cmode": "shell",
+                          "tty": "4", "console": "0"})
         plan, _ = self.p.make_plan({**self.inv, "details_at": "t1"}, "pve1")
         self.assertIn("guest config from t1", self.p.render(plan, []))
 
