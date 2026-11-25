@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.59.0 — 2026-11-25
 - OpenTofu template: the variables refuse a bad `ipv4_address`, a `vlan_id` outside 1–4094, a VMID below 100, an
   extra disk on `scsi0` or an unknown bus, and an unknown `checksum_algorithm`, naming the entry. A static address
   without a gateway in its subnet is a plan warning. New optional entry attributes, defaulting to what the modules
