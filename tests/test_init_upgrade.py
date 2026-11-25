@@ -94,6 +94,26 @@ class InitComponentsTests(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
 
 
+class TemplateCoverageTests(unittest.TestCase):
+    def test_every_template_file_belongs_to_a_component(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import init_repo
+        files = [p.relative_to(init_repo.TEMPLATE).as_posix() for p in init_repo.TEMPLATE.rglob("*")
+                 if p.is_file() and p.name != ".DS_Store"]
+        self.assertEqual([f for f in files if not init_repo.wanted(f, list(init_repo.COMPONENTS))], [],
+                         "add these to CORE or a component in init_repo.py, or no repo gets them")
+
+    def test_playbook_vars_files_exist_in_a_scaffold(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        self.assertEqual(run("init_repo.py", str(d), cwd=d).returncode, 0)
+        refs = [(pb, ref.strip().strip("'\"")) for pb in (d / "ansible/playbooks").glob("*.yml")
+                for m in re.finditer(r"^\s*vars_files:\s*\[([^\]]*)\]", pb.read_text(), re.M)
+                for ref in m.group(1).split(",")]
+        self.assertTrue(refs)
+        self.assertEqual([f"{pb.name}: {ref}" for pb, ref in refs if not (pb.parent / ref).is_file()], [])
+
+
 class StateBackendTests(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
