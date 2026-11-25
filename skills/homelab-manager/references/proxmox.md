@@ -131,6 +131,8 @@ changing anything, show the user the jobs (`jq .backup_jobs discovery/proxmox.js
   grant in the repo's `docs/proxmox-tokens.md` ("Backup jobs": which rights, and why only on the backup storage) —
   the user runs it on a node — or the GUI instead:
   Datacenter → Backup → the job → Edit → add the guests. Re-run `proxmox_inventory.py` and drift afterwards.
+- **Restore test** ("are the backups restorable?"): the repo's `docs/recovery.md` "Restore test": a copy on a
+  new VMID with new MACs on an isolated bridge, boot, check, remove; each step a command the user approves.
 
 ## Secure Boot certificates (Microsoft 2023 CA)
 
