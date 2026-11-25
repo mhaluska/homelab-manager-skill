@@ -6,6 +6,7 @@ resource "proxmox_virtual_environment_vm" "this" {
   tags        = sort(distinct(concat(["tofu"], var.tags)))
   started     = var.started
   on_boot     = var.on_boot
+  protection  = var.protection
 
   clone {
     vm_id     = var.template_vm_id
@@ -83,5 +84,15 @@ resource "proxmox_virtual_environment_vm" "this" {
     # The template is only the starting point. A new template version must never
     # rebuild running VMs, and cloud-init user data only applies at first boot.
     ignore_changes = [clone, initialization[0].user_account]
+  }
+}
+
+# A warning in the plan, not an error: a guest on an isolated network may have no gateway on purpose.
+check "static_address_gateway" {
+  assert {
+    condition = var.ipv4_address == "dhcp" || try(
+      cidrhost(var.ipv4_address, 0) == cidrhost("${var.ipv4_gateway}/${split("/", var.ipv4_address)[1]}", 0), false
+    )
+    error_message = "VM ${var.name}: static address ${var.ipv4_address} has ${var.ipv4_gateway == null ? "no gateway (defaults.ipv4_gateway)" : "gateway ${var.ipv4_gateway} outside its subnet"}, so it has no default route."
   }
 }

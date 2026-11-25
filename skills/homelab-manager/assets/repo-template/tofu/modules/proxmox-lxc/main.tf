@@ -5,7 +5,8 @@ resource "proxmox_virtual_environment_container" "this" {
   tags          = sort(distinct(concat(["tofu"], var.tags)))
   unprivileged  = var.unprivileged
   started       = var.started
-  start_on_boot = true
+  start_on_boot = var.on_boot
+  protection    = var.protection
 
   features {
     nesting = var.nesting
@@ -44,6 +45,13 @@ resource "proxmox_virtual_environment_container" "this" {
         gateway = var.ipv4_address == "dhcp" ? null : var.ipv4_gateway
       }
     }
+    dynamic "dns" {
+      for_each = length(var.dns_servers) > 0 || var.dns_domain != null ? [1] : []
+      content {
+        servers = length(var.dns_servers) > 0 ? var.dns_servers : null
+        domain  = var.dns_domain
+      }
+    }
     user_account {
       keys = var.ssh_public_keys
     }
@@ -51,5 +59,15 @@ resource "proxmox_virtual_environment_container" "this" {
 
   lifecycle {
     ignore_changes = [operating_system[0].template_file_id, initialization[0].user_account]
+  }
+}
+
+# A warning in the plan, not an error: a container on an isolated network may have no gateway on purpose.
+check "static_address_gateway" {
+  assert {
+    condition = var.ipv4_address == "dhcp" || try(
+      cidrhost(var.ipv4_address, 0) == cidrhost("${var.ipv4_gateway}/${split("/", var.ipv4_address)[1]}", 0), false
+    )
+    error_message = "Container ${var.hostname}: static address ${var.ipv4_address} has ${var.ipv4_gateway == null ? "no gateway (defaults.ipv4_gateway)" : "gateway ${var.ipv4_gateway} outside its subnet"}, so it has no default route."
   }
 }

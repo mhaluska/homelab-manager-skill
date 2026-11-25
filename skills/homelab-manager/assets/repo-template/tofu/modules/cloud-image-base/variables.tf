@@ -4,7 +4,13 @@ variable "name" {
 }
 variable "distro" { type = string }
 variable "node" { type = string }
-variable "vm_id" { type = number }
+variable "vm_id" {
+  type = number
+  validation {
+    condition     = var.vm_id >= 100 && var.vm_id == floor(var.vm_id)
+    error_message = "vm_id must be a whole number of 100 or more (Proxmox VMIDs start at 100)."
+  }
+}
 variable "image_url" {
   type        = string
   description = "Official cloud image (qcow2), e.g. https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2"
@@ -26,6 +32,10 @@ variable "allow_unverified_image" {
 variable "checksum_algorithm" {
   type    = string
   default = "sha256"
+  validation {
+    condition     = contains(["md5", "sha1", "sha224", "sha256", "sha384", "sha512"], var.checksum_algorithm)
+    error_message = "checksum_algorithm must be md5, sha1, sha224, sha256, sha384 or sha512 (the one the distribution's checksum file uses)."
+  }
 }
 variable "image_datastore" { type = string }
 variable "image_content_type" {
