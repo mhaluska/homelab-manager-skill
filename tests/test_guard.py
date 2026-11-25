@@ -934,6 +934,15 @@ class GuardConfigTests(unittest.TestCase):
                     "python3 /p/pve_guest.py status stopwatch"):
             self.assertIsNone(self.d(cmd), cmd)
 
+    def test_scheduled_check_install_and_launchctl_ask(self):  # GitHub issue #150
+        for cmd in ("python3 /p/scheduled_check.py install --time 07:40", "python3 /p/scheduled_check.py uninstall",
+                    "launchctl bootstrap gui/501 ~/Library/LaunchAgents/x.plist", "launchctl load -w x.plist",
+                    "launchctl bootout gui/501/x", "launchctl kickstart -k gui/501/x"):
+            self.assertEqual(self.d(cmd), "ask", cmd)
+        for cmd in ("python3 /p/scheduled_check.py status", "python3 /p/scheduled_check.py run",
+                    "launchctl list", "launchctl print gui/501/x"):
+            self.assertIsNone(self.d(cmd), cmd)
+
     def test_lxd_snapshot_delete_and_restore_ask(self):  # issue 44
         for cmd in ("python3 /p/lxd_snapshot.py delete app1 --name prepatch-20261117",
                     "python3 /p/lxd_snapshot.py restore app1 --name prepatch-20261117",

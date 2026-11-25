@@ -102,6 +102,11 @@ RULES: list[tuple[re.Pattern, str, str]] = [
      "Deletes guest snapshots or rolls a guest back to one (its changes since are lost)."),
     (re.compile(r"pve_guest\.py\b[^\n;&|]*\s(shutdown|stop)\b"), ASK,
      "Shuts a Proxmox guest down or stops it hard (its services go down; stop is like pulling the power)."),
+    # --- launchd (the scheduled read-only check, GitHub issue #150) ----------------------
+    (re.compile(r"scheduled_check\.py\b[^\n;&|]*\s(install|uninstall)\b"), ASK,
+     "Installs or removes a LaunchAgent that runs the homelab check on a schedule (persistent; user's yes)."),
+    (re.compile(r"\blaunchctl\s+(bootstrap|bootout|load|unload|enable|disable|kickstart|submit|remove)\b"), ASK,
+     "Loads, removes or starts a launchd job (runs on its own, outside this session)."),
     # --- LXD / Incus (containers on a NAS or an LXD/Incus host) -------------------------
     (re.compile(r"lxd_snapshot\.py\b(?![^\n;&|]*--dry-run)[^\n;&|]*\s(delete|restore|rollback|prune)\b"), ASK,
      "Deletes an LXD/Incus snapshot or restores an instance to one (its changes since are lost)."),
