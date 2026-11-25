@@ -66,7 +66,7 @@ COMPONENTS = {
                  "ansible/playbooks/docker-containers.yml",
                  "ansible/playbooks/patch-proxmox-node.yml", "ansible/playbooks/dist-upgrade-debian.yml",
                  "ansible/playbooks/dist-upgrade-ubuntu.yml",
-                 "ansible/playbooks/tasks/",
+                 "ansible/playbooks/tasks/", "ansible/playbooks/vars/",
                  "ansible/playbooks/hooks/vrrp-health.yml",
                  "ansible/inventory/managed/group_vars/proxmox_nodes.yml", "ansible/roles/"]),
     "discovery": ("Network discovery with nmap in authorized ranges", [], []),
