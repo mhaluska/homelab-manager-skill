@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+- OpenTofu template: the variables refuse a bad `ipv4_address`, a `vlan_id` outside 1–4094, a VMID below 100, an
+  extra disk on `scsi0` or an unknown bus, and an unknown `checksum_algorithm`, naming the entry. A static address
+  without a gateway in its subnet is a plan warning. New optional entry attributes, defaulting to what the modules
+  always did: `protection` (the Proxmox protection flag), `on_boot`, `description`, `ipv4_gateway` per guest,
+  `cpu_type` for VMs, `dns_servers`/`dns_domain` for containers. An upgrade note covers environments with their
+  own `main.tf`/`variables.tf`.
+- Packer template: new templates allow SSH keys only (`sshd_hardening`, default on), are trimmed before they are
+  saved, and take `unattended_updates` (`distro` by default, `security` or `off`). Image URLs are dated
+  everywhere; Rocky 10 is no longer listed (it needs an x86-64-v3 CPU type).
+- The template's pre-commit hook also refuses passwords, secrets and tokens set to a literal value and Ansible
+  vault files that are not encrypted (`pre-commit: allow` on a line lets it pass); `pre-commit --history` runs
+  the checks over every commit, and the security audit uses it.
+- Ansible collections and the Packer Proxmox plugin have version bounds below their next major release.
+- The patch playbooks share one copy of the autoremove protection list and the LXC unit list
+  (`playbooks/vars/patch-lists.yml`).
+- The guard no longer asks for a script with `case` patterns such as `a|b)`: they are not commands.
+- `validate_template.sh` runs `tofu test` against a mocked provider: entry defaults, options and validations.
+
 ## 0.58.0 — 2026-11-25
 - `pve_snapshot.py`: `create` and `delete` go on after a guest that fails and report every failure at the end
   (a guest stopped for a `--mode stop` snapshot is started again); `prune --older-than 30d [--prefix P]` deletes
