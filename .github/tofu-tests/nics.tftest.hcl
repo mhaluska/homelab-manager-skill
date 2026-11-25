@@ -197,7 +197,7 @@ run "lxc_two_extra_nics" {
     bridge           = "vmbr0"
     ssh_public_keys  = []
     ipv4_address     = "192.0.2.31/24"
-    ipv4_gateway     = null
+    ipv4_gateway     = "" # none: the gateway is on eth1
     extra_nics = [
       { name = "eth1", bridge = "vmbr1", vlan_id = 20, mac_address = "BC:24:11:0A:00:17", firewall = true, mtu = 1400,
       ipv4_address = "198.51.100.31/24", ipv4_gateway = "198.51.100.1" },
@@ -218,7 +218,7 @@ run "lxc_two_extra_nics" {
   }
   assert {
     condition = (length(proxmox_virtual_environment_container.this.initialization[0].ip_config) == 3
-      && proxmox_virtual_environment_container.this.initialization[0].ip_config[0].ipv4[0].gateway == null
+      && proxmox_virtual_environment_container.this.initialization[0].ip_config[0].ipv4[0].gateway == ""
       && proxmox_virtual_environment_container.this.initialization[0].ip_config[1].ipv4[0].address == "198.51.100.31/24"
       && proxmox_virtual_environment_container.this.initialization[0].ip_config[1].ipv4[0].gateway == "198.51.100.1"
       && proxmox_virtual_environment_container.this.initialization[0].ip_config[2].ipv4[0].address == "dhcp"

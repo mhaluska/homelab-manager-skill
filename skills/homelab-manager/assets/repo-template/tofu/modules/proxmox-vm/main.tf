@@ -241,10 +241,10 @@ check "static_address_gateway" {
     condition = var.ipv4_address == "dhcp" || length(local.extra_gateways) > 0 || try(
       cidrhost(var.ipv4_address, 0) == cidrhost("${var.ipv4_gateway}/${split("/", var.ipv4_address)[1]}", 0), false
     )
-    error_message = "VM ${var.name}: static address ${var.ipv4_address} has ${var.ipv4_gateway == null ? "no gateway (defaults.ipv4_gateway)" : "gateway ${var.ipv4_gateway} outside its subnet"}, so it has no default route."
+    error_message = "VM ${var.name}: static address ${var.ipv4_address} has ${try(length(var.ipv4_gateway), 0) == 0 ? "no gateway (defaults.ipv4_gateway)" : "gateway ${var.ipv4_gateway} outside its subnet"}, so it has no default route."
   }
   assert {
-    condition     = length(local.extra_gateways) + (var.ipv4_address != "dhcp" && var.ipv4_gateway != null ? 1 : 0) <= 1
+    condition     = length(local.extra_gateways) + (var.ipv4_address != "dhcp" && try(length(var.ipv4_gateway), 0) > 0 ? 1 : 0) <= 1
     error_message = "VM ${var.name}: an IPv4 gateway on more than one NIC gives the guest several default routes."
   }
 }
