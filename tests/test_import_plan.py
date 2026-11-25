@@ -415,6 +415,16 @@ class HclTests(unittest.TestCase):
         self.assertNotIn("ipv6_address", a)
         self.assertTrue(any("ip6=manual" in n for n in notes))
 
+    def test_provider_defaults_read_as_unset(self):
+        """OS type other and 512 MiB without ballooning: the provider's defaults, absent from the imported state, so
+        the first plan sets them again; the entry says so."""
+        ctx = {"defaults": {}, "node_datastores": False}
+        notes = tip.vm_entry(vm(310, "fw", ostype="other", memory="512", balloon="0"), ctx).notes
+        self.assertEqual([n.split(":")[0] for n in notes], ["OS type other", "memory 512 MiB without ballooning"])
+        self.assertTrue(all("sets it again (nothing changes)" in n for n in notes))
+        self.assertEqual(tip.vm_entry(vm(311, "big", memory="512", balloon="256"), ctx).notes, [])
+        self.assertEqual(tip.vm_entry(vm(312, "lin"), ctx).notes, [])
+
     def test_sizes_and_options(self):
         self.assertEqual(tip.whole(tip.gib("32G")), 32)
         self.assertEqual(tip.whole(tip.gib("1T")), 1024)

@@ -42,7 +42,8 @@ MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 VM_NIC_MODELS = {"virtio", "e1000", "e1000e", "rtl8139", "vmxnet3"}   # bpg network_device.model
 VM_EXTRA_RE =re.compile(r"^(scsi([1-9]|[12][0-9]|30)|virtio([0-9]|1[0-5])|sata[0-5])$")
 DISK_RE = re.compile(r"^(scsi|virtio|sata|ide)\d+$")
-NO_TEMPLATE_FILE = "local:vztmpl/imported.tar.zst"   # placeholder: ignored after creation
+SAME_AGAIN = "the provider's default, read as unset on import, so the first plan sets it again (nothing changes)"
+NO_TEMPLATE_FILE ="local:vztmpl/imported.tar.zst"   # placeholder: ignored after creation
 
 
 # --- HCL text (tfvars, variables.tf) ---------------------------------------------------------------------------
@@ -376,6 +377,11 @@ def vm_entry(g: dict, ctx: dict) -> Entry:
         e.blockers.append(f"OS type {ostype}: not one the provider knows")
     elif ostype != "l26":
         e.set("os_type", ostype)
+    # the provider reads a setting equal to its own default as absent when it imports: the first plan writes it again
+    if ostype == "other":
+        e.notes.append(f"OS type other: {SAME_AGAIN}")
+    if num(conf.get("memory"), 0) == 512 and str(conf.get("balloon") or "0") == "0" and not conf.get("hugepages"):
+        e.notes.append(f"memory 512 MiB without ballooning: {SAME_AGAIN}")
     if conf.get("bios") == "ovmf" or any(k.startswith("efidisk") for k in conf):
         e.blockers.append("UEFI (bios ovmf, EFI disk): the module has no EFI disk")
     if any(k.startswith("tpmstate") for k in conf):
