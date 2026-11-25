@@ -223,7 +223,7 @@ Scripts (all in `$HM/scripts/`):
 | `with_secrets.py <names…> -- <cmd>` | run a command with keychain secrets in env, output redacted | — |
 | `proxmox_inventory.py [--details] [--site N\|--all-sites]` / `--next-vmid vms\|lxc [--ip --vlan --site]` | read-only Proxmox snapshot + summary table (`--details`: configs, guest IPs; other sites: references/proxmox.md "Several sites") / VMID for a new guest | `discovery/proxmox.json` |
 | `pve_snapshot.py list\|check\|create\|delete\|rollback\|prune <guest…> [--name N] [--dry-run]` | guest snapshots around patching (check: can they be; delete/rollback/prune: approval) | — |
-| `pve_guest.py status\|start <guest…>` | guest status; start a stopped guest (after an approved reboot or rollback) | — |
+| `pve_guest.py status\|start\|shutdown\|stop <guest…>` | guest status; start a stopped guest (after an approved reboot or rollback); shut down cleanly / stop hard (approval) | — |
 | `lxd_snapshot.py list\|check\|create\|delete\|restore\|prune <host…> [--name N] [--dry-run]` | LXD/Incus instance snapshots (NAS; host vars lxd_host, lxd_snapshots) (delete/restore/prune: approval) | — |
 | `pve_node_plan.py <node> [--site N] [--max-mem-pct 85] [--no-migrate]` | read-only plan for patching one Proxmox node: migrate, HA, stop/restore per guest | `discovery/pve-patch.json` |
 | `nmap_scan.py <targets>\|--site N [--profile ping\|services\|os] [--tcp] [--arp] [--only-live]` / `--forget-missing DAYS [--dry-run]` | scope-checked scan; ping = ICMP sweep, `--tcp`/`--arp` when the user misses a device (references/discovery.md); marks known hosts that didn't answer (`missing_since`) / drop long-missing hosts | `discovery/network.json` |

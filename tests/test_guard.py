@@ -921,6 +921,14 @@ class GuardConfigTests(unittest.TestCase):
                     "python3 /p/lxd_snapshot.py prune app1 --older-than 30 --dry-run"):
             self.assertIsNone(self.d(cmd), cmd)
 
+    def test_pve_guest_shutdown_and_stop_ask(self):  # GitHub issue #155
+        for cmd in ("python3 /p/pve_guest.py shutdown web01", "python3 /p/pve_guest.py shutdown 101 --timeout 300",
+                    "python3 /p/pve_guest.py stop web01 --site offsite", "python3 /p/pve_guest.py --site b stop 101"):
+            self.assertEqual(self.d(cmd), "ask", cmd)
+        for cmd in ("python3 /p/pve_guest.py status web01 --json", "python3 /p/pve_guest.py start web01",
+                    "python3 /p/pve_guest.py status stopwatch"):
+            self.assertIsNone(self.d(cmd), cmd)
+
     def test_lxd_snapshot_delete_and_restore_ask(self):  # issue 44
         for cmd in ("python3 /p/lxd_snapshot.py delete app1 --name prepatch-20261117",
                     "python3 /p/lxd_snapshot.py restore app1 --name prepatch-20261117",

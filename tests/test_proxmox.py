@@ -350,6 +350,38 @@ class PveSnapshotTests(unittest.TestCase):  # issue 37
         self.assertEqual(pve_guest.start(self.pve, g[0], timeout=0, sleep=lambda _: None), "paused")
         self.assertEqual(state["starts"], 1)
 
+    def test_guest_shutdown_and_stop(self):  # GitHub issue #155
+        import pve_guest
+        state = {"st": "running", "task": "OK"}
+        orig = self.pve.get
+
+        def get(path, _method="GET", **params):
+            if path.endswith("/status/current"):
+                return {"status": state["st"]}
+            if path.endswith("/tasks/UPID:pve1:1/status"):
+                return {"status": "stopped", "exitstatus": state["task"]}
+            if path.endswith("/status/shutdown") and state["task"] == "OK":
+                state["st"] = "stopped"
+            if path.endswith("/status/stop"):
+                state["st"] = "stopped"
+            return orig(path, _method, **params)
+        self.pve.get = get
+        g = self.s.find_guests(self.pve, ["web01"])[0]
+        self.assertEqual(pve_guest.shutdown(self.pve, g, timeout=60, sleep=lambda _: None), ("stopped", None))
+        self.assertIn(("POST", "/nodes/pve1/qemu/101/status/shutdown", {"timeout": 60}), self.calls)
+        self.assertNotIn("forceStop", str(self.calls))                 # never forced
+        n = len(self.calls)                                            # stopped already: nothing is sent
+        self.assertEqual(pve_guest.shutdown(self.pve, g, sleep=lambda _: None), ("stopped", None))
+        self.assertEqual(pve_guest.stop(self.pve, g, sleep=lambda _: None), ("stopped", None))
+        self.assertFalse([c for c in self.calls[n:] if c[0] != "GET"])
+        state.update(st="running", task="VM quit/powerdown failed - got timeout")   # the guest ignored it
+        st, err = pve_guest.shutdown(self.pve, g, timeout=1, sleep=lambda _: None)
+        self.assertEqual(st, "running")
+        self.assertIn("got timeout", err)
+        state["task"] = "OK"
+        self.assertEqual(pve_guest.stop(self.pve, g, sleep=lambda _: None), ("stopped", None))
+        self.assertIn(("POST", "/nodes/pve1/qemu/101/status/stop", {}), self.calls)
+
     def test_failed_task_raises(self):
         self.pve.get = lambda path, **_: {"status": "stopped", "exitstatus": "snapshot feature is not available"}
         with self.assertRaises(SystemExit) as e:
