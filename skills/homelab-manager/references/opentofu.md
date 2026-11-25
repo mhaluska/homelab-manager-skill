@@ -40,6 +40,17 @@ address, since SLAAC and DHCPv6 take it from the router advertisement. Without `
 IPv6 settings (as before). On an existing VM it only changes the cloud-init drive, which the guest reads at a later
 boot; read the plan and tell the user (a container gets it right away).
 
+Several NICs (both kinds): the entry's `bridge`, `vlan_id`, `mac_address`, `ipv4_*`, `ipv6_*`, `firewall` and `mtu`
+(VM `queues`) stay the first NIC (net0, a container's eth0); `extra_nics` lists the others, net1, net2, ... in
+order: `{ bridge (else defaults.bridge), vlan_id, mac_address, firewall, mtu, ipv4_address, ipv4_gateway,
+ipv6_address, ipv6_gateway }`, plus for a VM `model` (`virtio`; `e1000`, `e1000e`, `rtl8139`, `vmxnet3`), `queues`
+and `disconnected` (link down), for a container `name` (else eth1, eth2, ... by position). An extra NIC's gateways
+are its own, never the defaults; when the default route is on one of them, set the entry's `ipv4_gateway = ""` (no
+gateway on the first NIC instead of `defaults.ipv4_gateway`). A VM's extra NIC addresses go to cloud-init
+(ipconfig1, ...) and have none unless set; a container's extra interface gets `dhcp` unless set. The provider
+numbers NICs by position, so there is no gap (net0, net2): inserting or removing an item renumbers the later NICs,
+and a VM's guest may see a renumbered NIC as a new one (another PCI slot): add at the end, remove only with approval.
+
 Cloud-init snippets (VMs): `cloud_init_snippet` names a file in `tofu/snippets/` (example:
 `example-vendor-data.yaml`) passed as vendor data, which merges with the built-in user data, so the admin user
 and keys keep working. `cloud_init_user_snippet` passes user data instead, which replaces the admin user and keys:
@@ -53,10 +64,12 @@ the uploaded file the VM still points to, and Proxmox then can't rebuild its clo
 start): keep it in the entry for the VM's life.
 
 The variables refuse a bad `ipv4_address` (not `dhcp` or address/prefix), a bad `ipv6_address` or `ipv6_gateway`,
-`vlan_id` outside 1–4094, a VMID below 100, an extra disk on `scsi0` or an unknown bus, and an unknown
+`vlan_id` outside 1–4094, a VMID below 100, an extra disk on `scsi0` or an unknown bus, an `extra_nics` item with
+a bad MAC, VLAN, address, model or a container interface name used twice (or eth0), and an unknown
 `checksum_algorithm`; the error names the entry.
-A static address without a gateway, or with one outside its subnet, is a warning in the plan ("Check block
-assertion failed"): set the entry's `ipv4_gateway`, or tell the user the guest has no default route.
+A static address without a gateway (on any NIC), or with one outside its subnet, is a warning in the plan ("Check
+block assertion failed"): set the entry's `ipv4_gateway`, or tell the user the guest has no default route. So is
+an IPv4 gateway on more than one NIC (several default routes).
 
 ## Running
 
