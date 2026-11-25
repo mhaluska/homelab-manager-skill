@@ -516,13 +516,34 @@ class UpgradeNotesTests(unittest.TestCase):
                         str(self.cfg)], check=True)                     # config notes of 0.16.0 settled
         out = run("upgrade_notes.py", "--json", cwd=self.d).stdout
         ids = [n["id"] for n in json.loads(out)]
+        sys.path.insert(0, str(SCRIPTS))
+        import upgrade_notes
         self.assertEqual(ids, ["inventory-guest-ips", "recheck-hidden-suggestions",   # the latter: any reviewed repo
-                               "inventory-node-versions", "overview-recovery-proxmox"])
+                               "inventory-node-versions", "overview-recovery-proxmox",
+                               *(["storage-health"] if upgrade_notes.vtuple(upgrade_notes.installed_version())
+                                 >= (0, 61, 0) else [])])
         ids = [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", "--all", cwd=self.d).stdout)]
         self.assertIn("proxmox-tls-check", ids)
         subprocess.run(["yq", "-i", ".components.proxmox = false", str(self.cfg)], check=True)
         ids = [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", cwd=self.d).stdout)]
         self.assertEqual(ids, ["recheck-hidden-suggestions"])                        # no component condition
+
+    def test_storage_health_and_pbs_token_notes(self):  # GitHub issues #151, #152
+        sys.path.insert(0, str(SCRIPTS))
+        import hmlib
+        import upgrade_notes
+        cfg = hmlib.load_config(self.d)
+        notes = {n["id"]: n for n in upgrade_notes.all_notes()}
+        applies = lambda i: upgrade_notes._check(notes[i], cfg, self.d)[0]
+        snap, doc = self.d / "discovery/proxmox.json", self.d / "docs/proxmox-tokens.md"
+        snap.write_text(json.dumps({"storage": [{"storage": "pbs1", "type": "pbs"}]}, indent=2))
+        self.assertTrue(applies("storage-health"))
+        self.assertFalse(applies("pbs-read-only-token"))                  # the template doc has the section
+        doc.write_text(doc.read_text().split("## Proxmox Backup Server")[0])
+        self.assertTrue(applies("pbs-read-only-token"))
+        snap.write_text(json.dumps({"storage": [{"storage": "nfs1", "type": "nfs"}], "storage_health": {}}, indent=2))
+        self.assertFalse(applies("storage-health"))
+        self.assertFalse(applies("pbs-read-only-token"))                  # no PBS storage: nothing to read
 
     def test_guest_agent_section_only_when_agent_ips_unread_and_on_root(self):  # GitHub issue #14
         doc = self.make_old()

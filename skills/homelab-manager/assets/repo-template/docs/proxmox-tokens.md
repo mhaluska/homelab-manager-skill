@@ -23,6 +23,8 @@ pveum acl modify / --tokens 'homelab@pve!ro' --roles PVEAuditor
 ```
 Keychain value: `homelab@pve!ro=<secret>` →
 `security add-generic-password -U -T /usr/bin/security -a "$USER" -s homelab/proxmox-ro -w`
+PVEAuditor also covers the storage health OVERVIEW.md shows (ZFS pools, disk SMART and wear, replication, Ceph:
+`Sys.Audit`); the PBS datastores need a PBS token (last section).
 
 Optional — VM IPs from the QEMU guest agent (`proxmox_inventory.py --details`, drift report's
 guest ↔ network matching). On Proxmox VE 9 PVEAuditor already includes `VM.GuestAgent.Audit`: nothing
@@ -73,3 +75,23 @@ pveum acl modify /storage/<backup-storage> --tokens 'homelab@pve!rw' --roles Hom
 ```
 Pool-based jobs also need `VM.Backup` on `/pool/<pool>`. Without this grant, edit jobs in the GUI
 (Datacenter → Backup).
+
+## Proxmox Backup Server (optional, read-only)
+
+Only if OVERVIEW.md should check the PBS datastores behind your `pbs` storages: GC, prune and verify job runs and
+snapshots waiting for verification (`proxmox_inventory.py`). The Proxmox VE token can't read them. Run on each PBS
+as root; the role `DatastoreAudit` only reads (no backup, restore, prune or delete). As on Proxmox VE, grant it to
+the user and to the token:
+```bash
+proxmox-backup-manager user create homelab@pbs --comment "homelab-manager"
+proxmox-backup-manager user generate-token homelab@pbs ro
+proxmox-backup-manager acl update /datastore DatastoreAudit --auth-id homelab@pbs
+proxmox-backup-manager acl update /datastore DatastoreAudit --auth-id 'homelab@pbs!ro'
+```
+Check with `proxmox-backup-manager user permissions 'homelab@pbs!ro' --path /datastore`.
+Keychain value: `homelab@pbs!ro:<secret>` →
+`security add-generic-password -U -T /usr/bin/security -a "$USER" -s homelab/pbs-ro -w`; then in homelab.yaml
+`secrets.pbs-ro: {service: homelab/pbs-ro, kind: pbs_token}` and `pbs: [{server: <address>, token: pbs-ro}]`, with
+the server as the Proxmox storage names it. The PBS certificate is checked against the fingerprint that storage
+pins (as Proxmox VE does); a PBS with a certificate from your own CA can set `ca_cert` in its `pbs:` entry instead.
+Several PBS hosts: one token and secret each.
