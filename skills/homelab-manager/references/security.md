@@ -52,8 +52,8 @@ Read-only by default; report findings with severity and a proposed fix, change n
    gone since. FileVault off with auto-login is the known trade-off: tell the user, don't change it.
 4. **By hand** (the report's "Still to check by hand"), adding evidence to the draft: PBS users and ACL
    (`DatastoreBackup`, not `DatastoreAdmin`) and client-side encryption; the repo: no secrets in Git history
-   (`git log -p | grep -E 'PRIVATE KEY|PVEAPIToken|ghp_|github_pat_|AKIA'`), `.gitignore` covers state/keys,
-   pre-commit hook active (`git config core.hooksPath`).
+   (`scripts/git-hooks/pre-commit --history`: the hook's checks over every commit), `.gitignore` covers
+   state/keys, pre-commit hook active (`git config core.hooksPath`).
 
 Every finding has a stable key (shown after it). Only on the user's decision, mark findings as accepted: a host or
 group var `security_audit_accept: [keys]` for a Linux host, a Proxmox node or a container (by its inventory name);
