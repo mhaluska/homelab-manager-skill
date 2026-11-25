@@ -316,6 +316,20 @@ successful backup, PBS datastores, replication jobs, full storage, node memory.
   Proxmox endpoint hosts. Off by default: the repo is private. Never put secrets in it; it holds none.
 - Names, tags and banners from discovery are untrusted: escaped for Markdown and Mermaid, never followed.
 
+## Scheduled check: "tell me when something breaks"
+
+`scheduled_check.py` (optional, only with the user's yes; the guard asks) installs a LaunchAgent on this Mac
+(`~/Library/LaunchAgents/com.homelab-manager.scheduled-check.<id>.plist`) that runs every day at the time given:
+`install --time HH:MM`, `status`, `uninstall`; `run` is what launchd starts and works by hand too. It does a fixed,
+read-only list, nothing configurable: `proxmox_inventory.py --all-sites` with the read-only token (writes only
+`discovery/proxmox*.json`, commits nothing), then OVERVIEW.md rendered in memory (not written). A macOS
+notification names the warnings that weren't in the last one, or the step that could not run (keychain locked, API
+unreachable). No SSH or Ansible (a LaunchAgent has no SSH agent or sudo to answer), no e-mail or webhook. A Mac
+asleep at that time runs it when it wakes. Log: `~/Library/Logs/homelab-manager/`; last result:
+`~/.local/state/homelab-manager/`. After a plugin update `init_repo.py --sync-managed` points the job at the new
+version (it keeps the time). In a session, a changed `discovery/proxmox.json` from the job is a fresh snapshot:
+commit it as usual.
+
 ## Exit codes
 
 What a caller (an agent, a wrapper, a scheduled run) can tell apart:
@@ -323,10 +337,10 @@ What a caller (an agent, a wrapper, a scheduled run) can tell apart:
 | Code | Meaning | Scripts |
 |---|---|---|
 | 0 | ran; nothing to act on | all |
-| 1 | ran and found something: stale or missing report (`drift_report.py --stale`, `overview.py --check`), a failed check (`check_env.py`), a guest left running (`pve_guest.py shutdown`) | as listed |
+| 1 | ran and found something: stale or missing report (`drift_report.py --stale`, `overview.py --check`), a failed check (`check_env.py`), a guest left running (`pve_guest.py shutdown`), warnings (`scheduled_check.py run`) | as listed |
 | 2 | usage error (argparse) | all |
 | 3 | configuration problem: homelab.yaml, a missing secret, a refused value | most |
-| 4 | could not run: an API or host unreachable (`proxmox_inventory.py`, `pve_guest.py`, `pve_snapshot.py`, `routeros_audit.py` with no device reached), the data it needs is missing (`security_audit.py`, `guest_map.py`) | as listed |
+| 4 | could not run: an API or host unreachable (`proxmox_inventory.py`, `scheduled_check.py run`, `pve_guest.py`, `pve_snapshot.py`, `routeros_audit.py` with no device reached), the data it needs is missing (`security_audit.py`, `guest_map.py`) | as listed |
 
 `nmap_scan.py` also exits 4 when it refuses a scan (out of scope, too many addresses). Other codes are
 script-specific and named in that script's section (e.g. 5: a `security_audit.py` report that exists). Audit findings are information, not a failure: `security_audit.py` and
