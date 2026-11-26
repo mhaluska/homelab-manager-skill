@@ -9,10 +9,13 @@
 # A running container with a memory limit also gets `memory` from its cgroup (`cgroup`: 1 or 2): limit and
 # current bytes, and since its start (`since`) how often it hit the limit, OOM kills and (v2 only, else null)
 # evicted file pages read again; overview.py warns about one that keeps hitting its limit (GitHub #143, #165).
+# Only Linux hosts reached over SSH: windows, appliances and qnap are left out of any target, and a host whose
+# tasks would run on this Mac (ansible_connection local, e.g. BMCs) or over network_cli, or whose `uname -s` isn't
+# Linux, gets `error` and no containers; entries of hosts in those groups are dropped (GitHub issue #166).
 # Nothing here changes a container. A QNAP NAS: qnap-containers.yml. Containers hosted elsewhere (another NAS)
 # can be recorded by hand in discovery/<name>-containers.json with the same layout (references/discovery.md).
 - name: Containers on Linux hosts
-  hosts: "{{ target | default('linux') }}"
+  hosts: "{{ (target | replace(',', ':')) if target is defined else 'linux' }}:!windows:!appliances:!qnap"
   gather_facts: false
   become: true
   tasks:
@@ -20,8 +23,20 @@
       ansible.builtin.set_fact:
         hm_checked: true
 
+    # A local connection would run the tasks on this Mac and store its containers as the host's (GitHub #166)
+    - name: Not a Linux host over SSH
+      ansible.builtin.set_fact:
+        container_error: "not a Linux host over SSH (connection {{ ansible_connection | default('ssh') }})"
+      when: >-
+        inventory_hostname in ['localhost', '127.0.0.1', '::1']
+        or ansible_connection | default('ssh') in ['local', 'network_cli']
+        or 'network_cli' in ansible_connection | default('ssh')
+
     - name: Container runtimes and Kubernetes
+      when: container_error is not defined
       ansible.builtin.shell: |
+        os=$(uname -s)
+        [ "$os" = Linux ] || { echo "not Linux: $os" >&2; exit 3; }
         for r in docker podman; do
           command -v "$r" >/dev/null 2>&1 && "$r" info >/dev/null 2>&1 && echo "runtime $r"
         done
@@ -40,7 +55,7 @@
         container_error: >-
           {{ 'unreachable' if hm_rt.unreachable | default(false) else 'runtimes' }}: {{
              (hm_rt.stderr | default('', true) or hm_rt.msg | default('failed')) | trim | truncate(200) }}
-      when: hm_rt.unreachable | default(false) or hm_rt is failed
+      when: container_error is not defined and (hm_rt.unreachable | default(false) or hm_rt is failed)
 
     - name: Inspect
       when: container_error is not defined
@@ -175,7 +190,7 @@
         containers_merged: >-
           {%- set prev = (lookup('ansible.builtin.file', containers_file) | from_json) if prev_containers.stat.exists else {} -%}
           {%- set hosts = {} -%}
-          {%- for name, entry in (prev.hosts | default({})).items() if name in groups['all'] -%}
+          {%- for name, entry in (prev.hosts | default({})).items() if name in groups['all'] and name not in skip -%}
             {%- set _ = hosts.update({name: entry}) -%}
           {%- endfor -%}
           {%- for name in reported -%}
@@ -192,6 +207,8 @@
           {{ {'collected_at': now_utc, 'hosts': hosts} }}
       vars:
         now_utc: "{{ now(utc=true).isoformat() }}"
+        # never Docker hosts here: an old entry (GitHub #166) is dropped
+        skip: "{{ groups['windows'] | default([]) + groups['appliances'] | default([]) + groups['qnap'] | default([]) }}"
 
     - name: Write
       ansible.builtin.copy:

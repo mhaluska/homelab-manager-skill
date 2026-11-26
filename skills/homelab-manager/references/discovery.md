@@ -165,7 +165,10 @@ no Proxmox guest behind it, or the user asks what runs in containers:
 - Linux hosts in the inventory: `ansible-playbook playbooks/docker-containers.yml [-e target=…]` (read-only)
   → `discovery/containers.json`: per host the runtimes (Docker, Podman), Kubernetes (k3s, k0s, kubelet,
   microk8s) and each container's image, state, restart policy, network mode, addresses, published ports,
-  compose project (with its working directory and config files) and auto-update label. Report restart-looping or
+  compose project (with its working directory and config files) and auto-update label. Any target leaves out
+  windows, appliances and qnap hosts; a host reached with a local or network_cli connection, or not running Linux,
+  gets `error` and no containers (else a BMC's local connection would list this Mac's containers, GitHub #166),
+  and old entries of hosts in those groups are dropped. Report restart-looping or
   exited containers, `restart: no` services, and auto-updaters (Watchtower) — they change images outside any
   patch window.
 - A running container with a memory limit also has `memory` (`cgroup`: 1 or 2): `limit` and `current` bytes, and

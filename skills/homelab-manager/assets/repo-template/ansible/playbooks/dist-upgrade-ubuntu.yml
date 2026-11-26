@@ -32,7 +32,7 @@
 # (failed_units_ignore, lxc_failed_units_ignore). Removed packages, packages left for autoremove, disabled
 # sources and *.dpkg-dist files are reported, not touched. Remove the snapshot after a good run (the user's yes).
 - name: Pre-flight for an Ubuntu release upgrade (changes nothing but the package lists)
-  hosts: "{{ target | default('__no_target__') }}"
+  hosts: "{{ target | default('__no_target__') | replace(',', ':') }}:!windows:!appliances:!qnap"
   gather_facts: true
   become: true
   any_errors_fatal: true   # one host not ready: nothing changes anywhere
@@ -185,7 +185,7 @@
           ' (check mode: nothing changed)' if ansible_check_mode else '' }}.
 
 - name: Ubuntu release upgrade
-  hosts: "{{ target | default('__no_target__') }}"
+  hosts: "{{ target | default('__no_target__') | replace(',', ':') }}:!windows:!appliances:!qnap"
   serial: 1
   max_fail_percentage: 0
   any_errors_fatal: true
