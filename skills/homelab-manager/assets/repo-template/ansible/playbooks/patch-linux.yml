@@ -46,7 +46,8 @@
 # health_services get time to leave activating/reloading: both up to health_timeout seconds (default 300;
 # -e or group_vars). A slow service such as FreeIPA's ipa.service needs 1-2 minutes.
 # After each host: no unit may fail that didn't before, except failed_units_ignore (group_vars) and, in LXC
-# guests, lxc_failed_units_ignore (kernel-module units that fail on every boot in a container).
+# guests, lxc_failed_units_ignore (kernel-module units that fail on every boot in a container), and units the
+# user accepted with -e failed_units_accept=a.service,b.service (tasks/failed-units.yml).
 # The failure names SSSD sockets that fail because sssd.conf still lists their responder (GitHub issue #142).
 # Containers (Docker, Podman) that ran before must run again; Docker containers that are down get one
 # restart of containerd and then Docker (an upgraded containerd needs it), else the host fails.
@@ -311,9 +312,9 @@
       run_once: true
 
     - name: Failed systemd units before patching
-      ansible.builtin.command: systemctl list-units --state=failed --no-legend --plain
-      register: failed_before
-      changed_when: false
+      ansible.builtin.include_tasks: tasks/failed-units.yml
+      vars:
+        failed_units_phase: before
 
     - name: Running containers before patching (Docker, Podman)
       ansible.builtin.shell: |
@@ -609,58 +610,12 @@
           r.stdout | default('') | trim or 'gone' }}{{ '; ' if not loop.last }}{% endfor %}.
           A container without a restart policy doesn't come back after a reboot: start it, or give it one.
 
-    - name: Failed systemd units after patching
-      ansible.builtin.command: systemctl list-units --state=failed --no-legend --plain
-      register: failed_after
-      changed_when: false
-
-    # Compared by unit name (the description may change); failed_units_ignore (group_vars) and, in LXC
-    # guests, lxc_failed_units_ignore don't count (GitHub issue #51)
-    - name: New failed units
-      ansible.builtin.set_fact:
-        hm_new_failed: >-
-          {{ failed_after.stdout_lines | select | map('split') | map('first') | list
-             | difference(failed_before.stdout_lines | select | map('split') | map('first') | list)
-             | difference(failed_units_ignore | default([], true)
-                          + (lxc_failed_units_ignore if ansible_facts.virtualization_type | default('') == 'lxc' else [])) }}
-
-    - name: How the new failed units start
-      ansible.builtin.command:
-        argv: [systemctl, show, -p, Type, --value, "{{ item }}"]
-      loop: "{{ hm_new_failed }}"
-      register: hm_new_failed_type
-      changed_when: false
-
-    # An SSSD responder still on sssd.conf's `services` line (pac: implied by an IPA domain) refuses to start
-    # socket-activated: its sssd-<responder>.socket fails on every boot, whatever the update did (GitHub issue #142)
-    - name: New failed SSSD units with the socket-activation conflict
-      ansible.builtin.shell: >-
-        journalctl -b --no-pager -o cat -u {{ item | quote }}
-        -u {{ item | regex_replace('[.]socket$', '.service') | quote }} | grep -q socket-activated
-      loop: "{{ hm_new_failed | select('match', '^sssd-[a-z-]+[.](socket|service)$') | list }}"
-      register: hm_sssd_conflict
-      changed_when: false
-      failed_when: false
-
-    - name: No new failed units
-      ansible.builtin.assert:
-        that: hm_new_failed | length == 0
-        fail_msg: >-
-          New failed units: {{ hm_new_failed | join(', ') }}{{
-          ('. Oneshot (may fail on every boot, e.g. after a long uptime reset its state): ' ~ oneshots | join(', ')
-           ~ '. Check `journalctl -b -u <unit>`; if the update did not cause it, list it in failed_units_ignore'
-           ~ ' (group_vars) and rerun the rest') if oneshots | length > 0 else '' }}{{
-          ('. Known SSSD socket conflict, not caused by the update: ' ~ sssd | join(', ')
-           ~ ' (the responders are still on the services line of /etc/sssd/sssd.conf, so their sockets refuse to'
-           ~ ' start); fix it one way only, after the user agrees (references/patching.md, "SSSD socket conflict")'
-           ~ ' and rerun the rest') if sssd | length > 0 else '' }}
+    # Compared by unit name; failed_units_ignore (group_vars), in LXC guests lxc_failed_units_ignore and
+    # -e failed_units_accept don't count (GitHub issues #51, #142)
+    - name: No new failed systemd units after patching
+      ansible.builtin.include_tasks: tasks/failed-units.yml
       vars:
-        sssd: >-
-          {{ hm_sssd_conflict.results | default([]) | selectattr('rc', 'defined') | selectattr('rc', 'eq', 0)
-             | map(attribute='item') | list }}
-        oneshots: >-
-          {{ hm_new_failed_type.results | default([]) | selectattr('stdout', 'defined')
-             | selectattr('stdout', 'eq', 'oneshot') | map(attribute='item') | list }}
+        failed_units_phase: after
 
     - name: Cluster post-hook (uncordon, leave maintenance, …)
       ansible.builtin.include_tasks:

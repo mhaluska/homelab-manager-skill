@@ -902,6 +902,72 @@ class PveNodePlanTests(unittest.TestCase):  # issue 23
             self.assertRegex(result, rf"\b{k}={{{{ \S+ if did_reboot \| bool else \[\] }}}}")
         self.assertIn("planned_stop={{ plan.stop_order }}", result)
 
+    def test_new_failed_units_stop_the_reboot_before_guests_move(self):  # GitHub issue #162
+        pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/patch-proxmox-node.yml").read_text()
+        idx = pb.index
+        self.assertLess(idx("failed_units_phase: before"), idx("- name: Upgrade packages"))
+        after = pb.split("- name: Failed systemd units after the upgrade")[1].split("\n    - name: No new failed")[0]
+        self.assertIn("failed_units_mode: report", after)               # an upgrade-only run reports, never fails
+        self.assertIn("failed_units_split_disabled: true", after)
+        gate = pb.split("- name: No new failed units before the reboot")[1].split("\n    # ")[0]
+        self.assertIn("hm_upgrade_new_failed | length == 0", gate)
+        self.assertIn("-e failed_units_accept=", gate)
+        self.assertLess(idx("- name: No new failed units before the reboot"), idx("- name: LVM-thin pools before the reboot"))
+        self.assertLess(idx("- name: LVM-thin pools before the reboot"), idx("- name: Move guests off"))
+        # after the reboot: compared, but a failure there never stops the restore of the guests
+        reboot = pb.split("- name: Failed systemd units after the reboot")[1].split("- name: Start pinned guests")[0]
+        self.assertIn("rescue:", reboot)
+        self.assertIn("failed_units_mode: report", reboot)
+        self.assertLess(idx("- name: Wait for Proxmox services and onboot guests"),
+                        idx("- name: Failed systemd units after the reboot"))
+        self.assertLess(idx("- name: Failed systemd units after the reboot"), idx("- name: Migrate guests back"))
+        last = pb.split("\n    - name: ")[-1]
+        self.assertTrue(last.startswith("No unit failed after the reboot (the guests are back)"), last[:80])
+        # Ansible renders fail_msg even when the assertion holds: an upgrade-only run has no reboot facts
+        self.assertIn("{{ hm_reboot_failed_msg | default('') }}", last)
+        self.assertIn("when: hm_reboot_new_failed is defined", last)
+        result = pb.split("- name: Result")[1].split("\n    - name:")[0]
+        self.assertIn("new_failed_units={{ hm_upgrade_new_failed | default([]) }}", result)
+        self.assertIn("new_failed_disabled=", result)
+        self.assertIn("failed_after_reboot=", result)
+
+    def test_reboot_policy_like_patch_linux(self):  # GitHub issue #163
+        pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/patch-proxmox-node.yml").read_text()
+        self.assertIn("reboot: \"{{ 'if_required' if allow_reboot | bool else 'never' }}\"", pb)
+        self.assertIn("that: reboot in ['never', 'if_required', 'always']", pb)
+        self.assertNotIn("allow_reboot | bool and", pb)                 # every reboot gate goes through hm_do_reboot
+        self.assertEqual(pb.count("when: hm_do_reboot | bool\n"), 2)     # failed-unit gate, LVM-thin pools
+        self.assertEqual(pb.count("when: hm_do_reboot | bool and not ansible_check_mode\n"), 2)
+        self.assertLess(pb.index("include_tasks: tasks/restart-check.yml"), pb.index("needs_reboot: \"{{ pve_reboot_flag"))
+        result = pb.split("- name: Result")[1].split("\n    - name:")[0]
+        self.assertIn("restart_pending={{ restart_pending | default([]) }}", result)
+        self.assertIn("-e reboot=always", result)
+        if not shutil.which("ansible-playbook"):
+            return
+        # the play's reboot default and the decision, evaluated by Ansible itself
+        play = json.loads(subprocess.run(["yq", "-o=json", ".", "-"], input=pb, capture_output=True, text=True,
+                                         check=True).stdout)[0]
+        decide = next(t for t in play["tasks"] if t.get("name") == "Reboot needed, and will this run reboot?")
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        (d / "t.yml").write_text(json.dumps([{
+            "hosts": "localhost", "connection": "local", "gather_facts": False,
+            "vars": {"allow_reboot": play["vars"]["allow_reboot"], "reboot": play["vars"]["reboot"],
+                     "ansible_facts": {"kernel": "6.8.12-1-pve"}},
+            "tasks": [{"ansible.builtin.set_fact": {"pve_reboot_flag": {"stat": {"exists": False}},
+                                                    "pve_kernel": {"stdout": "{{ newest }}\n"}}},
+                      decide,
+                      {"ansible.builtin.copy": {"dest": str(d / "out"), "content": "{{ reboot }} {{ hm_do_reboot }}"}}]}]))
+        for extra, newest, want in ((["-e", "allow_reboot=true"], "6.8.12-1-pve", "if_required False"),
+                                    (["-e", "allow_reboot=true"], "6.8.12-4-pve", "if_required True"),
+                                    ([], "6.8.12-4-pve", "never False"),
+                                    (["-e", "reboot=always"], "6.8.12-1-pve", "always True"),
+                                    (["-e", "reboot=if_required"], "6.8.12-1-pve", "if_required False")):
+            r = subprocess.run(["ansible-playbook", "t.yml", "-e", f"newest={newest}", *extra], cwd=d,
+                               capture_output=True, text=True, timeout=300)
+            self.assertEqual(r.returncode, 0, r.stdout[-1500:])
+            self.assertEqual((d / "out").read_text(), want, extra)
+
     def test_reboot_waits_for_every_unit_and_start_tolerates_a_race(self):  # GitHub issue #141
         pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/patch-proxmox-node.yml").read_text()
         wait = pb.split("- name: Wait for Proxmox services and onboot guests")[1].split("- name:")[0]

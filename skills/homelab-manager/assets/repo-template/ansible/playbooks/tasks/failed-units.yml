@@ -1,0 +1,101 @@
+# Read-only: failed systemd units before and after a change, compared by unit name (the description may change).
+# Included by patch-linux.yml and patch-proxmox-node.yml (GitHub issues #51, #142, #162):
+#   failed_units_phase: before → hm_failed_before (unit names)
+#   failed_units_phase: after  → hm_new_failed: units that failed only afterwards and count
+#                                hm_new_failed_disabled: with failed_units_split_disabled, new failed units that
+#                                  are disabled (an upgrade started them; they don't come back after a reboot)
+#                                hm_failed_units_msg: what to tell the user ('' when nothing counts)
+#   failed_units_mode: fail (default) stops the host on a unit in hm_new_failed; report only sets the facts.
+# Not counted: failed_units_ignore (group_vars), in LXC guests lxc_failed_units_ignore (vars/patch-lists.yml),
+# and failed_units_accept (-e failed_units_accept=a.service,b.service: units the user looked at and accepts).
+- name: Failed systemd units ({{ failed_units_phase }})
+  ansible.builtin.command: systemctl list-units --state=failed --no-legend --plain
+  register: hm_failed_units
+  changed_when: false
+  check_mode: false
+
+- name: Remember the failed units
+  ansible.builtin.set_fact:
+    hm_failed_before: "{{ hm_failed_units.stdout_lines | select | map('split') | map('first') | list }}"
+  when: failed_units_phase == 'before'
+
+- name: Compare with before
+  when: failed_units_phase == 'after'
+  block:
+    - name: New failed units
+      ansible.builtin.set_fact:
+        hm_new_failed_all: >-
+          {{ hm_failed_units.stdout_lines | select | map('split') | map('first') | list
+             | difference(hm_failed_before | default([]))
+             | difference(failed_units_ignore | default([], true)
+                          + (lxc_failed_units_ignore | default([], true)
+                             if ansible_facts.virtualization_type | default('') == 'lxc' else [])
+                          + accepted) }}
+      vars:
+        accepted: >-
+          {{ (failed_units_accept.split(',') if failed_units_accept is string else failed_units_accept)
+             | map('trim') | select | list if failed_units_accept is defined and failed_units_accept else [] }}
+
+    - name: How the new failed units start
+      ansible.builtin.command:
+        argv: [systemctl, show, -p, Type, --value, "{{ item }}"]
+      loop: "{{ hm_new_failed_all }}"
+      register: hm_new_failed_type
+      changed_when: false
+      check_mode: false
+
+    - name: Whether the new failed units are enabled
+      ansible.builtin.command:
+        argv: [systemctl, is-enabled, "{{ item }}"]
+      loop: "{{ hm_new_failed_all if failed_units_split_disabled | default(false) | bool else [] }}"
+      register: hm_new_failed_enabled
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    # An SSSD responder still on sssd.conf's `services` line (pac: implied by an IPA domain) refuses to start
+    # socket-activated: its sssd-<responder>.socket fails on every boot, whatever the update did (GitHub issue #142)
+    - name: New failed SSSD units with the socket-activation conflict
+      ansible.builtin.shell: >-
+        journalctl -b --no-pager -o cat -u {{ item | quote }}
+        -u {{ item | regex_replace('[.]socket$', '.service') | quote }} | grep -q socket-activated
+      loop: "{{ hm_new_failed_all | select('match', '^sssd-[a-z-]+[.](socket|service)$') | list }}"
+      register: hm_sssd_conflict
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Sort the new failed units
+      ansible.builtin.set_fact:
+        hm_new_failed_disabled: "{{ disabled }}"
+        hm_new_failed: "{{ hm_new_failed_all | difference(disabled) }}"
+      vars:
+        disabled: >-
+          {{ hm_new_failed_enabled.results | default([]) | selectattr('stdout', 'defined')
+             | selectattr('stdout', 'eq', 'disabled') | map(attribute='item') | list }}
+
+    - name: What to tell the user
+      ansible.builtin.set_fact:
+        hm_failed_units_msg: >-
+          {{ '' if hm_new_failed | length == 0 else
+             'New failed units: ' ~ hm_new_failed | join(', ')
+             ~ (('. Oneshot (may fail on every boot, e.g. after a long uptime reset its state): ' ~ oneshots | join(', ')
+                 ~ '. Check `journalctl -b -u <unit>`; if the update did not cause it, list it in failed_units_ignore'
+                 ~ ' (group_vars) and rerun the rest') if oneshots | length > 0 else '')
+             ~ (('. Known SSSD socket conflict, not caused by the update: ' ~ sssd | join(', ')
+                 ~ ' (the responders are still on the services line of /etc/sssd/sssd.conf, so their sockets refuse to'
+                 ~ ' start); fix it one way only, after the user agrees (references/patching.md, "SSSD socket conflict")'
+                 ~ ' and rerun the rest') if sssd | length > 0 else '') }}
+      vars:
+        sssd: >-
+          {{ hm_sssd_conflict.results | default([]) | selectattr('rc', 'defined') | selectattr('rc', 'eq', 0)
+             | map(attribute='item') | select('in', hm_new_failed) | list }}
+        oneshots: >-
+          {{ hm_new_failed_type.results | default([]) | selectattr('stdout', 'defined')
+             | selectattr('stdout', 'eq', 'oneshot') | map(attribute='item') | select('in', hm_new_failed) | list }}
+
+    - name: No new failed units
+      ansible.builtin.assert:
+        that: hm_new_failed | length == 0
+        fail_msg: "{{ hm_failed_units_msg }}"
+      when: failed_units_mode | default('fail') == 'fail'

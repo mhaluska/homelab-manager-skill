@@ -254,6 +254,9 @@ class GuardInfraTests(unittest.TestCase):
         self.assertEqual(decision("ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=pve1", self.d), "ask")
         self.assertEqual(decision("ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=pve1 "
                                   "-e allow_reboot=true", self.d), "ask")
+        for policy in ("always", "if_required"):                                       # GitHub issue #163
+            self.assertEqual(decision("ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=pve1 "
+                                      f"-e reboot={policy} -e thin_check=true", self.d), "ask")
         win = "ansible-playbook playbooks/patch-windows.yml -e target=windows"           # GitHub issue #153
         self.assertEqual(decision(win, self.d), "ask")
         self.assertEqual(decision(win + " -e reboot=true -e categories=SecurityUpdates", self.d), "ask")
