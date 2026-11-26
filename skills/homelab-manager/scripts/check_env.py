@@ -158,6 +158,40 @@ def check_config_and_secrets():
     return out, cfg
 
 
+def check_zabbix(cfg, client=None):
+    """zabbix: in homelab.yaml (GitHub issue #168): the token secrets it names exist as kind env entries, a ca_cert
+    file exists, and the API answers apiinfo.version (no token, read-only)."""
+    z = (cfg or {}).get("zabbix") or {}
+    if not z.get("url"):
+        return []
+    import zbxlib
+    out = []
+    zs = zbxlib.settings(cfg)
+    for role in ("ro", "rw", "admin"):
+        name = zs["secrets"].get(role)
+        entry = hmlib.get(cfg, f"secrets.{name}") if name else None
+        if entry is None:
+            if role != "admin":
+                out.append({"check": f"zabbix:{role}", "ok": False,
+                            "detail": f"zabbix.secrets.{role} names {name!r}, which secrets: doesn't have (kind env)"})
+            continue
+        if entry.get("kind") != "env":
+            out.append({"check": f"zabbix:{role}", "ok": False, "detail": f"secrets.{name} must be kind env"})
+    ca = z.get("ca_cert")
+    if ca and not Path(os.path.expanduser(str(ca))).is_file():
+        out.append({"check": "zabbix:tls", "ok": False, "detail": f"zabbix.ca_cert {ca} doesn't exist"})
+        return out
+    try:
+        c = client or zbxlib.Client(zs["url"], None, "ro", zbxlib.ssl_context(cfg), timeout=10)
+        v = c.version()
+        ok = zbxlib.supported(v)
+        out.append({"check": "zabbix", "ok": ok, "detail": f"{zbxlib.api_url(zs['url'])}: Zabbix {v}"
+                    + ("" if ok else " (needs 7.0 LTS or newer)")})
+    except (zbxlib.ZabbixError, hmlib.ConfigError) as e:
+        out.append({"check": "zabbix", "ok": False, "detail": str(e)})
+    return out
+
+
 KEYCHAINS = ["/Library/Keychains/System.keychain", str(Path.home() / "Library/Keychains/login.keychain-db")]
 
 
@@ -578,6 +612,7 @@ def main(argv):
     results += (cfg_results + check_proxmox_tls(cfg) + check_token_expiry(cfg) + check_tofu_sites(cfg)
                 + check_ansible_targets(cfg)
                 + check_site_ambiguity(cfg)
+                + check_zabbix(cfg)
                 + check_git_upstream(cfg))
     if "--json" in argv:
         print(json.dumps(results, indent=2))

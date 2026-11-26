@@ -605,6 +605,35 @@ class TemplateTests(unittest.TestCase):
                                                          "/templates/Linux by Zabbix agent/items: 2 added, 1 removed"])
 
 
+class GapTests(unittest.TestCase):
+    def test_monitoring_gaps(self):
+        import datetime
+        doc = {"not_monitored": ["new1", "planned1"],
+               "hosts": {"web1": {"host": "web1.home.arpa", "managed": True, "enabled": True, "agent": "unavailable"},
+                         "old1": {"host": "old1.home.arpa", "managed": True, "enabled": False, "agent": "none",
+                                  "tags": {"decommissioned": "2026-01-01"}}},
+               "ambiguous": [], "unmatched_in_scope": [{"host": "ghost.home.arpa", "groups": ["Home/KVM"]}]}
+        conf = {"planned1": {}, "gone1": {}, "gone2": {"status": "decommissioned"}}
+        gaps = dict(zbxlib.monitoring_gaps(doc, conf, {"web1", "new1", "planned1"}, 30, datetime.date(2026, 3, 1)))
+        self.assertEqual(len(gaps), 5)
+        titles = list(gaps)
+        self.assertEqual(gaps[titles[0]], ["`new1`"])               # planned1 already has a config entry
+        self.assertIn("`gone1`", sum(gaps.values(), []))
+        self.assertNotIn("`gone2`", sum(gaps.values(), []))
+        self.assertTrue(any("old1" in r for r in gaps[titles[-1]]))
+
+
+class CheckEnvTests(unittest.TestCase):
+    def test_check_zabbix(self):
+        import check_env
+        self.assertEqual(check_env.check_zabbix({}), [])
+        rows = check_env.check_zabbix(CFG, client=FakeZabbix())
+        self.assertEqual([r["check"] for r in rows if r["ok"] is False], ["zabbix:rw"])    # no zabbix-rw secret
+        self.assertIn("Zabbix 8.0.0", rows[-1]["detail"])
+        old = check_env.check_zabbix(CFG, client=FakeZabbix(version="6.0.30"))
+        self.assertFalse(old[-1]["ok"])
+
+
 class _quiet:
     def __enter__(self):
         import io
