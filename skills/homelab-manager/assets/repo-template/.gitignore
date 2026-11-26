@@ -36,6 +36,7 @@ discovery/nmap/
 
 # --- Zabbix: a plan is applied once and deleted; it may be stale by the next session ---
 zabbix/plan.json
+discovery/zabbix-upstream/
 
 # --- OS / editors ---
 .DS_Store

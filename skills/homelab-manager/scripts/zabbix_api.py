@@ -19,7 +19,7 @@ Writes (token zabbix-rw, the guard asks; zabbix-admin for objects only a Super a
     zabbix_api.py apply zabbix/plan.json                    # exactly that plan, refused if the server changed since
     zabbix_api.py maintenance start --hosts H… [--guests-of NODE] [--hours 2] [--name N] | stop --name N
     zabbix_api.py ack <host> --message M [--close]          # acknowledge (and close) its open problems after a fix
-    zabbix_api.py template-import <file.yaml> [--compare]   # import a template file (--compare: importcompare only)
+    zabbix_api.py template-import <file.yaml> [--compare]   # export a rollback copy, then import (--compare: diff only)
     zabbix_api.py template-fetch <name…> [--branch release/8.0]  # official template YAML → zabbix/templates/
 
 Run through with_secrets.py: `with_secrets.py zabbix-ro -- python3 …/zabbix_api.py discover`. Everything outside
@@ -261,7 +261,8 @@ def main(argv=None) -> int:
     import zbx_reports  # noqa: E402
     import zbx_ops  # noqa: E402
     import zbx_audit  # noqa: E402
-    modules = (zbx_sync, zbx_reports, zbx_ops, zbx_audit)
+    import zbx_templates  # noqa: E402
+    modules = (zbx_sync, zbx_reports, zbx_ops, zbx_audit, zbx_templates)
     for mod in modules:
         mod.add_parsers(sub)
     a = ap.parse_args(argv)

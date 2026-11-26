@@ -19,6 +19,7 @@ import zbxlib  # noqa: E402
 import zbx_sync  # noqa: E402
 import zbx_ops  # noqa: E402
 import zbx_reports  # noqa: E402
+import zbx_templates  # noqa: E402
 import zabbix_api  # noqa: E402
 
 
@@ -544,6 +545,64 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(out["bmc1"]["entry"], {"groups": [], "templates": []})  # site_home is no peer group
         self.assertEqual(out["db9"]["entry"], {})                                # the profile describes it
         self.assertNotIn("web1", out)
+
+
+class TemplateTests(unittest.TestCase):
+    """Official templates from GitHub, scope checks before import (GitHub issue #168, phase 1d)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.got = []
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def fake_get(self, url):
+        self.got.append(url)
+        if "/contents/" in url:
+            return json.dumps([{"name": "templates", "type": "dir", "sha": "abc"}]).encode()
+        if "/git/trees/abc" in url:
+            return json.dumps({"tree": [{"type": "blob", "path": "os/linux/template_os_linux.yaml"},
+                                        {"type": "blob", "path": "app/nginx_agent/template_app_nginx_agent.yaml"},
+                                        {"type": "tree", "path": "os"}]}).encode()
+        if url.endswith("template_os_linux.yaml"):
+            return (b"zabbix_export:\n  version: '8.0'\n  templates:\n    - uuid: x\n"
+                    b"      template: 'Linux by Zabbix agent'\n      name: 'Linux by Zabbix agent'\n"
+                    b"      vendor:\n        name: Zabbix\n        version: 8.0-3\n")
+        raise AssertionError(f"unexpected download {url}")
+
+    def test_only_the_official_repository(self):
+        for bad in ("https://example.com/repos/zabbix/zabbix/x", "http://api.github.com/repos/zabbix/zabbix/x",
+                    "https://raw.githubusercontent.com/someone/zabbix/main/x.yaml"):
+            with self.assertRaises(hmlib.ConfigError):
+                zbx_templates.fetch(bad)
+        self.assertEqual(zbx_templates.branch_for("8.0.2", None), "release/8.0")
+        with self.assertRaises(hmlib.ConfigError):
+            zbx_templates.branch_for("8.0.2", "main; rm -rf /")
+
+    def test_find_and_cache(self):
+        up = zbx_templates.Upstream(self.tmp, "release/8.0", get=self.fake_get)
+        path, t = up.find("Linux by Zabbix agent")
+        self.assertEqual((path, t["vendor_version"]), ("templates/os/linux/template_os_linux.yaml", "8.0-3"))
+        self.assertGreater(zbx_templates.version_key("8.0-3"), zbx_templates.version_key("8.0-1"))
+        n = len(self.got)
+        zbx_templates.Upstream(self.tmp, "release/8.0", get=self.fake_get).find("Linux by Zabbix agent")
+        self.assertEqual(len(self.got), n)                                     # tree and file from the cache
+
+    def test_import_scope(self):
+        scope = zbxlib.Scope(CFG["zabbix"])
+        ok = {"zabbix_export": {"templates": [{"template": "Home Linux", "groups": [{"name": "Templates/Home/OS"}]}]}}
+        self.assertEqual(zbx_templates.file_scope(ok, scope), (["Home Linux"], []))
+        bad = {"zabbix_export": {"template_groups": [{"name": "Templates/Other"}],
+                                 "templates": [{"template": "X", "groups": [{"name": "Templates/Other"}]}],
+                                 "hosts": [{"host": "h"}]}}
+        self.assertEqual(len(zbx_templates.file_scope(bad, scope)[1]), 3)
+
+    def test_compare_summary(self):
+        diff = {"templates": {"updated": [{"before": {}, "after": {"template": "Linux by Zabbix agent"},
+                                           "items": {"added": [{}, {}], "removed": [{}]}}]}}
+        self.assertEqual(zbx_templates.summarize(diff), ["/templates: 1 updated",
+                                                         "/templates/Linux by Zabbix agent/items: 2 added, 1 removed"])
 
 
 class _quiet:

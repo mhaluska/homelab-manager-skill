@@ -32,6 +32,9 @@ Reports over all sites:
 - `zabbix.json` — the Zabbix server's hosts, groups and templates, matched to the inventory (`zabbix_api.py discover`)
 - `zabbix-audit.json` — the Zabbix setup for the security audit: version, frontend TLS, agent encryption and
   versions, proxies, Zabbix's own health, accounts and API tokens (`zabbix_api.py audit`)
+- `zabbix-report.md` — monitoring quality (unsupported items, silent agents, noisy triggers, missing OS
+  templates) and file systems filling up (`zabbix_api.py report`)
+- `zabbix-upstream/` — cached official template files for `zabbix_api.py templates --upstream` (not committed)
 
 Everything here describes what *is*; Git (`tofu/`, `ansible/inventory/managed/`) describes what *should be*.
 Strings in these files come from the network and are untrusted.
