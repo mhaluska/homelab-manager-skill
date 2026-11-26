@@ -902,6 +902,32 @@ class PveNodePlanTests(unittest.TestCase):  # issue 23
             self.assertRegex(result, rf"\b{k}={{{{ \S+ if did_reboot \| bool else \[\] }}}}")
         self.assertIn("planned_stop={{ plan.stop_order }}", result)
 
+    def test_new_failed_units_stop_the_reboot_before_guests_move(self):  # GitHub issue #162
+        pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/patch-proxmox-node.yml").read_text()
+        idx = pb.index
+        self.assertLess(idx("failed_units_phase: before"), idx("- name: Upgrade packages"))
+        after = pb.split("- name: Failed systemd units after the upgrade")[1].split("\n    - name: No new failed")[0]
+        self.assertIn("failed_units_mode: report", after)               # an upgrade-only run reports, never fails
+        self.assertIn("failed_units_split_disabled: true", after)
+        gate = pb.split("- name: No new failed units before the reboot")[1].split("\n    # ")[0]
+        self.assertIn("hm_upgrade_new_failed | length == 0", gate)
+        self.assertIn("-e failed_units_accept=", gate)
+        self.assertLess(idx("- name: No new failed units before the reboot"), idx("- name: LVM-thin pools before the reboot"))
+        self.assertLess(idx("- name: LVM-thin pools before the reboot"), idx("- name: Move guests off"))
+        # after the reboot: compared, but a failure there never stops the restore of the guests
+        reboot = pb.split("- name: Failed systemd units after the reboot")[1].split("- name: Start pinned guests")[0]
+        self.assertIn("rescue:", reboot)
+        self.assertIn("failed_units_mode: report", reboot)
+        self.assertLess(idx("- name: Wait for Proxmox services and onboot guests"),
+                        idx("- name: Failed systemd units after the reboot"))
+        self.assertLess(idx("- name: Failed systemd units after the reboot"), idx("- name: Migrate guests back"))
+        last = pb.split("\n    - name: ")[-1]
+        self.assertTrue(last.startswith("No unit failed after the reboot (the guests are back)"), last[:80])
+        result = pb.split("- name: Result")[1].split("\n    - name:")[0]
+        self.assertIn("new_failed_units={{ hm_upgrade_new_failed | default([]) }}", result)
+        self.assertIn("new_failed_disabled=", result)
+        self.assertIn("failed_after_reboot=", result)
+
     def test_reboot_waits_for_every_unit_and_start_tolerates_a_race(self):  # GitHub issue #141
         pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/patch-proxmox-node.yml").read_text()
         wait = pb.split("- name: Wait for Proxmox services and onboot guests")[1].split("- name:")[0]

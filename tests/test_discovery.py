@@ -1609,5 +1609,77 @@ class SshSafetyTests(unittest.TestCase):
             run_.assert_not_called()
 
 
+@unittest.skipUnless(shutil.which("ansible-playbook"), "needs ansible-playbook")
+class FailedUnitsTaskTests(unittest.TestCase):  # GitHub issue #162: tasks/failed-units.yml, run against a fake systemctl
+    PLAY = textwrap.dedent("""\
+        - hosts: localhost
+          connection: local
+          gather_facts: false
+          vars:
+            failed_units_ignore: [ignored.service]
+            hm_path: "{{ bin }}:{{ lookup('env', 'PATH') }}"
+          tasks:
+            - environment: {FAILED_FILE: "{{ bin }}/before", PATH: "{{ hm_path }}"}
+              block:
+                - ansible.builtin.include_tasks: tasks/failed-units.yml
+                  vars: {failed_units_phase: before}
+            - environment: {FAILED_FILE: "{{ bin }}/after", PATH: "{{ hm_path }}"}
+              block:
+                - ansible.builtin.include_tasks: tasks/failed-units.yml
+                  vars: {failed_units_phase: after}
+            - ansible.builtin.copy:
+                dest: "{{ bin }}/result.json"
+                content: "{{ {'new': hm_new_failed | sort, 'disabled': hm_new_failed_disabled | sort,
+                              'msg': hm_failed_units_msg} | to_json }}"
+        """)
+    SYSTEMCTL = textwrap.dedent("""\
+        #!/bin/sh
+        case "$1" in
+          list-units) cat "$FAILED_FILE" ;;
+          show) [ "$5" = once.service ] && echo oneshot || echo simple ;;
+          is-enabled) [ "$2" = nut-server.service ] && { echo disabled; exit 1; }; echo enabled ;;
+        esac
+        """)
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.d)
+        (self.d / "tasks").mkdir()
+        shutil.copy(SCRIPTS.parent / "assets/repo-template/ansible/playbooks/tasks/failed-units.yml", self.d / "tasks")
+        (self.d / "t.yml").write_text(self.PLAY)
+        for name, text in (("systemctl", self.SYSTEMCTL), ("journalctl", "#!/bin/sh\nexit 0\n")):
+            (self.d / name).write_text(text)
+            (self.d / name).chmod(0o755)
+        (self.d / "before").write_text("old.service loaded failed failed Old\n")
+        (self.d / "after").write_text("".join(f"{u} loaded failed failed x\n" for u in (
+            "old.service", "ignored.service", "nut-server.service", "once.service", "web.service")))
+
+    def play(self, *extra):
+        r = subprocess.run(["ansible-playbook", "t.yml", "-e", f"bin={self.d}", *extra], cwd=self.d,
+                           capture_output=True, text=True, timeout=300)
+        out = json.loads((self.d / "result.json").read_text()) if (self.d / "result.json").exists() else None
+        return r, out
+
+    def test_fail_mode_stops_with_the_hints(self):  # patch-linux.yml's default, unchanged
+        r, out = self.play()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIsNone(out)
+        self.assertIn("New failed units:", r.stdout)
+        self.assertIn("Oneshot (may fail on every boot", r.stdout)
+        self.assertNotIn("ignored.service", r.stdout.split("New failed units:")[1])
+        self.assertNotIn("old.service", r.stdout.split("New failed units:")[1])
+
+    def test_report_mode_splits_disabled_and_takes_accepted_units(self):  # patch-proxmox-node.yml
+        r, out = self.play("-e", "failed_units_mode=report", "-e", "failed_units_split_disabled=true",
+                           "-e", "failed_units_accept=web.service")
+        self.assertEqual(r.returncode, 0, r.stdout[-2000:])
+        self.assertEqual(out["new"], ["once.service"])
+        self.assertEqual(out["disabled"], ["nut-server.service"])
+        self.assertTrue(out["msg"].startswith("New failed units: once.service. Oneshot"))
+        r, out = self.play("-e", "failed_units_mode=report", "-e", "failed_units_split_disabled=true",
+                           "-e", "failed_units_accept=web.service,once.service")
+        self.assertEqual((out["new"], out["msg"]), ([], ""))
+
+
 if __name__ == "__main__":
     unittest.main()

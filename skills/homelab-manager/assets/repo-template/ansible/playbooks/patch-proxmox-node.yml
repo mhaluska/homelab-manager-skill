@@ -16,6 +16,11 @@
 # Before anything stops: every LVM-thin pool on the node must be healthy with metadata room; -e thin_check=true
 # also runs thin_check on a metadata snapshot of each (GitHub issue #91, references/patching.md "LVM-thin pools").
 # Finally every guest that ran before must run again (on this node, unless -e migrate_back=false).
+# Failed systemd units (GitHub issue #162, tasks/failed-units.yml): a unit that fails only after the upgrade is
+# reported (new_failed_units); a reboot run stops on it before anything moves or stops, unless the user accepts it
+# (-e failed_units_accept=a.service,b.service). A new failed unit that is disabled (the upgrade started it) is
+# only reported: it stays down after the reboot. After the reboot the check runs again; a unit that fails then
+# fails the run only at the end, after the guests are back.
 # After the reboot it waits for Proxmox's own onboot start (pve-guests) to finish, up to pve_guests_timeout
 # seconds (default 1800), before it starts the stopped guests that did not come up by themselves.
 # The Proxmox node name defaults to the inventory short name; set proxmox_node_name if it differs.
@@ -131,6 +136,11 @@
       become: false
 
   tasks:
+    - name: Failed systemd units before the upgrade
+      ansible.builtin.include_tasks: tasks/failed-units.yml
+      vars:
+        failed_units_phase: before
+
     - name: Upgrade packages (guests keep running)
       ansible.builtin.apt:
         upgrade: full
@@ -151,6 +161,29 @@
 
     - ansible.builtin.set_fact:
         needs_reboot: "{{ pve_reboot_flag.stat.exists or (pve_kernel.stdout | trim) != ansible_facts.kernel }}"
+
+    - name: Failed systemd units after the upgrade
+      ansible.builtin.include_tasks: tasks/failed-units.yml
+      vars:
+        failed_units_phase: after
+        failed_units_mode: report
+        failed_units_split_disabled: true
+
+    - name: Remember the units the upgrade left failed
+      ansible.builtin.set_fact:
+        hm_upgrade_new_failed: "{{ hm_new_failed }}"
+        hm_upgrade_new_failed_disabled: "{{ hm_new_failed_disabled }}"
+        hm_upgrade_failed_msg: "{{ hm_failed_units_msg }}"
+
+    # While every guest still runs: a service the upgrade broke on the hypervisor is looked at first
+    - name: No new failed units before the reboot
+      ansible.builtin.assert:
+        that: hm_upgrade_new_failed | length == 0
+        fail_msg: >-
+          {{ hm_upgrade_failed_msg }}. Nothing was moved, stopped or rebooted: the guests keep running. Check
+          `journalctl -u <unit>` on {{ pve_node }}; once it is fixed, or the user accepts it, run again with
+          -e failed_units_accept={{ hm_upgrade_new_failed | join(',') }}.
+      when: needs_reboot | bool and allow_reboot | bool
 
     # LVM-thin pools (GitHub issue #91): a pool is thin_check'ed only when it is activated, so stopping all its
     # guests or the reboot is its first check since boot; on PVE 9 a pool that failed it (status:64) left every
@@ -308,6 +341,27 @@
           retries: "{{ ((pve_guests_timeout | default(1800) | int) / 10) | round(0, 'ceil') | int }}"
           delay: 10
 
+        # Reported now and judged at the end: whatever this check finds, the guests come back first
+        - name: Failed systemd units after the reboot
+          block:
+            - name: Compare with before the upgrade
+              ansible.builtin.include_tasks: tasks/failed-units.yml
+              vars:
+                failed_units_phase: after
+                failed_units_mode: report
+                failed_units_split_disabled: true
+
+            - name: Remember the units failed after the reboot
+              ansible.builtin.set_fact:
+                hm_reboot_new_failed: "{{ hm_new_failed }}"
+                hm_reboot_failed_msg: "{{ hm_failed_units_msg }}"
+          rescue:
+            - name: The check could not run (the guests come back anyway)
+              ansible.builtin.set_fact:
+                hm_reboot_new_failed: []
+                hm_reboot_failed_msg: ''
+                hm_reboot_failed_check: "{{ ansible_failed_result.msg | default('failed') | truncate(200) }}"
+
         - name: Start pinned guests that did not start by themselves (startup order)
           ansible.builtin.shell: "{{ hm_start_guest }}"
           loop: "{{ by_action.stop | default([]) | sort(attribute='startup_order') }}"
@@ -357,8 +411,22 @@
           ha={{ planned_ha if did_reboot | bool else [] }},
           stopped_and_restored={{ plan.stop_order if did_reboot | bool else [] }}
           {%- if not did_reboot | bool %}, planned_migrate={{ planned_migrate }}, planned_ha={{ planned_ha }},
-          planned_stop={{ plan.stop_order }}{% endif %}
+          planned_stop={{ plan.stop_order }}{% endif %},
+          new_failed_units={{ hm_upgrade_new_failed | default([]) }}
+          {%- if hm_upgrade_new_failed_disabled | default([]) %}, new_failed_disabled={{ hm_upgrade_new_failed_disabled
+          }} (disabled: the upgrade started them, they stay down after a reboot){% endif %}
+          {%- if did_reboot | bool %}, failed_after_reboot={{ hm_reboot_new_failed | default([]) }}{% endif %}
+          {%- if hm_reboot_failed_check is defined %}, the failed-unit check after the reboot did not run
+          ({{ hm_reboot_failed_check }}){% endif %}
+          {%- if hm_upgrade_new_failed | default([]) and not did_reboot | bool %}. {{ hm_upgrade_failed_msg }}{% endif %}
       vars:
         did_reboot: "{{ needs_reboot | bool and allow_reboot | bool and not ansible_check_mode }}"
         planned_migrate: "{{ by_action.migrate | default([]) | map(attribute='vmid') | list }}"
         planned_ha: "{{ by_action.ha | default([]) | map(attribute='vmid') | list }}"
+
+    - name: No unit failed after the reboot (the guests are back)
+      ansible.builtin.assert:
+        that: hm_reboot_new_failed | default([]) | length == 0
+        fail_msg: >-
+          {{ hm_reboot_failed_msg }}. {{ pve_node }} was rebooted and its guests are back; check
+          `journalctl -b -u <unit>` on it.
