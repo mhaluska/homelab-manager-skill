@@ -1,14 +1,17 @@
 # Patch ONE Proxmox VE node and keep its guests available.
 #
 #   python3 $HM/scripts/proxmox_inventory.py --details && python3 $HM/scripts/pve_node_plan.py <node>
-#   ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=<inventory host> [-e allow_reboot=true]
+#   ansible-playbook playbooks/patch-proxmox-node.yml -e proxmox_patch_node=<inventory host> [-e reboot=if_required]
 # A node of another site (inventory group site_<name>): --site <name> on both scripts. A standalone node (no
 # cluster) has nowhere to move guests: every running one is shut down for the reboot.
 #
 # Executes the node's plan in discovery/pve-patch.json (pve_node_plan.py; under its site, then node; show it to
 # the user first) after checking it
-# against the live cluster. Without allow_reboot=true it only upgrades packages (guests keep running) and
-# reports whether a reboot is pending (the plan as planned_*; nothing is moved). With it, and only when a reboot is needed:
+# against the live cluster. reboot: never (default) only upgrades packages (guests keep running) and reports
+# whether a reboot is pending (the plan as planned_*; nothing is moved) and which services still run replaced
+# libraries (restart_pending). if_required (old name: allow_reboot=true) reboots when a newer kernel is installed or
+# /var/run/reboot-required exists; always reboots anyway, e.g. when only services wait for a restart (GitHub
+# issue #163). A reboot run, with the same checks either way:
 #   migrate  → live (VM) / restart (LXC) migration to the planned node, back after the reboot
 #   ha       → HA node maintenance mode moves them off and back
 #   stop     → clean shutdown in reverse startup order (never forced; if one fails, the stopped ones are
@@ -32,6 +35,7 @@
   any_errors_fatal: true
   vars:
     allow_reboot: false
+    reboot: "{{ 'if_required' if allow_reboot | bool else 'never' }}"
     migrate_back: true
     pve_node: "{{ proxmox_node_name | default(inventory_hostname_short) }}"
     hm_site: "{{ group_names | select('match', '^site_') | map('regex_replace', '^site_', '') | first | default('') }}"
@@ -68,6 +72,11 @@
           - ansible_play_hosts_all | length == 1
           - inventory_hostname in groups['proxmox_nodes'] | default([])
         fail_msg: "Pass -e proxmox_patch_node=<one host of the proxmox_nodes group>."
+
+    - name: Reboot policy
+      ansible.builtin.assert:
+        that: reboot in ['never', 'if_required', 'always']
+        fail_msg: "reboot must be never, if_required or always (got {{ reboot }})."
 
     - name: A plan exists for this node
       ansible.builtin.assert:
@@ -159,8 +168,16 @@
         path: /var/run/reboot-required
       register: pve_reboot_flag
 
-    - ansible.builtin.set_fact:
+    - name: Services still running replaced code (restart_pending)
+      ansible.builtin.include_tasks: tasks/restart-check.yml
+
+    # after restart-check.yml, which sets its own needs_reboot: this node's kernel and flag check decides
+    - name: Reboot needed, and will this run reboot?
+      ansible.builtin.set_fact:
         needs_reboot: "{{ pve_reboot_flag.stat.exists or (pve_kernel.stdout | trim) != ansible_facts.kernel }}"
+        hm_do_reboot: >-
+          {{ reboot == 'always' or (reboot == 'if_required'
+             and (pve_reboot_flag.stat.exists or (pve_kernel.stdout | trim) != ansible_facts.kernel)) }}
 
     - name: Failed systemd units after the upgrade
       ansible.builtin.include_tasks: tasks/failed-units.yml
@@ -183,13 +200,13 @@
           {{ hm_upgrade_failed_msg }}. Nothing was moved, stopped or rebooted: the guests keep running. Check
           `journalctl -u <unit>` on {{ pve_node }}; once it is fixed, or the user accepts it, run again with
           -e failed_units_accept={{ hm_upgrade_new_failed | join(',') }}.
-      when: needs_reboot | bool and allow_reboot | bool
+      when: hm_do_reboot | bool
 
     # LVM-thin pools (GitHub issue #91): a pool is thin_check'ed only when it is activated, so stopping all its
     # guests or the reboot is its first check since boot; on PVE 9 a pool that failed it (status:64) left every
     # guest on it unable to start. Check before anything stops, while the guests still run.
     - name: LVM-thin pools before the reboot
-      when: needs_reboot | bool and allow_reboot | bool
+      when: hm_do_reboot | bool
       block:
         - name: LVM-thin pools on the node
           ansible.builtin.command: >-
@@ -245,7 +262,7 @@
             label: "{{ item.item.vg_name }}/{{ item.item.lv_name }}"
 
     - name: Move guests off, reboot, bring them back
-      when: needs_reboot | bool and allow_reboot | bool and not ansible_check_mode
+      when: hm_do_reboot | bool and not ansible_check_mode
       block:
         - name: HA node maintenance on (HA moves its guests away)
           ansible.builtin.command: ha-manager crm-command node-maintenance enable {{ pve_node }}
@@ -399,7 +416,7 @@
         and now_list | selectattr('vmid', 'in', home) | selectattr('node', 'equalto', pve_node) | list | length == home | length
       retries: 30
       delay: 10
-      when: needs_reboot | bool and allow_reboot | bool and not ansible_check_mode
+      when: hm_do_reboot | bool and not ansible_check_mode
 
     # what was done only when the reboot block ran; otherwise the plan as planned_* (GitHub issue #86)
     - name: Result
@@ -412,6 +429,7 @@
           stopped_and_restored={{ plan.stop_order if did_reboot | bool else [] }}
           {%- if not did_reboot | bool %}, planned_migrate={{ planned_migrate }}, planned_ha={{ planned_ha }},
           planned_stop={{ plan.stop_order }}{% endif %},
+          restart_pending={{ restart_pending | default([]) }},
           new_failed_units={{ hm_upgrade_new_failed | default([]) }}
           {%- if hm_upgrade_new_failed_disabled | default([]) %}, new_failed_disabled={{ hm_upgrade_new_failed_disabled
           }} (disabled: the upgrade started them, they stay down after a reboot){% endif %}
@@ -419,8 +437,11 @@
           {%- if hm_reboot_failed_check is defined %}, the failed-unit check after the reboot did not run
           ({{ hm_reboot_failed_check }}){% endif %}
           {%- if hm_upgrade_new_failed | default([]) and not did_reboot | bool %}. {{ hm_upgrade_failed_msg }}{% endif %}
+          {%- if restart_pending | default([]) and not needs_reboot | bool and not did_reboot | bool %}. No reboot is
+          needed, but these services still run replaced libraries; a reboot that restarts them with the same checks
+          (with the user's yes): -e reboot=always{% endif %}
       vars:
-        did_reboot: "{{ needs_reboot | bool and allow_reboot | bool and not ansible_check_mode }}"
+        did_reboot: "{{ hm_do_reboot | bool and not ansible_check_mode }}"
         planned_migrate: "{{ by_action.migrate | default([]) | map(attribute='vmid') | list }}"
         planned_ha: "{{ by_action.ha | default([]) | map(attribute='vmid') | list }}"
 

@@ -89,7 +89,8 @@ QNAP NAS entries carry `firmware` and `apps` instead of package counts (referenc
    systemd units and `health_services` after each host. A unit counts only when it failed after the update
    and not before; in LXC guests kernel-module and kernel-filesystem units that fail on every boot don't
    count. A oneshot named as new may still be such a unit: check `journalctl -b -u <unit>`, and only if the
-   update did not cause it, add it to `failed_units_ignore` (group_vars) with the user's yes.
+   update did not cause it, add it to `failed_units_ignore` (group_vars) with the user's yes. For one run only:
+   `-e failed_units_accept=<unit>,<unit>` (the check is `tasks/failed-units.yml`, shared with Proxmox nodes).
    After a reboot it first waits for the boot to finish, and a `health_services` unit still `activating`
    gets time to come up: both up to `health_timeout` seconds (default 300, group_vars or `-e`). Raise it
    for services that start slower (FreeIPA takes 1–2 minutes); a unit that ends `failed` fails at once.
@@ -229,7 +230,11 @@ site (`site_<name>` group): add `--site <name>` to both scripts; the playbook ta
    the same check as patch-linux.yml). Tell the user and look at `journalctl -u <unit>` before any reboot.
    `new_failed_disabled` lists new failed units that are disabled (the upgrade started a unit nobody uses, e.g. an
    unconfigured NUT server): they stay down after the reboot and don't block it.
-4. Reboot run, a separate approval: add `-e allow_reboot=true`. The playbook checks the plan against
+4. Reboot run, a separate approval: add `-e reboot=if_required` (old name `allow_reboot=true`). It reboots only
+   when a newer kernel is installed or `/var/run/reboot-required` exists. When step 3 reported `reboot_needed=False`
+   but `restart_pending` lists services (corosync, lxcfs, ssh, …) still on replaced libraries, `-e reboot=always`
+   reboots anyway, with the same checks and guest handling; ask the user first. Never create the flag file by hand
+   instead. The playbook checks the plan against
    the live cluster (stale → refresh steps 1–2), records the guests in the node's plan (`state_before` in
    `discovery/pve-patch.json`), moves them off, reboots, waits for quorum, Proxmox services and Proxmox's own
    onboot start (`pve-guests`, with its startup delays; up to `pve_guests_timeout` seconds, default 1800), restores them,
