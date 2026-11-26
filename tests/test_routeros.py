@@ -477,5 +477,29 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         self.assertFalse((self.d / "discovery/routeros.json").exists())
 
 
+PLAYBOOKS = ROOT / "skills" / "homelab-manager" / "assets" / "repo-template" / "ansible" / "playbooks"
+# stdout[0] right after a reboot: network_cli echoes the wrapped command before the value line (GitHub issue #160)
+ECHOED = ('<system routerboard get current-firmware]\n<system routerboard get current-firmware])\n\n'
+          'current|7.24.7\n')
+
+
+def playbook_regex(name: str, var: str) -> re.Pattern:
+    """The regex_search pattern of a `<var>: "{{ … regex_search('…') … }}"` line, as Ansible sees it."""
+    line = next(l for l in (PLAYBOOKS / name).read_text().splitlines() if l.strip().startswith(var + ":"))
+    pattern = re.search(r"regex_search\('((?:[^'\\]|\\.)*)'", line).group(1)
+    return re.compile(pattern.replace("\\\\", "\\"))   # YAML double quotes: \\ is one backslash
+
+
+class RouterosPlaybookTests(unittest.TestCase):
+    def test_routerboot_verify_reads_the_value_line(self):  # GitHub issue #160
+        m = playbook_regex("routeros-routerboot-upgrade.yml", "running").search(ECHOED)
+        self.assertEqual(m.group(1), "7.24.7")
+        self.assertIsNone(playbook_regex("routeros-routerboot-upgrade.yml", "running").search("<echo only>\n"))
+
+    def test_no_raw_stdout_comparison(self):  # GitHub issue #160
+        for f in PLAYBOOKS.glob("routeros-*.yml"):
+            self.assertNotRegex(f.read_text(), r"stdout\[0\]\s*\|\s*trim\)?\s*==", f.name)
+
+
 if __name__ == "__main__":
     unittest.main()
