@@ -113,9 +113,9 @@ def check(force: bool) -> dict:
 
 
 def update_text(have: str, latest: str) -> str:
-    return (f"homelab-manager {latest} is available (installed: {have}). Update with "
-            f"`/plugin marketplace update {MARKETPLACE}`, then reinstall or update the plugin from `/plugin`; "
-            f"see CHANGELOG.md for what changed.")
+    return (f"homelab-manager {latest} is available (installed: {have}). Ask Claude to \"update the skill\", or run "
+            f"`/plugin marketplace update {MARKETPLACE}` and update the plugin from `/plugin`; it loads in a new "
+            f"session. See CHANGELOG.md for what changed.")
 
 
 SCRIPTS = ROOT / "skills" / "homelab-manager" / "scripts"
