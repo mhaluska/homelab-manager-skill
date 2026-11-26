@@ -6,9 +6,9 @@
 # state, restart policy, network mode, networks with addresses (macvlan/ipvlan ones are on the LAN and
 # match scanned IPs in the drift report), published ports, compose project and auto-update labels
 # (Watchtower, Podman auto-update). Root's containers only: rootless Podman per user is not listed.
-# A running container with a memory limit also gets `memory` from its cgroup (v2 only): limit and current
-# bytes, and since its start (`since`) how often it hit the limit, OOM kills and evicted file pages read
-# again; overview.py warns about one that keeps hitting its limit (GitHub issue #143).
+# A running container with a memory limit also gets `memory` from its cgroup (`cgroup`: 1 or 2): limit and
+# current bytes, and since its start (`since`) how often it hit the limit, OOM kills and (v2 only, else null)
+# evicted file pages read again; overview.py warns about one that keeps hitting its limit (GitHub #143, #165).
 # Nothing here changes a container. A QNAP NAS: qnap-containers.yml. Containers hosted elsewhere (another NAS)
 # can be recorded by hand in discovery/<name>-containers.json with the same layout (references/discovery.md).
 - name: Containers on Linux hosts
@@ -54,16 +54,28 @@
           changed_when: false
           check_mode: false
 
-        # pid limit current max_events oom_kills refault_file, from the container's cgroup as /proc/<pid>/cgroup
-        # names it (any cgroup driver, Docker and Podman); cgroup v1 has no memory.events: nothing is reported
+        # pid cgroup limit current max_events oom_kills refault_file, from the container's cgroup as
+        # /proc/<pid>/cgroup names it (any cgroup driver, Docker and Podman). cgroup v2: memory.max/.events/.stat.
+        # cgroup v1 (GitHub issue #165): limit_in_bytes, usage_in_bytes, failcnt as max_events, oom_kill from
+        # oom_control (kernel 4.13+, else 0); it has no refault counter (`-`), and "no limit" is a number near 2^63,
+        # so a limit at or above the host's RAM counts as none (`max`).
         - name: Memory counters of running containers with a memory limit
           ansible.builtin.shell: |
+            ram=$(awk '$1 == "MemTotal:" {printf "%.0f", $2 * 1024}' /proc/meminfo)
             for p in {{ hm_limited_pids | join(' ') }}; do
               d="/sys/fs/cgroup$(sed -n 's/^0:://p' "/proc/$p/cgroup" 2>/dev/null)"
-              [ -f "$d/memory.max" ] && [ -f "$d/memory.events" ] || continue
-              echo "$p $(cat "$d/memory.max") $(cat "$d/memory.current")" \
-                "$(awk '$1 == "max" {m = $2} $1 == "oom_kill" {k = $2} END {print m + 0, k + 0}' "$d/memory.events")" \
-                "$(awk '$1 == "workingset_refault_file" {r = $2} END {print r + 0}' "$d/memory.stat" 2>/dev/null)"
+              if [ -f "$d/memory.max" ] && [ -f "$d/memory.events" ]; then
+                echo "$p 2 $(cat "$d/memory.max") $(cat "$d/memory.current")" \
+                  "$(awk '$1 == "max" {m = $2} $1 == "oom_kill" {k = $2} END {print m + 0, k + 0}' "$d/memory.events")" \
+                  "$(awk '$1 == "workingset_refault_file" {r = $2} END {print r + 0}' "$d/memory.stat" 2>/dev/null)"
+                continue
+              fi
+              d="/sys/fs/cgroup/memory$(awk -F: '$2 ~ /(^|,)memory(,|$)/ {print $3}' "/proc/$p/cgroup" 2>/dev/null)"
+              [ -f "$d/memory.limit_in_bytes" ] && [ -f "$d/memory.failcnt" ] || continue
+              l=$(cat "$d/memory.limit_in_bytes")
+              [ -n "$ram" ] && [ "$l" -ge "$ram" ] 2>/dev/null && l=max
+              echo "$p 1 $l $(cat "$d/memory.usage_in_bytes") $(cat "$d/memory.failcnt")" \
+                "$(awk '$1 == "oom_kill" {k = $2} END {print k + 0}' "$d/memory.oom_control" 2>/dev/null) -"
             done
             true
           vars:
@@ -89,11 +101,12 @@
               kubernetes: "{{ hm_rt.stdout_lines | select('match', '^kubernetes ') | map('split', ' ') | map('last') | list }}"
               containers: >-
                 {%- set mem = {} -%}
-                {%- for l in hm_cgmem.stdout_lines | default([]) if l.split() | length == 6 -%}
+                {%- for l in hm_cgmem.stdout_lines | default([]) if l.split() | length == 7 -%}
                   {%- set f = l.split() -%}
-                  {%- set _ = mem.update({f[0] | int: {'limit': (f[1] | int) if f[1] != 'max' else none,
-                        'current': f[2] | int, 'max_events': f[3] | int, 'oom_kills': f[4] | int,
-                        'refault_file': f[5] | int}}) -%}
+                  {%- set _ = mem.update({f[0] | int: {'cgroup': f[1] | int,
+                        'limit': (f[2] | int) if f[2] != 'max' else none,
+                        'current': f[3] | int, 'max_events': f[4] | int, 'oom_kills': f[5] | int,
+                        'refault_file': (f[6] | int) if f[6] != '-' else none}}) -%}
                 {%- endfor -%}
                 {%- set out = [] -%}
                 {%- for r in hm_inspect.results | default([]) -%}
