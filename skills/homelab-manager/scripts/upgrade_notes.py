@@ -75,6 +75,21 @@ def note_files(note: dict) -> set[str]:
     return {rel for k in ("file_lacks", "file_has") for rel, _ in _pairs(w.get(k))}
 
 
+def _mentions(root: Path, m: dict) -> bool:
+    """mentions {paths, text}: a text file in one of the paths (files or directories) holds text, any case."""
+    want = str(m.get("text") or "").lower()
+    for rel in m.get("paths") or []:
+        p = root / rel
+        files = [p] if p.is_file() else [f for f in p.rglob("*") if f.is_file()] if p.is_dir() else []
+        for f in files:
+            try:
+                if f.stat().st_size < 1_000_000 and want in f.read_text(errors="replace").lower():
+                    return True
+            except OSError:
+                continue
+    return False
+
+
 def _check(note: dict, cfg: dict, root: Path, replaced: frozenset = frozenset()) -> tuple[bool, dict]:
     """(applies, placeholders) for one note. Files in `replaced` count as replaced with the template already."""
     w, ph = note.get("when") or {}, {"HM": str(HERE.parent)}
@@ -101,6 +116,8 @@ def _check(note: dict, cfg: dict, root: Path, replaced: frozenset = frozenset())
         if (root / rel).exists():
             return False, ph
         ph["template"] = str(TEMPLATE / rel)
+    if w.get("mentions") and not _mentions(root, w["mentions"]):
+        return False, ph
     if w.get("multi_site"):   # two or more sites in homelab.yaml
         try:
             if len(hmlib.sites(cfg)) < 2:

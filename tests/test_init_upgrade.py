@@ -609,6 +609,18 @@ class UpgradeNotesTests(unittest.TestCase):
         ids = [n["id"] for n in json.loads(run("upgrade_notes.py", "--json", cwd=self.d).stdout)]
         self.assertEqual(ids, ["recheck-hidden-suggestions"])                        # no component condition
 
+    def test_zabbix_note_only_where_zabbix_is_mentioned(self):  # GitHub issue #168
+        sys.path.insert(0, str(SCRIPTS))
+        import hmlib
+        import upgrade_notes
+        note = next(n for n in upgrade_notes.all_notes() if n["id"] == "zabbix-monitoring")
+        cfg = hmlib.load_config(self.d)
+        self.assertFalse(upgrade_notes._check(note, cfg, self.d)[0])
+        Path(self.d, "docs/monitoring.md").write_text("Alerts come from Zabbix.\n")
+        self.assertTrue(upgrade_notes._check(note, cfg, self.d)[0])
+        cfg["zabbix"] = {"url": "https://z.example/api_jsonrpc.php"}
+        self.assertFalse(upgrade_notes._check(note, cfg, self.d)[0])   # already set up
+
     def test_storage_health_and_pbs_token_notes(self):  # GitHub issues #151, #152
         sys.path.insert(0, str(SCRIPTS))
         import hmlib
