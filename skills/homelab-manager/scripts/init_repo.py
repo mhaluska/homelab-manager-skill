@@ -8,6 +8,9 @@
     init_repo.py [TARGET_DIR] --add-site NAME [--dry-run]       # scaffold a site listed in homelab.yaml sites:
     init_repo.py [TARGET_DIR] --name-default-site NAME [--steps ranges,vlans,group] [--dry-run]
 
+- TARGET_DIR: modes on an existing repo (--add-components, --sync-managed, --add-site, --name-default-site)
+  default to the repo this directory is in (walking up to homelab.yaml) and refuse without one; a new repo goes
+  into this directory, never inside an existing repo (GitHub issue #164).
 - Copies only the files the chosen components need. Existing files are NEVER overwritten
   (an existing .claude/settings.json — e.g. from installing the plugin with project scope — gets the
   template's permission rules merged in, so the safety settings aren't lost; in a repo that already has a
@@ -834,9 +837,37 @@ def wanted(rel: str, comps: list[str]) -> bool:
     return any(rel == p or (p.endswith("/") and rel.startswith(p)) for p in prefixes)
 
 
+def resolve_target(given: str | None, needs_repo: bool) -> Path | None:
+    """The directory to work on, or None (after a message) when it would be the wrong one (GitHub issue #164).
+
+    A mode that works on an existing repo needs homelab.yaml there: without a target it is the repo this
+    directory is in (walking up), an explicit target must hold it. A new repo goes into the target or this
+    directory, never inside an existing repo by accident (run from its ansible/, say)."""
+    if given is not None:
+        target = Path(given).resolve()
+        if needs_repo and not (target / "homelab.yaml").is_file():
+            print(f"init_repo: no homelab.yaml in {target}: pass the homelab repo's directory. Nothing was changed.",
+                  file=sys.stderr)
+            return None
+        return target
+    here = Path.cwd().resolve()
+    root = hmlib.find_repo_root(here)
+    if needs_repo:
+        if root is None:
+            print(f"init_repo: no homelab.yaml in {here} or its parents: run it in the homelab repo or pass its "
+                  "directory. Nothing was changed.", file=sys.stderr)
+        return root
+    if root is not None and root != here:
+        print(f"init_repo: {here} is inside the homelab repo {root}: pass {root} to update it (or a directory "
+              "outside it for a new repo). Nothing was changed.", file=sys.stderr)
+        return None
+    return here
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("target", nargs="?", default=".")
+    ap.add_argument("target", nargs="?", help="the homelab repo (default: the one this directory is in, or "
+                                               "this directory for a new repo)")
     ap.add_argument("--components", help="comma-separated; default: all")
     ap.add_argument("--add-components", help="comma-separated components to enable in an existing repo")
     ap.add_argument("--list-components", action="store_true")
@@ -856,7 +887,10 @@ def main():
     except hmlib.ConfigError as e:
         print(f"init_repo: {e} Nothing was written.", file=sys.stderr)
         return 2
-    target = Path(a.target).resolve()
+    target = resolve_target(a.target, needs_repo=bool(a.sync_managed or a.add_site or a.name_default_site
+                                                    or a.add_components))
+    if target is None:
+        return 2
     if a.sync_managed:
         return sync_managed(target, a.dry_run)
     if a.add_site:

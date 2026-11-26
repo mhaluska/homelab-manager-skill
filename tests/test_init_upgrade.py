@@ -63,6 +63,40 @@ class InitComponentsTests(unittest.TestCase):
         comps = json.loads(yq(".components", Path(self.d) / "homelab.yaml"))
         self.assertTrue(comps["ansible"] and comps["proxmox"])
 
+    def test_repo_modes_find_the_repo_from_a_subdirectory(self):
+        # GitHub issue #164: run from ansible/, --sync-managed said "up to date" for a repo with pending notes
+        run("init_repo.py", self.d, "--components", "ansible", cwd=self.d)
+        subprocess.run(["yq", "-i", 'del(.upgrades)', str(Path(self.d) / "homelab.yaml")], check=True)
+        sub = Path(self.d, "ansible")
+        here = run("init_repo.py", "--sync-managed", "--dry-run", cwd=self.d)
+        there = run("init_repo.py", "--sync-managed", "--dry-run", cwd=sub)
+        self.assertEqual(there.returncode, 0, there.stderr)
+        self.assertEqual(there.stdout, here.stdout)
+        self.assertNotIn("Up to date", there.stdout)
+        r = run("init_repo.py", "--add-components", "discovery", "--dry-run", cwd=sub)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"in {Path(self.d).resolve()}", r.stdout)
+        self.assertFalse((sub / "homelab.yaml").exists())
+
+    def test_repo_modes_refuse_outside_a_repo(self):
+        for args in (["--sync-managed", "--dry-run"], ["--add-components", "discovery"], ["--add-site", "x"]):
+            r = run("init_repo.py", *args, cwd=self.d)
+            self.assertEqual(r.returncode, 2, args)
+            self.assertIn("no homelab.yaml", r.stderr)
+            self.assertNotIn("Up to date", r.stdout)
+            r = run("init_repo.py", self.d, *args, cwd=self.d)            # explicit dir without homelab.yaml
+            self.assertEqual(r.returncode, 2, args)
+        self.assertEqual(list(Path(self.d).iterdir()), [])
+
+    def test_new_repo_is_never_created_inside_an_existing_one(self):
+        run("init_repo.py", self.d, "--components", "ansible", cwd=self.d)
+        sub = Path(self.d, "ansible")
+        r = run("init_repo.py", "--components", "ansible", cwd=sub)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("is inside the homelab repo", r.stderr)
+        self.assertFalse((sub / "homelab.yaml").exists())
+        self.assertEqual(run("init_repo.py", "--components", "ansible", "--dry-run", cwd=self.d).returncode, 0)
+
     def test_existing_settings_json_gets_permissions_merged(self):
         # e.g. the plugin was installed with project scope before setup ran
         s = Path(self.d, ".claude/settings.json")

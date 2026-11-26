@@ -21,6 +21,7 @@ import datetime as dt
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -120,18 +121,18 @@ def update_text(have: str, latest: str) -> str:
 SCRIPTS = ROOT / "skills" / "homelab-manager" / "scripts"
 
 
-def repo_upgrades() -> tuple[list[str], list[str], list[str]]:
+def repo_upgrades() -> tuple[list[str], list[str], list[str], Path | None]:
     """For the homelab repo in the working directory (all empty outside one): one-time upgrades pending,
-    opt-in suggestions from newer releases, reported skill issues fixed by the installed release."""
+    opt-in suggestions from newer releases, reported skill issues fixed by the installed release, the repo root."""
     sys.path.insert(0, str(SCRIPTS))
     import hmlib
     import init_repo
     root = hmlib.find_repo_root()
     if not root:
-        return [], [], []
+        return [], [], [], None
     notes, fixed = init_repo.suggestions(root)
     return ([desc for desc, _ in init_repo.upgrades(root)], [f"{n['text']} ({n['version']})" for n in notes],
-            [f"{i['id']} (#{i['github_number']}, fixed in {v})" for i, v in fixed])
+            [f"{i['id']} (#{i['github_number']}, fixed in {v})" for i, v in fixed], root)
 
 
 def repo_language() -> tuple[bool, str]:
@@ -154,7 +155,9 @@ def language_text(lang: str) -> str:
             "save it (`config_set.py 'site.language=<code>'`). Skill issues stay English.")
 
 
-def upgrade_text(steps: list[str], notes: list[str], fixed: list[str]) -> str:
+def upgrade_text(steps: list[str], notes: list[str], fixed: list[str], root: Path | None = None) -> str:
+    # the repo's absolute path: run from a subdirectory, --sync-managed would not find the repo (GitHub issue #164)
+    where = f" {shlex.quote(str(root))}" if root else ""
     parts = []
     if steps:
         parts.append("This homelab repository was set up by an older homelab-manager and needs a one-time update: "
@@ -164,7 +167,7 @@ def upgrade_text(steps: list[str], notes: list[str], fixed: list[str]) -> str:
                      "automatically): " + "; ".join(notes) + ".")
     if fixed:
         parts.append("The installed release fixed skill issues the user reported: " + ", ".join(fixed) + ".")
-    return " ".join(parts) + (f" Tell the user, run `python3 {SCRIPTS}/init_repo.py --sync-managed --dry-run` and "
+    return " ".join(parts) + (f" Tell the user, run `python3 {SCRIPTS}/init_repo.py --sync-managed --dry-run{where}` and "
                               "present its list, separating what it applies automatically from the suggestions "
                               "(each needs the user's yes). After their yes run it without --dry-run, apply the accepted "
                               "suggestions, record each declined one with `upgrade_notes.py --decline ID`, run "
@@ -190,9 +193,9 @@ def main() -> int:
             print(update_text(have, latest) if newer else f"homelab-manager {have} is up to date (latest: {latest}).")
         return 0
     try:
-        steps, suggested, fixed = repo_upgrades()
+        steps, suggested, fixed, root = repo_upgrades()
     except Exception:  # never break a session
-        steps, suggested, fixed = [], [], []
+        steps, suggested, fixed, root = [], [], [], None
     try:
         in_repo, lang = repo_language()
     except Exception:
@@ -205,7 +208,7 @@ def main() -> int:
         what = [w for w, on in (("a one-time update", steps), (f"{len(suggested)} suggested opt-in change(s)", suggested),
                                 (f"{len(fixed)} reported skill issue(s) fixed by this release", fixed)) if on]
         notes.append("homelab-manager: this repository has " + ", ".join(what) + " for the installed plugin version.")
-        context.append(upgrade_text(steps, suggested, fixed))
+        context.append(upgrade_text(steps, suggested, fixed, root))
     if in_repo:
         context.append(language_text(lang))
     if context:
