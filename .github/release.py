@@ -52,6 +52,14 @@ def dated_changelog(text: str, version: str, today: str) -> str:
     return text[:m.start()] + f"## {head}\n" + text[m.start(2):]
 
 
+def _release_notes():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("release_notes", Path(__file__).with_name("release_notes.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def main(argv: list[str]) -> int:
     args = [a for a in argv if not a.startswith("--")]
     if len(args) != 1 or not re.fullmatch(r"\d+\.\d+\.\d+", args[0]):
@@ -68,6 +76,11 @@ def main(argv: list[str]) -> int:
         changelog = dated_changelog(CHANGELOG.read_text(), version, datetime.date.today().isoformat())
     except SystemExit as e:
         return fail(str(e))
+    notes = _release_notes()
+    if notes.styled(version):
+        problems = notes.lint(notes.section(changelog, version))
+        if problems:
+            return fail("the CHANGELOG section doesn't follow the layout in CLAUDE.md:\n  " + "\n  ".join(problems))
 
     tags = sorted((t for t in git("tag", "--list", "v*").stdout.split() if re.fullmatch(r"v\d+\.\d+\.\d+", t)),
                   key=lambda t: vtuple(t[1:]))

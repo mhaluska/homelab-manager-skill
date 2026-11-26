@@ -24,6 +24,7 @@
   ### Upgrading                             (optional: what an existing repo needs, by hand or with a yes)
   ```
   One bullet per user-visible change, at most ~4 lines; detail belongs in `references/`, not here.
+  `python3 .github/release_notes.py --lint` checks the top section; `release.py` refuses a section that fails it.
 - A release that changes `assets/repo-template/` regenerates `assets/template-history.json`
   (`python3 .github/template_history.py`, needs the release tags locally) after the version bump; a test fails
   until it is current. `--sync-managed` replaces repo files that match a released template with no local edits.

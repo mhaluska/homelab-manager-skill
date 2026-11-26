@@ -73,6 +73,59 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertIn("not a release tag", r.stderr)
 
 
+class ChangelogStyleTests(unittest.TestCase):
+    """The layout from CLAUDE.md ("CHANGELOG sections") for sections from release_notes.STYLED_FROM on."""
+    GOOD = ("Monitoring arrives.\n\n### New\n- **Zabbix monitoring.** Hosts are compared.\n  ([#1](x))\n\n"
+            "### Fixed\n- **No false failure.** It works.\n\n### Upgrading\n- Run the sync.\n")
+
+    def setUp(self):
+        self.m = load("release_notes")
+
+    def test_good_section(self):
+        self.assertEqual(self.m.lint(self.GOOD), [])
+
+    def test_problems(self):
+        cases = {
+            "### New\n- **A.** b\n": "summary",
+            "Sum.\n\n### Fixed\n- **A.** b\n\n### New\n- **C.** d\n": "order",
+            "Sum.\n\n### Changes\n- **A.** b\n": "unknown heading",
+            "Sum.\n\n### New\n- plain text without a headline\n": "bold headline",
+            "Sum.\n\n### New\n- **A.** b\n" + "  more\n" * 7: "longer than",
+            "Sum.\n\n### Upgrading\n- Run it.\n": "no ### New",
+            "- a list\n\n### New\n- **A.** b\n": "plain sentences",
+        }
+        for body, want in cases.items():
+            self.assertTrue(any(want in p for p in self.m.lint(body)), (body, self.m.lint(body)))
+
+    def test_styled_sections_in_the_changelog(self):
+        cl = (ROOT / "CHANGELOG.md").read_text()
+        for v in self.m.versions(cl):
+            if self.m.styled(v):
+                self.assertEqual(self.m.lint(self.m.section(cl, v)), [], v)
+
+    def test_render_links_the_previous_release(self):
+        cl = "# Changelog\n\n## 0.65.0 — x\n" + self.GOOD + "\n## 0.64.0 — y\n- old\n"
+        out = self.m.render(cl, "0.65.0")
+        self.assertTrue(out.startswith("Monitoring arrives."))
+        self.assertIn("compare/v0.64.0...v0.65.0", out)
+        self.assertIn("/plugin install homelab-manager@homelab-manager-skill", out)
+        self.assertNotIn("compare/", self.m.render(cl, "0.64.0"))   # no older release
+
+    def test_release_refuses_an_unstyled_section(self):
+        r = FakeRepo()
+        self.addCleanup(r.cleanup)
+        (r.d / "CHANGELOG.md").write_text("# Changelog\n\n## 0.64.0 — x\n- first\n")
+        r.release("0.64.0", {"a.txt": "one\n"})
+        r.run("template_history.py")
+        (r.d / "CHANGELOG.md").write_text("# Changelog\n\n## Unreleased\n- a change\n\n## 0.64.0 — x\n- first\n")
+        r.git("add", "-A")
+        r.git("commit", "-qm", "change")
+        out = r.run("release.py", "0.65.0", "--no-tests")
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("layout", out.stderr)
+        self.assertEqual(r.run("release_notes.py", "--lint").returncode, 1)
+
+
 class FakeRepo:
     """A temporary Git repository with the layout the release tools expect."""
 
