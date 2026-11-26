@@ -73,17 +73,8 @@ Use well-known Galaxy collections when they're maintained; avoid random Galaxy r
 
 ## Example: "Install Zabbix Agent 2 on all managed Linux hosts"
 
-1. Ask/discover: Zabbix server address (not in config → ask; add `zabbix.server` to
-   `group_vars/all.yml`), Zabbix version to match the server, PSK or not (PSK = secret →
-   keychain item + `with_secrets.py`).
-2. Role `zabbix_agent2`: add the official Zabbix repo per OS family (Rocky: `rpm` repo; Debian/
-   Ubuntu: `zabbix-release` deb), install `zabbix-agent2`, template
-   `/etc/zabbix/zabbix_agent2.conf` (Server, ServerActive, Hostname = inventory_hostname),
-   open 10050/tcp (firewalld/ufw if active), enable + start, handler restart.
-3. Playbook `playbooks/zabbix-agent2.yml` (`hosts: "{{ target | default('linux') }}"`).
-4. `--check --diff` on all, real run on one host, verify (`systemctl is-active zabbix-agent2`,
-   `ss -ltn | grep 10050`), then the rest. Installing on many hosts is an approval item.
-5. Add `zabbix-agent2` to `health_services` for those groups. Commit role + playbook + vars.
+The `monitoring` component ships the role `zabbix_agent2` and `playbooks/zabbix-agent2.yml`: see
+references/monitoring.md "Agent 2" (settings in `homelab.yaml` `zabbix.agent`, switching from the classic agent).
 
 ## Users, SSH keys, packages, services
 
