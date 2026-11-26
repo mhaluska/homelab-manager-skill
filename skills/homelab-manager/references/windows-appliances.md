@@ -140,6 +140,13 @@ The report lists them as accepted and gives no fix for them, OVERVIEW.md doesn't
 shows; keys that no longer match are listed so the user can remove them. Version keys change with each release, so
 accepting an update postpones only that one. Only on the user's request.
 
+The audit never triggers an update check, so `update-<version>` only shows what the device's own last check found.
+It also compares the devices (this run and those already in `routeros.json`): a device behind the newest RouterOS
+another device on its update channel runs or was offered, while its own check is missing or stale, gets
+`behind-fleet-<version>` (low; switches that never check for updates are typical), and a user name whose group
+differs between devices gets `user-group-drift-<name>` (info: usually a shared service account with `full` where it
+should be `read`). The fleet is only as current as the devices audited; the "Version drift" line marks those behind.
+
 Plain-text services the audit flags: `playbooks/routeros-disable-services.yml` (the report prints the command
 for each device in the inventory). `routeros_disable_services` (default `[api, www]`; may add `telnet`, `ftp`,
 `api-ssl`, `www-ssl`, `winbox`, never `ssh`) lists what to turn off. Run it with `-l <host> --check` first and
@@ -147,6 +154,16 @@ show the user what it would disable; with their yes, run it again with `-e homel
 `--check` (the guard asks). Without that it changes nothing: appliances are read-only. It reads the services
 again afterwards and fails if one is still enabled. It needs a user with write rights (group `full`), not the
 audit user.
+
+"Patch my MikroTiks" is two steps, each its own reboot: RouterOS first, then RouterBOOT.
+
+RouterOS behind its channel (`update-<version>`, `behind-fleet-<version>`): `playbooks/routeros-upgrade.yml`.
+`-l <host> --check` shows installed → latest as of the device's last update check (it asks no update server, so
+"unknown" or an old version is possible: say so). With the user's yes, `-e homelab_read_only=false` checks for
+updates on the device, keeps the device's channel, downloads, stops before any reboot when the download did not
+complete (full flash: remove old files or unused packages), reboots, waits for SSH and fails unless the new version
+runs. Same limits and flags as below, named `routeros_upgrade_many` / `routeros_upgrade_gateway`; a device whose
+last check gave no result counts as one that may need the upgrade. Then RouterBOOT, then `routeros_audit.py <host>`.
 
 RouterBOOT behind the installed RouterOS (`routerboot-<version>`): `playbooks/routeros-routerboot-upgrade.yml`,
 same flow: `-l <host> --check` shows current → target, `-e homelab_read_only=false` applies it with the user's yes.

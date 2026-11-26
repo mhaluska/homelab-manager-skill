@@ -174,15 +174,19 @@
           retries: 6
           delay: 10
 
+        # Match the value line only: right after a reboot network_cli also returns the echoed (wrapped) command
+        # (GitHub issue #160).
         - name: The new firmware is running
           ansible.builtin.assert:
-            that: (after.stdout[0] | trim) == 'current|' ~ hm_target
+            that: running == hm_target
             fail_msg: >-
-              {{ inventory_hostname }} runs RouterBOOT {{ after.stdout[0] | regex_replace('^current\|', '') }},
-              expected {{ hm_target }}. Look at /system routerboard and the log on the device.
+              {{ inventory_hostname }} runs RouterBOOT {{ running | default('?', true) }}, expected {{ hm_target }}.
+              Look at /system routerboard and the log on the device.
             success_msg: >-
               {{ inventory_hostname }} runs RouterBOOT {{ hm_target }} (RouterOS {{ hm_version }}). Refresh the
               audit: routeros_audit.py {{ inventory_hostname }}.
+          vars:
+            running: "{{ after.stdout[0] | regex_search('(?m)^current\\|(\\S+)', '\\1') | default([''], true) | first }}"
       rescue:
         - name: Upgrade failed
           ansible.builtin.fail:
