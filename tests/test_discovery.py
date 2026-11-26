@@ -616,6 +616,32 @@ class DiscoveryLayoutTests(unittest.TestCase):  # GitHub issue #73
         self.assertTrue(hosts["Write discovery/updates.json"].startswith(
             "{{ (target | replace(',', ':')) if target is defined else 'linux:windows:qnap' }}"))
 
+    def test_linux_playbooks_never_run_on_appliances_or_this_mac(self):  # GitHub issue #166
+        pbs = SCRIPTS.parent / "assets/repo-template/ansible/playbooks"
+        pb = (pbs / "docker-containers.yml").read_text()
+        self.assertEqual(re.search(r'^- name: Containers on Linux hosts\n  hosts: "(.+)"$', pb, re.M).group(1),
+                         "{{ (target | replace(',', ':')) if target is defined else 'linux' }}:!windows:!appliances:!qnap")
+        guard = pb.split("- name: Not a Linux host over SSH")[1].split("\n    - name:")[0]
+        for s in ("'local'", "'network_cli' in ansible_connection", "'localhost'", "container_error:"):
+            self.assertIn(s, guard)
+        rt = pb.split("- name: Container runtimes and Kubernetes")[1].split("\n    - name:")[0]
+        self.assertIn("when: container_error is not defined", rt)            # nothing runs for such a host
+        self.assertIn('[ "$os" = Linux ] || {', rt)
+        self.assertLess(pb.index("- name: Not a Linux host over SSH"), pb.index("- name: Container runtimes"))
+        self.assertIn("if name in groups['all'] and name not in skip", pb)     # old entries of appliances dropped
+        self.assertIn("skip: \"{{ groups['windows'] | default([]) + groups['appliances'] | default([]) + "
+                      "groups['qnap'] | default([]) }}\"", pb)
+        for f in ("patch-linux.yml", "dist-upgrade-debian.yml", "dist-upgrade-ubuntu.yml"):
+            text = (pbs / f).read_text()
+            hosts = [h for h in re.findall(r'^  hosts: "?([^"\n]+)"?$', text, re.M) if "target" in h]
+            self.assertTrue(hosts, f)
+            for h in hosts:
+                self.assertEqual(h, "{{ target | default('__no_target__') | replace(',', ':') }}"
+                                    ":!windows:!appliances:!qnap", f)
+        # the BMC group runs on this Mac: that is why the exclusion matters
+        self.assertIn("ansible_connection: local",
+                      (SCRIPTS.parent / "assets/repo-template/ansible/inventory/managed/group_vars/bmc.yml").read_text())
+
     def test_check_updates_comma_target_never_splits_a_pattern(self):  # GitHub issue #129
         # Ansible splits a pattern on commas first, so `a,b:&windows` intersects only b: wherever a target is
         # joined to more pattern terms, its commas must have become colons

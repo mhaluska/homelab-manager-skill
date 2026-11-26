@@ -165,14 +165,18 @@ no Proxmox guest behind it, or the user asks what runs in containers:
 - Linux hosts in the inventory: `ansible-playbook playbooks/docker-containers.yml [-e target=…]` (read-only)
   → `discovery/containers.json`: per host the runtimes (Docker, Podman), Kubernetes (k3s, k0s, kubelet,
   microk8s) and each container's image, state, restart policy, network mode, addresses, published ports,
-  compose project (with its working directory and config files) and auto-update label. Report restart-looping or
+  compose project (with its working directory and config files) and auto-update label. Any target leaves out
+  windows, appliances and qnap hosts; a host reached with a local or network_cli connection, or not running Linux,
+  gets `error` and no containers (else a BMC's local connection would list this Mac's containers, GitHub #166),
+  and old entries of hosts in those groups are dropped. Report restart-looping or
   exited containers, `restart: no` services, and auto-updaters (Watchtower) — they change images outside any
   patch window.
-- A running container with a memory limit also has `memory` (cgroup v2): `limit` and `current` bytes, and since
-  `since` (its start) `max_events` (times it hit the limit), `oom_kills` and `refault_file` (evicted file pages
-  read again). Usage near the limit is normal (page cache counts in it). OVERVIEW.md warns about a container with
-  OOM kills, or one that hits its limit 1000 times an hour and re-reads 10000 pages an hour: its page cache
-  thrashes, so it burns CPU with no OOM kill (GitHub issue #143). Suggest raising `mem_limit` in its Compose file
+- A running container with a memory limit also has `memory` (`cgroup`: 1 or 2): `limit` and `current` bytes, and
+  since `since` (its start) `max_events` (times it hit the limit; `failcnt` on v1), `oom_kills` and `refault_file`
+  (evicted file pages read again; null on cgroup v1, which has no such counter). Usage near the limit is normal
+  (page cache counts in it). OVERVIEW.md warns about a container with OOM kills, or one that hits its limit 1000
+  times an hour and re-reads 10000 pages an hour (on cgroup v1: 10000 hits an hour alone): its page cache
+  thrashes, so it burns CPU with no OOM kill (GitHub issues #143, #165). Suggest raising `mem_limit` in its Compose file
   with the user's yes, then `docker compose up -d <service>` in `compose_working_dir`.
 - A container with a `compose_project` belongs to a Compose project: stop, start, restart or recreate it only with
   `docker compose -f <compose_config_files…> <cmd> <service>` in `compose_working_dir` (`podman-compose` for

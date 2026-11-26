@@ -55,8 +55,10 @@
 # Not a play var on purpose — play vars would override group_vars.
 # Hosts with patch_requires_approval: true (group_vars/proxmox_nodes.yml) are refused unless listed in
 # -e patch_approved=<host,…>.
+# windows, appliances and qnap hosts in the target are left out: they are patched by their own playbooks, and a
+# BMC's local connection would run the tasks on this Mac (GitHub issue #166).
 - name: Order the hosts (order=vip_holder_last puts the node holding the VIP last)
-  hosts: "{{ target | default('__no_target__') }}"
+  hosts: "{{ target | default('__no_target__') | replace(',', ':') }}:!windows:!appliances:!qnap"
   gather_facts: false
   become: false
   vars:

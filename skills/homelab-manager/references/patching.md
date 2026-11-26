@@ -85,6 +85,7 @@ QNAP NAS entries carry `firmware` and `apps` instead of package counts (referenc
    user wants the configuration of removed Debian packages gone as well.
 4. Approval (the guard asks for any patch run outside `--check`).
 5. Run: `ansible-playbook playbooks/patch-linux.yml -e target=<group> [-e security_only=true]`.
+   Windows, appliances and qnap hosts in the target are left out (as in the `dist-upgrade-*.yml` playbooks).
    The playbook stops on the first failure (`max_fail_percentage: 0`) and checks failed
    systemd units and `health_services` after each host. A unit counts only when it failed after the update
    and not before; in LXC guests kernel-module and kernel-filesystem units that fail on every boot don't

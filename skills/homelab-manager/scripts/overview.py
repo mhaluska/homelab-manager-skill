@@ -1509,6 +1509,7 @@ def compose(c: dict) -> str:
 
 MEM_HITS_PER_HOUR = 1000       # times a container hit its memory limit per hour since its start
 MEM_REFAULTS_PER_HOUR = 10000  # evicted file pages it read again per hour (about 40 MiB at 4 KiB pages)
+MEM_HITS_PER_HOUR_V1 = 10000   # cgroup v1 has no refault counter: the limit hit this often per hour alone (GitHub #165)
 
 
 def utc_time(s) -> dt.datetime | None:
@@ -1528,7 +1529,9 @@ def memory_pressure(docs: dict) -> list[str]:
     """Containers that keep hitting their cgroup memory limit (docker-containers.yml `memory`, GitHub issue #143):
     an OOM kill since their start, or the limit hit MEM_HITS_PER_HOUR times and MEM_REFAULTS_PER_HOUR evicted file
     pages read again per hour, judged at the host's collected_at. The second is a thrashing page cache: CPU spent
-    for no work, no OOM kill. Usage near the limit alone is normal (page cache counts in it) and is not flagged."""
+    for no work, no OOM kill. Usage near the limit alone is normal (page cache counts in it) and is not flagged.
+    cgroup v1 has no refault counter (refault_file null): there the limit hit MEM_HITS_PER_HOUR_V1 times per hour
+    counts alone (GitHub issue #165)."""
     out = []
     hosts = (docs.get("containers.json") or {}).get("hosts")
     for host, d in sorted(hosts.items() if isinstance(hosts, dict) else []):
@@ -1540,12 +1543,15 @@ def memory_pressure(docs: dict) -> list[str]:
             hours = (at - since).total_seconds() / 3600 if since and at and at > since else None
             oom, hits, refaults = (m.get(k) if isinstance(m.get(k), int) else 0
                                    for k in ("oom_kills", "max_events", "refault_file"))
+            v1 = m.get("refault_file") is None          # cgroup v1: no refault counter
             rate = lambda n: n / max(hours, 1)   # noqa: E731 - a container younger than an hour: per first hour
-            thrash = hours is not None and rate(hits) >= MEM_HITS_PER_HOUR and rate(refaults) >= MEM_REFAULTS_PER_HOUR
+            thrash = hours is not None and (rate(hits) >= MEM_HITS_PER_HOUR_V1 if v1 else
+                                            rate(hits) >= MEM_HITS_PER_HOUR and rate(refaults) >= MEM_REFAULTS_PER_HOUR)
             if not (oom or thrash):
                 continue
             what = ([f"{oom} OOM kill{'' if oom == 1 else 's'}"] if oom else []) + (
-                [f"hit {round(rate(hits))}/h, {round(rate(refaults))} pages re-read/h"] if thrash else [])
+                [f"hit {round(rate(hits))}/h" + ("" if v1 else f", {round(rate(refaults))} pages re-read/h")]
+                if thrash else [])
             where = compose(c)
             out.append(f"{host}: container {c.get('name')} at its {mib(m.get('limit'))} memory limit "
                        f"({', '.join(what)} since {stamp(m.get('since'))}): raise mem_limit"

@@ -609,19 +609,27 @@ class OverviewTests(unittest.TestCase):  # GitHub issue #87
                 {"name": "cache", "memory": mem(5000, 100)},                  # at its limit, cache not re-read
                 {"name": "db", "memory": mem(0, 0, oom=2)},
                 {"name": "fresh", "memory": mem(2000, 20000, since="2026-01-03T23:30:00Z")},   # half an hour old
-                {"name": "plain"}]}}}))
+                {"name": "plain"}]},
+            "oldhost": {                                                             # cgroup v1 (GitHub #165)
+                "collected_at": "2026-01-04T00:00:00", "containers": [
+                    {"name": "v1busy", "memory": dict(mem(1900000, None), cgroup=1)},   # 26389/h, no refaults
+                    {"name": "v1calm", "memory": dict(mem(5000, None), cgroup=1)}]}}}))
         md = run("overview.py", "--no-ansible", "--out", "-", cwd=self.d).stdout
-        self.assertIn("3 containers at their memory limit", md.split("\n## ")[1])          # At a glance
+        self.assertIn("4 containers at their memory limit", md.split("\n## ")[1])          # At a glance
         health = md.split("\n## Health")[1]
         self.assertIn("- docker1: container watchtower at its 32 MiB memory limit (hit 13472/h, 736111 pages re-read/h "
                       "since 2026-01-01): raise mem\\_limit in /srv/watchtower", health)
         self.assertIn("- docker1: container db at its 32 MiB memory limit (2 OOM kills since 2026-01-01)", health)
         self.assertIn("container fresh at its 32 MiB memory limit (hit 2000/h, 20000 pages", health)   # per first hour
+        self.assertIn("- oldhost: container v1busy at its 32 MiB memory limit (hit 26389/h since 2026-01-01)", health)
+        self.assertNotIn("container v1calm", md)
         self.assertNotIn("container cache", md)
         self.assertNotIn("container plain", md)
         pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/docker-containers.yml").read_text()
         task = pb.split("- name: Memory counters of running containers with a memory limit")[1].split("\n        - name:")[0]
         self.assertIn("/proc/$p/cgroup", task)                       # any cgroup driver, Docker and Podman
+        self.assertIn("memory.failcnt", task)                        # cgroup v1 (GitHub #165)
+        self.assertIn("'refault_file': (f[6] | int) if f[6] != '-' else none", pb)
         self.assertIn("failed_when: false", task)
         self.assertNotRegex(task, r"\b(echo [^\"]*>|tee|rm|kill|docker (stop|update|restart))\b")   # read-only
         self.assertIn("(c.HostConfig.Memory | default(0, true) | int) > 0", task)
