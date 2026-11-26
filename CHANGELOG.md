@@ -1,5 +1,70 @@
 # Changelog
 
+## Unreleased
+
+The skill now works with Zabbix: it reads your monitoring, keeps it as data in the repository, and checks
+Zabbix before and after patching. Also safer RouterOS and Proxmox node upgrades, and clearer release notes.
+
+### New
+- **Zabbix monitoring, read-only first.** The new `monitoring` component connects to Zabbix 7.0 LTS or newer
+  with a read-only token. `zabbix_api.py discover` matches Zabbix hosts to your inventory by rules you set, safe on
+  a server other people share, and lists unmonitored hosts, stale hosts and open problems. Drift and OVERVIEW.md
+  show the gaps. ([#168](https://github.com/mhaluska/homelab-manager-skill/issues/168))
+- **Monitoring config as data.** `zabbix/config.yaml` describes your host groups, hosts, wrapper templates,
+  macros, web and certificate checks, services and SLAs. `zabbix_api.py plan` shows the changes, and `apply` makes
+  exactly that plan after your yes, only inside the scope you define. Secret macro values stay in the keychain. ([#168](https://github.com/mhaluska/homelab-manager-skill/issues/168), [#171](https://github.com/mhaluska/homelab-manager-skill/issues/171), [#174](https://github.com/mhaluska/homelab-manager-skill/issues/174))
+- **Patching that respects Zabbix.** With `-e zabbix=true`, `patch-linux.yml` and `patch-proxmox-node.yml` stop
+  on open problems before touching a host. They mute its alerts with a maintenance window that ends by itself, and
+  wait until it is healthy again before the next host. ([#169](https://github.com/mhaluska/homelab-manager-skill/issues/169))
+- **Host lifecycle and acknowledgements.** `propose` drafts entries for hosts not yet monitored, decommissioned
+  hosts are disabled and later offered for deletion, and `ack` acknowledges a host's problems after a verified
+  fix (closing them only where the trigger allows). ([#170](https://github.com/mhaluska/homelab-manager-skill/issues/170))
+- **Monitoring quality and capacity report.** `zabbix_api.py report` lists unsupported items, silent agents, noisy
+  triggers, hosts without an OS template and old agents, and forecasts file systems that will be full within 30
+  days. `export` saves the managed part of Zabbix to the repo, without secrets. ([#172](https://github.com/mhaluska/homelab-manager-skill/issues/172))
+- **Official template upgrades.** `templates --upstream` finds newer official versions of the templates you use,
+  `template-fetch` downloads one, and `template-import --compare` shows what an import would change; the import
+  keeps a rollback copy. ([#168](https://github.com/mhaluska/homelab-manager-skill/issues/168))
+- **Install Zabbix Agent 2 with one playbook.** `playbooks/zabbix-agent2.yml` sets up the official agent on RHEL,
+  Debian/Ubuntu and Windows, names hosts the way `zabbix_api.py` does, and carries a classic agent's settings over.
+  `-e zabbix_agent_migrate=true` switches safely, falling back to the classic agent if Agent 2 fails. ([#168](https://github.com/mhaluska/homelab-manager-skill/issues/168))
+- **Zabbix security and health audit.** `zabbix_api.py audit` reads your Zabbix setup without changing anything:
+  version, certificate, unencrypted agents and proxies, late items, busy processes, and with the admin token the
+  default accounts, MFA and API tokens. `security_audit.py` adds the findings to the security audit. ([#173](https://github.com/mhaluska/homelab-manager-skill/issues/173))
+- **Guarded RouterOS upgrades.** `playbooks/routeros-upgrade.yml` upgrades one device to the latest version of its
+  update channel. It checks and downloads first, refuses to reboot after an incomplete download, then verifies
+  the new version. ([#161](https://github.com/mhaluska/homelab-manager-skill/issues/161))
+
+### Improved
+- **RouterOS audit compares your devices.** `routeros_audit.py` reports a device that is behind the rest of the
+  fleet and user groups that differ between devices, and its update findings name `routeros-upgrade.yml`. ([#159](https://github.com/mhaluska/homelab-manager-skill/issues/159))
+- **Failed services after a Proxmox node upgrade.** `patch-proxmox-node.yml` reports systemd units the upgrade
+  broke, and a reboot run stops on them before any guest moves, unless you accept them with
+  `-e failed_units_accept=…`. ([#162](https://github.com/mhaluska/homelab-manager-skill/issues/162))
+- **Reboot a Proxmox node when only services need it.** `patch-proxmox-node.yml` takes `-e reboot=never|if_required|always`
+  like `patch-linux.yml`, so a node whose services still use replaced libraries can get a clean reboot with
+  the usual guest handling. ([#163](https://github.com/mhaluska/homelab-manager-skill/issues/163))
+- **Container memory on older hosts.** `docker-containers.yml` reads memory use on cgroup v1 hosts too, and the
+  overview warns about them by limit hits. ([#165](https://github.com/mhaluska/homelab-manager-skill/issues/165))
+- **Security audit checks each host's Zabbix agent.** `security-audit.yml` reads the agent settings that matter
+  (remote commands, `system.run`, root, a wide `Server=`, TLS), never the PSK. ([#173](https://github.com/mhaluska/homelab-manager-skill/issues/173))
+- **Release notes for people.** Each release now starts with a short summary and lists what is new, improved and
+  fixed in plain words, with a link to the full list of changes.
+
+### Fixed
+- **RouterBOOT upgrades verify the right line.** `routeros-routerboot-upgrade.yml` no longer reads the echoed
+  command as the firmware version. ([#160](https://github.com/mhaluska/homelab-manager-skill/issues/160))
+- **Updates from a subdirectory.** `init_repo.py --sync-managed` run from `ansible/` or another subdirectory no
+  longer says "Up to date" while updates are pending; it finds the repo or refuses outside one. ([#164](https://github.com/mhaluska/homelab-manager-skill/issues/164))
+- **Linux playbooks leave appliances alone.** `patch-linux.yml` and the release-upgrade playbooks skip Windows,
+  appliances and QNAP hosts, and `docker-containers.yml` never records this Mac's containers for a BMC. ([#166](https://github.com/mhaluska/homelab-manager-skill/issues/166))
+- **Skill issue reports keep the whole text.** `issues.py` no longer cuts long body lines and titles silently; it
+  refuses text that is too long and says how to fix it. ([#167](https://github.com/mhaluska/homelab-manager-skill/issues/167))
+
+### Upgrading
+- Run `init_repo.py --sync-managed`: unedited playbooks are updated; it suggests the RouterOS upgrade playbook and,
+  if you run Zabbix, the `monitoring` component.
+
 ## 0.64.0 — 2026-11-25
 - OpenTofu: VMs can boot with UEFI and have a TPM. `vms` entries take `bios` (`seabios` | `ovmf`), `efi_disk`
   (`datastore`, `type` 4m or 2m, `pre_enrolled_keys`) and `tpm_state` (`datastore`, `version` v2.0 or v1.2); the
