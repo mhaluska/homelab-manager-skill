@@ -77,6 +77,23 @@ group var `security_audit_accept: [keys]` for a Linux host, a Proxmox node or a 
 for every site; an unnamed default site is `default`); `security_audit.mac_accept` for this Mac. The report lists
 them apart, OVERVIEW.md doesn't count them, new ones still show; then run the script again. Typical accepts:
 Proxmox Datacenter Manager's `pve-root-token-pdm-admin`, a privileged container that serves NFS.
+
+### Zabbix
+
+With `zabbix:` in homelab.yaml, run `with_secrets.py zabbix-ro zabbix-admin -- python3 $HM/scripts/zabbix_api.py
+audit` before step 3 (the report's to-do says so while it's missing). It only reads (`*.get`; the admin token,
+optional, through the read-only client) and writes `discovery/zabbix-audit.json`: the server version (older than
+7.0 LTS, or a standard release), the frontend's TLS and certificate expiry, how the server talks to each managed
+host's agent (unencrypted) and the agent's version (newer than the server, older than 6.0), the proxies (unencrypted,
+silent, outdated), Zabbix's own health (late items, full caches, busy processes) and, with the admin token, the
+`Admin` and `guest` accounts, MFA and API tokens (unused for 90 days, no expiry). **Never try a password**, the
+default one included: whether `Admin` still has it is the user's check. What the tokens can't read is listed under
+"Not checked". `security-audit.yml` adds each host's agent config (`Server`, `ServerActive`, `AllowKey`/`DenyKey`,
+`EnableRemoteCommands`, `AllowRoot`, `TLSConnect`/`TLSAccept`, the number of `UserParameter`s; never a PSK file):
+`system.run` allowed is high when `Server=` admits a whole network, else medium. Accept the server's findings in
+`security_audit.zabbix_accept` (a list), a host's in its `security_audit_accept`. Fixes: PSK via
+`playbooks/zabbix-agent2.yml`; upgrades and patching: references/monitoring.md, "Audit and upkeep".
+
 Summarise the high-severity findings in your reply, offer to fix them, and commit the report. The report is the
 record: findings are not tracked anywhere else, and never sent to GitHub — if the homelab repo is public
 (`overview.redact`), ask before committing the report or security.json (exploitable detail: IPs, versions,
