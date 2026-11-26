@@ -1,0 +1,59 @@
+# zabbix_agent2 — Zabbix Agent 2 from the official Zabbix repository (references/monitoring.md "Agent 2").
+# Settings come from the zabbix: section of homelab.yaml; every value can be overridden per host or group.
+# No secrets here: a PSK comes from the environment with_secrets.py fills (zabbix.agent.psk_secret).
+
+# homelab.yaml of this repository (read on the controller)
+zabbix_agent_homelab: >-
+  {{ (lookup('ansible.builtin.file', playbook_dir ~ '/../../homelab.yaml', errors='ignore') or '{}') | from_yaml or {} }}
+zabbix_agent_settings: "{{ zabbix_agent_homelab.zabbix | default({}, true) }}"
+
+# Repository line (major.minor, e.g. 8.0): zabbix.agent.version, else the server's version from
+# discovery/zabbix.json (zabbix_api.py discover). Agents of the server's line or older are supported by Zabbix.
+zabbix_agent_version: >-
+  {{ (zabbix_agent_settings.agent | default({}, true)).version | default('', true)
+     or (((lookup('ansible.builtin.file', playbook_dir ~ '/../../discovery/zabbix.json', errors='ignore') or '{}')
+          | from_json).version | default('') | regex_search('^\d+\.\d+') or '') }}
+
+# Server= and ServerActive= (comma-separated, names or addresses). Empty: zabbix.agent.server, else what the
+# host's agent (Agent 2, else the classic agent) already uses.
+zabbix_agent_server: "{{ (zabbix_agent_settings.agent | default({}, true)).server | default('', true) }}"
+zabbix_agent_server_active: "{{ zabbix_agent_server }}"
+
+# Hostname= : the host var zabbix_host_name, else the first `pattern` rule of zabbix.host_match that applies to
+# the host (sites:/groups: filters; {host}/{inventory_hostname} = inventory name, {short} = up to the first dot,
+# {domain} = site.domain): the same name zabbix_api.py gives the host in Zabbix.
+zabbix_agent_hostname: "{{ zabbix_host_name | default('', true) }}"
+
+# HostMetadata= (for autoregistration actions): empty = keep what the agent (or the classic agent) has, else
+# "site=<site> os=<distro><major> <inventory groups>".
+zabbix_agent_host_metadata: ""
+
+# PSK encryption: zabbix.agent.psk_secret names a secret (kind env) whose value is the PSK (hex, 32+ chars);
+# run the playbook under `with_secrets.py <that secret> --`. Without it, TLS settings of a migrated classic agent
+# are carried over as they are.
+zabbix_agent_psk_secret: "{{ (zabbix_agent_settings.agent | default({}, true)).psk_secret | default('', true) }}"
+zabbix_agent_psk_identity: "{{ (zabbix_agent_settings.agent | default({}, true)).psk_identity | default('', true) }}"
+zabbix_agent_psk_file: /etc/zabbix/zabbix_agent2.psk
+
+# The classic zabbix-agent on the same host: its Server, TLS and UserParameter settings are carried over. It keeps
+# running (Agent 2 is installed and configured, not started: both use port 10050) unless -e zabbix_agent_migrate=true:
+# then it is stopped, Agent 2 started and checked, and the classic agent disabled; on a failed check the classic
+# agent is started again.
+zabbix_agent_migrate: false
+zabbix_agent_carry_over: [Timeout, UnsafeUserParameters]   # classic settings copied besides Server/TLS/UserParameter
+
+# Extra lines for the drop-in, e.g. ["AllowKey=system.run[*]"] (a classic agent's AllowKey/DenyKey lines are
+# reported, never copied: remote commands are a decision, not a default).
+zabbix_agent_extra: []
+
+# Replace other repo.zabbix.com repository definitions (another version's zabbix.list / [zabbix] section).
+zabbix_agent_replace_repos: true
+# true: upgrade an installed agent to the newest of its line (patching does this too); false: install only.
+zabbix_agent_upgrade: false
+zabbix_agent_port: 10050
+zabbix_agent_firewall: true   # open the port when firewalld or ufw is active
+
+# Windows hosts (windows component): the official MSI of a full version (e.g. 8.0.3) from cdn.zabbix.com, verified
+# by its SHA-256 from https://www.zabbix.com/download_agents (required: nothing is installed without it).
+zabbix_agent_windows_version: ""
+zabbix_agent_windows_sha256: ""

@@ -1,0 +1,339 @@
+# Linux: read what is there, work out the settings, install from the official repo, write the drop-in, start (or
+# switch from the classic agent) and check. Everything up to the install only reads, also in check mode.
+- name: Supported system and settings
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.os_family in ['RedHat', 'Debian']
+      - ansible_facts.os_family != 'RedHat' or ansible_facts.distribution_major_version | int in [8, 9, 10]
+      - zabbix_agent_version is match('^\d+\.\d+$')
+    fail_msg: >-
+      {{ inventory_hostname }}: {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}
+      {{- ' is not supported (RHEL family 8-10, Debian, Ubuntu)' if ansible_facts.os_family not in ['RedHat', 'Debian']
+          or (ansible_facts.os_family == 'RedHat' and ansible_facts.distribution_major_version | int not in [8, 9, 10])
+          else '' }}{{ ('; no Zabbix version: set zabbix.agent.version (e.g. 8.0) or run zabbix_api.py discover'
+                        ' (got ' ~ (zabbix_agent_version or 'nothing') ~ ')') if zabbix_agent_version is not match('^\d+\.\d+$')
+                       else '' }}.
+
+# --- read the current state (read-only, also in check mode)
+
+- name: Agent configuration files
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: ["{{ zbx_main_conf }}", "{{ zbx_dropin }}", "{{ zbx_classic_conf }}"]
+  register: zbx_stat
+
+- name: Read them
+  ansible.builtin.slurp:
+    src: "{{ item.item }}"
+  loop: "{{ zbx_stat.results | selectattr('stat.exists') | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+  register: zbx_read
+
+- name: Files the agents include
+  ansible.builtin.find:
+    paths: [/etc/zabbix/zabbix_agentd.d, "{{ zbx_dropin_dir }}"]
+    patterns: ["*.conf"]
+    excludes: [homelab-manager.conf, homelab-manager-userparameters.conf]
+  register: zbx_includes
+
+- name: Read the included files
+  ansible.builtin.slurp:
+    src: "{{ item.path }}"
+  loop: "{{ zbx_includes.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: zbx_inc_read
+
+- name: Services
+  ansible.builtin.service_facts:
+
+- name: ufw state
+  ansible.builtin.command: ufw status
+  register: zbx_ufw
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: "'ufw.service' in ansible_facts.services"
+
+# --- work out the settings
+
+- name: What the agents have now
+  ansible.builtin.set_fact:
+    zbx_now: >-
+      {%- set out = {'main': {}, 'dropin': {}, 'classic': {}} -%}
+      {%- for r in zbx_read.results -%}
+        {%- set kind = 'main' if r.item.item == zbx_main_conf else 'dropin' if r.item.item == zbx_dropin else 'classic' -%}
+        {%- for l in (r.content | b64decode).splitlines() | map('trim') | reject('match', '^(#|$)') | select('search', '=') -%}
+          {%- set k, v = l.split('=', 1) -%}
+          {%- if k | trim not in ['UserParameter', 'Include', 'AllowKey', 'DenyKey'] -%}
+            {%- set _ = out[kind].update({k | trim: v | trim}) -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out }}
+    zbx_lines: >-
+      {%- set out = {'classic': [], 'agent2': []} -%}
+      {%- for r in zbx_read.results | selectattr('item.item', 'equalto', zbx_classic_conf) -%}
+        {%- set _ = out.classic.extend((r.content | b64decode).splitlines() | map('trim')) -%}
+      {%- endfor -%}
+      {%- for r in zbx_inc_read.results -%}
+        {%- set _ = out['classic' if r.item.path.startswith('/etc/zabbix/zabbix_agentd.d/') else 'agent2'].extend(
+                      (r.content | b64decode).splitlines() | map('trim')) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: The settings for this host
+  ansible.builtin.set_fact:
+    zbx_classic_present: "{{ zbx_now.classic | length > 0 }}"
+    zbx_classic_running: >-
+      {{ (ansible_facts.services['zabbix-agent.service'] | default({})).state | default('') == 'running' }}
+    zbx_server: "{{ zabbix_agent_server or zbx_now.dropin.Server | default('') or zbx_now.main.Server | default('')
+                    or zbx_now.classic.Server | default('') }}"
+    zbx_server_active: "{{ zabbix_agent_server_active or zbx_now.dropin.ServerActive | default('')
+                           or zbx_now.main.ServerActive | default('') or zbx_now.classic.ServerActive | default('') }}"
+    zbx_hostname: >-
+      {%- set ns = namespace(name='') -%}
+      {%- set sites = group_names | select('match', '^site_') | map('regex_replace', '^site_', '') | list or ['default'] -%}
+      {%- set domain = (zabbix_agent_homelab.site | default({}, true)).domain | default('', true) -%}
+      {%- for r in zabbix_agent_settings.host_match | default([], true) if not ns.name and r.pattern is defined -%}
+        {%- if (not r.sites | default([]) or r.sites | map('string') | intersect(sites))
+               and (not r.groups | default([]) or r.groups | map('string') | intersect(group_names)) -%}
+          {%- set ns.name = r.pattern | replace('{inventory_hostname}', inventory_hostname)
+                            | replace('{host}', inventory_hostname) | replace('{short}', inventory_hostname.split('.')[0])
+                            | replace('{domain}', domain) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ zabbix_agent_hostname or ns.name }}
+    zbx_metadata: >-
+      {{ zabbix_agent_host_metadata or zbx_now.dropin.HostMetadata | default('') or zbx_now.main.HostMetadata | default('')
+         or zbx_now.classic.HostMetadata | default('')
+         or (('site=' ~ (group_names | select('match', '^site_') | map('regex_replace', '^site_', '') | first
+                         | default('default')) ~ ' os=' ~ ansible_facts.distribution | lower
+              ~ ansible_facts.distribution_major_version ~ ' '
+              ~ group_names | reject('match', '^site_') | join(' ')) | truncate(255, true, '')) }}
+    zbx_psk_env: >-
+      {{ ((zabbix_agent_homelab.secrets | default({}, true))[zabbix_agent_psk_secret] | default({})).env | default('')
+         if zabbix_agent_psk_secret else '' }}
+
+- name: Server and Hostname are known
+  ansible.builtin.assert:
+    that:
+      - zbx_server | length > 0
+      - zbx_hostname | length > 0
+      - not zabbix_agent_psk_secret or (zbx_psk_env | length > 0 and zabbix_agent_psk_identity | length > 0
+                                        and lookup('ansible.builtin.env', zbx_psk_env) | length >= 32)
+    fail_msg: >-
+      {{ inventory_hostname }}:
+      {{- ' no Server: set zabbix.agent.server in homelab.yaml (the address agents report to);' if not zbx_server else '' }}
+      {{- ' no Hostname: set the host var zabbix_host_name or a `pattern` rule in zabbix.host_match;' if not zbx_hostname else '' }}
+      {{- (' PSK: zabbix.agent.psk_secret is ' ~ zabbix_agent_psk_secret ~ ': it needs an `env` under secrets:, '
+           'zabbix.agent.psk_identity, and the run under `with_secrets.py ' ~ zabbix_agent_psk_secret
+           ~ ' --` (a hex PSK of at least 32 characters)') if zabbix_agent_psk_secret else '' }}
+
+- name: What goes into the drop-in
+  ansible.builtin.set_fact:
+    zbx_settings: >-
+      {%- set s = {'Server': zbx_server, 'ServerActive': zbx_server_active, 'Hostname': zbx_hostname,
+                   'HostMetadata': zbx_metadata} -%}
+      {%- if zabbix_agent_port | int != 10050 -%}{%- set _ = s.update({'ListenPort': zabbix_agent_port | string}) -%}{%- endif -%}
+      {%- if zabbix_agent_psk_secret -%}
+        {%- set _ = s.update({'TLSConnect': 'psk', 'TLSAccept': 'psk', 'TLSPSKIdentity': zabbix_agent_psk_identity,
+                              'TLSPSKFile': zabbix_agent_psk_file}) -%}
+      {%- else -%}
+        {%- for k in zbx_tls_keys -%}
+          {%- set v = zbx_now.dropin[k] | default('') or zbx_now.main[k] | default('') or zbx_now.classic[k] | default('') -%}
+          {%- if v -%}{%- set _ = s.update({k: v}) -%}{%- endif -%}
+        {%- endfor -%}
+      {%- endif -%}
+      {%- for k in zabbix_agent_carry_over -%}
+        {%- set v = zbx_now.dropin[k] | default('') or zbx_now.main[k] | default('') or zbx_now.classic[k] | default('') -%}
+        {%- if v -%}{%- set _ = s.update({k: v}) -%}{%- endif -%}
+      {%- endfor -%}
+      {{ s }}
+    # classic UserParameters Agent 2 doesn't have yet (a key defined twice stops the agent)
+    zbx_userparams: >-
+      {%- set have = zbx_lines.agent2 | select('match', '^UserParameter\s*=') | map('regex_replace', '^UserParameter\s*=\s*([^,]+),.*$', '\1')
+                     | map('trim') | list -%}
+      {{ zbx_lines.classic | select('match', '^UserParameter\s*=') | reject('search', '^UserParameter\s*=\s*(' ~
+         (have | map('regex_escape') | join('|') or '(?!)') ~ ')\s*,') | unique | list }}
+    zbx_not_copied: "{{ zbx_lines.classic | select('match', '^(' ~ zbx_risky_keys | join('|') ~ ')\\s*=') | unique | list }}"
+
+# --- install
+
+- name: Repository
+  ansible.builtin.include_tasks:
+    file: "repo-{{ 'redhat' if ansible_facts.os_family == 'RedHat' else 'debian' }}.yml"
+
+- name: Zabbix Agent 2
+  ansible.builtin.package:
+    name: zabbix-agent2
+    state: "{{ 'latest' if zabbix_agent_upgrade | bool else 'present' }}"
+    update_cache: "{{ true if (zbx_repo.changed | default(false) | bool) and ansible_facts.os_family == 'Debian' else omit }}"
+  register: zbx_pkg
+
+- name: Installed?
+  ansible.builtin.stat:
+    path: "{{ zbx_main_conf }}"
+  register: zbx_main
+
+# In check mode on a host without the agent nothing more can be shown: the files come with the package.
+- name: Not installed yet (check mode)
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: would install zabbix-agent2 {{ zabbix_agent_version }} and configure Hostname={{
+      zbx_hostname }}, Server={{ zbx_server }}{{ '; the classic agent keeps running (-e zabbix_agent_migrate=true switches)'
+      if zbx_classic_running and not zabbix_agent_migrate | bool else '' }}.
+  when: not zbx_main.stat.exists
+
+- name: Configure, start and check
+  when: zbx_main.stat.exists
+  block:
+    - name: Agent 2 runs after this play
+      ansible.builtin.set_fact:
+        zbx_agent2_runs: "{{ not zbx_classic_running or zabbix_agent_migrate | bool }}"
+
+    - name: Drop-in with the homelab settings
+      ansible.builtin.template:
+        src: homelab-manager.conf.j2
+        dest: "{{ zbx_dropin }}"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart zabbix-agent2
+
+    - name: UserParameters of the classic agent
+      ansible.builtin.copy:
+        dest: "{{ zbx_dropin_userparams }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible (homelab-manager zabbix_agent2 role): UserParameters carried over from the classic agent
+          {{ zbx_userparams | join('\n') }}
+      when: zbx_userparams | length > 0
+      notify: Restart zabbix-agent2
+
+    - name: PSK
+      ansible.builtin.copy:
+        dest: "{{ zabbix_agent_psk_file }}"
+        content: "{{ lookup('ansible.builtin.env', zbx_psk_env) }}\n"
+        owner: zabbix
+        group: zabbix
+        mode: "0640"
+      no_log: true
+      when: zabbix_agent_psk_secret | length > 0
+      notify: Restart zabbix-agent2
+
+    # A setting defined twice stops the agent: the package's file keeps its other settings, these move to the drop-in.
+    - name: Settings of the drop-in out of the main file
+      ansible.builtin.replace:
+        path: "{{ zbx_main_conf }}"
+        regexp: '^(({{ zbx_settings.keys() | join("|") }})\s*=.*)$'
+        replace: '# \1   (set in zabbix_agent2.d/homelab-manager.conf)'
+      notify: Restart zabbix-agent2
+
+    - name: The main file reads the drop-ins
+      ansible.builtin.lineinfile:
+        path: "{{ zbx_main_conf }}"
+        regexp: '^Include\s*=\s*{{ zbx_dropin_dir | regex_escape }}/\*\.conf\s*$'
+        line: "Include={{ zbx_dropin_dir }}/*.conf"
+      notify: Restart zabbix-agent2
+
+    - name: The configuration is valid
+      ansible.builtin.command: zabbix_agent2 -c {{ zbx_main_conf }} -T
+      register: zbx_test
+      changed_when: false
+      failed_when: zbx_test.rc != 0
+      when: not ansible_check_mode
+
+    - name: Firewall (firewalld)
+      ansible.posix.firewalld:
+        port: "{{ zabbix_agent_port }}/tcp"
+        permanent: true
+        immediate: true
+        state: enabled
+      when:
+        - zabbix_agent_firewall | bool
+        - (ansible_facts.services['firewalld.service'] | default({})).state | default('') == 'running'
+
+    - name: Firewall (ufw)
+      community.general.ufw:
+        rule: allow
+        port: "{{ zabbix_agent_port | string }}"
+        proto: tcp
+        comment: zabbix-agent2
+      when:
+        - zabbix_agent_firewall | bool
+        - zbx_ufw.stdout | default('') is search('Status:\s+active')
+
+    - name: Agent 2 waits while the classic agent runs
+      ansible.builtin.systemd_service:
+        name: zabbix-agent2
+        enabled: false
+        state: stopped
+      when: not zbx_agent2_runs | bool
+
+    - name: Agent 2 runs
+      ansible.builtin.systemd_service:
+        name: zabbix-agent2
+        enabled: true
+        state: started
+      when: zbx_agent2_runs | bool and not zbx_classic_running
+
+    - name: Switch from the classic agent
+      when: zbx_agent2_runs | bool and zbx_classic_running and not ansible_check_mode
+      block:
+        - name: Stop the classic agent (both use the port)
+          ansible.builtin.systemd_service:
+            name: zabbix-agent
+            state: stopped
+
+        - name: Start Agent 2
+          ansible.builtin.systemd_service:
+            name: zabbix-agent2
+            enabled: true
+            state: restarted
+
+        - name: Agent 2 answers
+          ansible.builtin.include_tasks: health.yml
+
+        - name: Classic agent off for good
+          ansible.builtin.systemd_service:
+            name: zabbix-agent
+            enabled: false
+      rescue:
+        - name: Back to the classic agent
+          ansible.builtin.systemd_service:
+            name: zabbix-agent2
+            state: stopped
+          failed_when: false
+
+        - name: Classic agent again
+          ansible.builtin.systemd_service:
+            name: zabbix-agent
+            state: started
+
+        - name: Switch failed
+          ansible.builtin.fail:
+            msg: >-
+              {{ inventory_hostname }}: Agent 2 did not come up ({{ ansible_failed_result.msg | default('see above') }});
+              the classic agent runs again. Check `journalctl -u zabbix-agent2` and {{ zbx_dropin }}.
+
+    - name: Apply changed settings
+      ansible.builtin.meta: flush_handlers
+
+    - name: Agent 2 answers
+      ansible.builtin.include_tasks: health.yml
+      when: zbx_agent2_runs | bool and not zbx_classic_running and not ansible_check_mode
+
+- name: Result
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: zabbix-agent2 {{ zabbix_agent_version }} line, Hostname={{ zbx_hostname }},
+      Server={{ zbx_server }}, HostMetadata={{ zbx_metadata }}{{ ', PSK' if zabbix_agent_psk_secret else '' }}
+      {{- (', ' ~ zbx_userparams | length ~ ' UserParameters carried over') if zbx_userparams else '' }}
+      {{- ('; classic agent still runs: -e zabbix_agent_migrate=true switches to Agent 2')
+          if zbx_classic_running and not zabbix_agent_migrate | bool else '' }}
+      {{- ('; not carried over from the classic agent (decide, then set zabbix_agent_extra): '
+           ~ zbx_not_copied | join(', ')) if zbx_not_copied else '' }}.

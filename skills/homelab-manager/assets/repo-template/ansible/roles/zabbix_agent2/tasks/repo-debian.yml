@@ -1,0 +1,51 @@
+# Debian and Ubuntu: the official repo as /etc/apt/sources.list.d/zabbix.sources, signed by the pinned keyring.
+# Other repo.zabbix.com lists (another version's zabbix.list) are removed when zabbix_agent_replace_repos is true.
+- name: Keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Zabbix signing keyring (pinned)
+  ansible.builtin.get_url:
+    url: "{{ zbx_deb_key_url }}"
+    dest: "{{ zbx_deb_keyring }}"
+    checksum: "sha256:{{ zbx_deb_key_sha256 }}"
+    mode: "0644"
+
+- name: Other Zabbix repository lists
+  ansible.builtin.find:
+    paths: /etc/apt/sources.list.d
+    patterns: ["*.list", "*.sources"]
+    contains: '.*repo\.zabbix\.com/zabbix/'
+    excludes: [zabbix.sources]
+  register: zbx_old_lists
+  check_mode: false
+
+- name: Remove them (replaced by zabbix.sources)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ zbx_old_lists.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when: zabbix_agent_replace_repos | bool
+  register: zbx_old_removed
+
+- name: Zabbix {{ zabbix_agent_version }} repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/zabbix.sources
+    mode: "0644"
+    content: |
+      # Managed by Ansible (homelab-manager zabbix_agent2 role)
+      Types: deb
+      URIs: {{ zbx_repo_root }}/zabbix/{{ zabbix_agent_version }}/{{ '' if zabbix_agent_version == '7.0' else 'stable/' }}{{ ansible_facts.distribution | lower }}
+      Suites: {{ ansible_facts.distribution_release }}
+      Components: main
+      Signed-By: {{ zbx_deb_keyring }}
+  register: zbx_repo_file
+
+- name: Remember whether the repository changed
+  ansible.builtin.set_fact:
+    zbx_repo:
+      changed: "{{ zbx_repo_file is changed or zbx_old_removed is changed }}"

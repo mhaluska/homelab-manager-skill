@@ -18,7 +18,7 @@ check() { if ! "$@"; then echo "FAILED: $*" >&2; fail=1; fi; }
 
 step "scaffold"
 python3 "$ROOT/skills/homelab-manager/scripts/init_repo.py" "$REPO" \
-  --components proxmox,templates,ansible,discovery,windows,appliances,kubernetes >/dev/null
+  --components proxmox,templates,ansible,discovery,windows,appliances,kubernetes,monitoring >/dev/null
 
 step "OpenTofu"
 check tofu fmt -check -recursive "$REPO/tofu"

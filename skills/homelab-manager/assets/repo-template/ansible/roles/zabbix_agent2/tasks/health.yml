@@ -1,0 +1,20 @@
+- name: zabbix-agent2 is active
+  ansible.builtin.command: systemctl is-active zabbix-agent2
+  register: zbx_active
+  changed_when: false
+  failed_when: zbx_active.stdout | trim != 'active'
+  retries: 5
+  delay: 2
+  until: zbx_active.stdout | trim == 'active'
+
+- name: It listens on its port
+  ansible.builtin.wait_for:
+    port: "{{ zabbix_agent_port | int }}"
+    host: "{{ zbx_now.main.ListenIP | default('127.0.0.1', true) | split(',') | first | trim | regex_replace('^0\\.0\\.0\\.0$', '127.0.0.1') }}"
+    timeout: 30
+
+- name: It answers agent.ping
+  ansible.builtin.command: zabbix_agent2 -c {{ zbx_main_conf }} -t agent.ping
+  register: zbx_ping
+  changed_when: false
+  failed_when: zbx_ping.rc != 0 or zbx_ping.stdout is not search('\[s\|1\]')
