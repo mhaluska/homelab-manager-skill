@@ -9,6 +9,21 @@
   Pushing the tag runs `.github/workflows/release.yml`: it checks plugin.json matches the tag and
   publishes a GitHub release with that version's CHANGELOG section (`.github/release_notes.py`).
   Run the unit tests locally before tagging (they target macOS). Push at most 3 tags at once.
+- CHANGELOG sections (0.65.0 on) are written for people, not as a diff log; `release_notes.py` turns the
+  section into the GitHub release and `tests/test_release_tools.py` checks the layout:
+  ```
+  ## 0.65.0 — 2026-11-27
+
+  One or two sentences: what this release is about, in plain words.
+
+  ### New | ### Improved | ### Fixed        (only the ones that have entries, in this order)
+  - **What the user gets, as a short headline.** One to three plain sentences: what changes for them and when
+    it matters. Script names and flags in backticks; internals only when the user acts on them.
+    ([#123](https://github.com/mhaluska/homelab-manager-skill/issues/123))
+
+  ### Upgrading                             (optional: what an existing repo needs, by hand or with a yes)
+  ```
+  One bullet per user-visible change, at most ~4 lines; detail belongs in `references/`, not here.
 - A release that changes `assets/repo-template/` regenerates `assets/template-history.json`
   (`python3 .github/template_history.py`, needs the release tags locally) after the version bump; a test fails
   until it is current. `--sync-managed` replaces repo files that match a released template with no local edits.
