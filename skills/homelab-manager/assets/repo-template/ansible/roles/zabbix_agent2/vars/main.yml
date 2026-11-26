@@ -1,0 +1,22 @@
+# Official Zabbix repository: 7.0 keeps the old layout (zabbix/7.0/<os>), newer lines have zabbix/<v>/stable/<os>.
+# Packages are signed with the key Zabbix uses since April 2024; its files are pinned by SHA-256 so a changed key
+# stops the run instead of being trusted (if Zabbix rotates it: check the new key, then update these).
+zbx_repo_root: https://repo.zabbix.com
+zbx_rpm_key_url: https://repo.zabbix.com/RPM-GPG-KEY-ZABBIX-B5333005
+zbx_rpm_key_sha256: 501e584b5c868c3230538197ada3e1204cd7c91e899cc8af2db5ef6445399fc1
+zbx_deb_key_url: https://repo.zabbix.com/zabbix-official-repo-apr2024.gpg
+zbx_deb_key_sha256: caf7a03592bb0ce970bc5e3632fefd42f4ad62684f4de5cdeaf7c83046e28c56
+zbx_deb_keyring: /etc/apt/keyrings/zabbix-official-repo-apr2024.gpg
+zbx_dropin_dir: /etc/zabbix/zabbix_agent2.d
+zbx_dropin: /etc/zabbix/zabbix_agent2.d/homelab-manager.conf
+zbx_dropin_userparams: /etc/zabbix/zabbix_agent2.d/homelab-manager-userparameters.conf
+zbx_main_conf: /etc/zabbix/zabbix_agent2.conf
+zbx_classic_conf: /etc/zabbix/zabbix_agentd.conf
+# settings the drop-in may set; the same keys are commented out in the package's main file (a key set twice
+# stops the agent)
+zbx_single_keys: [Server, ServerActive, Hostname, HostMetadata, TLSConnect, TLSAccept, TLSPSKIdentity, TLSPSKFile,
+                  TLSCAFile, TLSCertFile, TLSKeyFile, TLSServerCertIssuer, TLSServerCertSubject, Timeout,
+                  UnsafeUserParameters, ListenPort]
+zbx_tls_keys: [TLSConnect, TLSAccept, TLSPSKIdentity, TLSPSKFile, TLSCAFile, TLSCertFile, TLSKeyFile,
+               TLSServerCertIssuer, TLSServerCertSubject]
+zbx_risky_keys: [AllowKey, DenyKey, EnableRemoteCommands, LogRemoteCommands]

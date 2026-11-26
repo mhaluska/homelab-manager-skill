@@ -1,0 +1,24 @@
+# RHEL family (Rocky, Alma, RHEL 8/9/10): the official repo as the [zabbix] section of zabbix.repo (a zabbix-release
+# package's file is updated in place). EPEL may carry older Zabbix packages: dnf takes the newer official ones.
+- name: Zabbix signing key (pinned)
+  ansible.builtin.get_url:
+    url: "{{ zbx_rpm_key_url }}"
+    dest: /etc/pki/rpm-gpg/RPM-GPG-KEY-ZABBIX-B5333005
+    checksum: "sha256:{{ zbx_rpm_key_sha256 }}"
+    mode: "0644"
+
+- name: Import the signing key
+  ansible.builtin.rpm_key:
+    key: /etc/pki/rpm-gpg/RPM-GPG-KEY-ZABBIX-B5333005
+  when: not ansible_check_mode
+
+- name: Zabbix {{ zabbix_agent_version }} repository
+  ansible.builtin.yum_repository:
+    name: zabbix
+    file: zabbix
+    description: Zabbix {{ zabbix_agent_version }} (official, managed by homelab-manager)
+    baseurl: "{{ zbx_repo_root }}/zabbix/{{ zabbix_agent_version }}/{{ '' if zabbix_agent_version == '7.0' else 'stable/' }}rhel/{{ ansible_facts.distribution_major_version }}/$basearch/"
+    gpgcheck: true
+    gpgkey: file:///etc/pki/rpm-gpg/RPM-GPG-KEY-ZABBIX-B5333005
+    enabled: true
+  register: zbx_repo

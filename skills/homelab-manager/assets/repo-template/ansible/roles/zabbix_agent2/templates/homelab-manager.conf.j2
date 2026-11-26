@@ -1,0 +1,9 @@
+# Managed by Ansible (homelab-manager zabbix_agent2 role): settings from homelab.yaml (zabbix:).
+# These keys are commented out in zabbix_agent2.conf (a key set twice stops the agent). Edit homelab.yaml or the
+# role's variables, not this file.
+{% for k, v in zbx_settings.items() %}
+{{ k }}={{ v }}
+{% endfor %}
+{% for line in zabbix_agent_extra %}
+{{ line }}
+{% endfor %}

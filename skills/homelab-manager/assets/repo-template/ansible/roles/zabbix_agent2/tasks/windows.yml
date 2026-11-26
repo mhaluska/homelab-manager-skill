@@ -1,0 +1,59 @@
+# Windows (windows component): the official Agent 2 MSI of zabbix_agent_windows_version from cdn.zabbix.com,
+# checked against zabbix_agent_windows_sha256 (from https://www.zabbix.com/download_agents). Server and Hostname
+# are set as MSI properties at install; later changes: the agent's conf file on the host, or reinstall.
+- name: A version and its checksum are set
+  ansible.builtin.assert:
+    that:
+      - zabbix_agent_windows_version is match('^\d+\.\d+\.\d+$')
+      - zabbix_agent_windows_version.startswith(zabbix_agent_version ~ '.')
+      - zabbix_agent_windows_sha256 is match('^[0-9a-fA-F]{64}$')
+    fail_msg: >-
+      {{ inventory_hostname }}: set zabbix_agent_windows_version (a full {{ zabbix_agent_version }}.x version) and
+      zabbix_agent_windows_sha256 (the MSI's SHA-256 from https://www.zabbix.com/download_agents) for Windows
+      hosts (group_vars/windows.yml). Nothing was installed.
+
+- name: Hostname is known
+  ansible.builtin.set_fact:
+    zbx_win_hostname: >-
+      {%- set ns = namespace(name='') -%}
+      {%- set sites = group_names | select('match', '^site_') | map('regex_replace', '^site_', '') | list or ['default'] -%}
+      {%- set domain = (zabbix_agent_homelab.site | default({}, true)).domain | default('', true) -%}
+      {%- for r in zabbix_agent_settings.host_match | default([], true) if not ns.name and r.pattern is defined -%}
+        {%- if (not r.sites | default([]) or r.sites | map('string') | intersect(sites))
+               and (not r.groups | default([]) or r.groups | map('string') | intersect(group_names)) -%}
+          {%- set ns.name = r.pattern | replace('{inventory_hostname}', inventory_hostname)
+                            | replace('{host}', inventory_hostname) | replace('{short}', inventory_hostname.split('.')[0])
+                            | replace('{domain}', domain) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ zabbix_agent_hostname or ns.name }}
+
+- name: Server and Hostname are set
+  ansible.builtin.assert:
+    that: [zabbix_agent_server | length > 0, zbx_win_hostname | length > 0]
+    fail_msg: "{{ inventory_hostname }}: set zabbix.agent.server and a host_match pattern (or zabbix_host_name)."
+
+- name: Download the MSI (checked by its SHA-256)
+  ansible.windows.win_get_url:
+    url: >-
+      https://cdn.zabbix.com/zabbix/binaries/stable/{{ zabbix_agent_version }}/{{ zabbix_agent_windows_version
+      }}/zabbix_agent2-{{ zabbix_agent_windows_version }}-windows-amd64-openssl.msi
+    dest: C:\Windows\Temp\zabbix_agent2-{{ zabbix_agent_windows_version }}.msi
+    checksum: "{{ zabbix_agent_windows_sha256 | lower }}"
+    checksum_algorithm: sha256
+
+- name: Zabbix Agent 2
+  ansible.windows.win_package:
+    path: C:\Windows\Temp\zabbix_agent2-{{ zabbix_agent_windows_version }}.msi
+    state: present
+    arguments: >-
+      /qn SERVER={{ zabbix_agent_server }} SERVERACTIVE={{ zabbix_agent_server_active }}
+      HOSTNAME={{ zbx_win_hostname }} LISTENPORT={{ zabbix_agent_port }}
+  when: not ansible_check_mode
+
+- name: Agent 2 runs
+  ansible.windows.win_service:
+    name: Zabbix Agent 2
+    start_mode: auto
+    state: started
+  when: not ansible_check_mode

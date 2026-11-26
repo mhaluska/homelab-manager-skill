@@ -1,0 +1,26 @@
+# Install and configure Zabbix Agent 2 (role zabbix_agent2, references/monitoring.md "Agent 2"):
+#   ansible-playbook playbooks/zabbix-agent2.yml -l <host> --check --diff     # what would change, always first
+#   ansible-playbook playbooks/zabbix-agent2.yml -l <host>                     # one host, then the rest
+#   ansible-playbook playbooks/zabbix-agent2.yml [-e target=<group>]           # default: linux
+# Settings come from homelab.yaml (zabbix.agent: server, version, psk_secret, psk_identity; zabbix.host_match names the
+# agent like zabbix_api.py names the host). With a PSK: run under `with_secrets.py <zabbix.agent.psk_secret> --`.
+# Installing on many hosts is an approval item. A host running the classic zabbix-agent gets Agent 2 installed and
+# configured (its Server, TLS and UserParameter settings carried over) but keeps the classic agent running;
+# -e zabbix_agent_migrate=true switches: stops the classic agent, starts and checks Agent 2, disables the classic
+# one, or starts it again when the check fails. AllowKey/DenyKey lines are reported, never copied.
+# Windows hosts (-e target=windows): the official MSI of zabbix_agent_windows_version, checked by
+# zabbix_agent_windows_sha256 (group_vars/windows.yml).
+# Afterwards: add zabbix-agent2 to health_services (group_vars), and `zabbix_api.py discover` shows the agents.
+- name: Zabbix Agent 2 on Linux
+  hosts: "{{ (target | replace(',', ':')) if target is defined else 'linux' }}:!windows:!appliances:!qnap"
+  become: true
+  serial: >-
+    {{ patch_serial | default(((lookup('ansible.builtin.file', playbook_dir ~ '/../../homelab.yaml', errors='ignore')
+                               or '{}') | from_yaml or {}).ansible.patch_serial | default(5, true), true) }}
+  roles:
+    - zabbix_agent2
+
+- name: Zabbix Agent 2 on Windows
+  hosts: "{{ (target | replace(',', ':') ~ ':&windows') if target is defined else '__no_target__' }}"
+  roles:
+    - zabbix_agent2
