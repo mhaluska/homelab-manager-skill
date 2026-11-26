@@ -107,10 +107,10 @@
       vars:
         allow_many: "{{ routeros_upgrade_many | default(false) | bool }}"
         allow_gateway: "{{ routeros_upgrade_gateway | default(false) | bool }}"
-        hosts: "{{ ansible_play_hosts | map('extract', hostvars) | list }}"
-        candidates: "{{ (hosts | selectattr('hm_needs') | list + hosts | selectattr('hm_unknown') | list)
+        devices: "{{ ansible_play_hosts | map('extract', hostvars) | list }}"
+        candidates: "{{ (devices | selectattr('hm_needs') | list + devices | selectattr('hm_unknown') | list)
                         | map(attribute='inventory_hostname') | unique | list }}"
-        gateway_devices: "{{ hosts | selectattr('hm_is_gateway') | selectattr('inventory_hostname', 'in', candidates)
+        gateway_devices: "{{ devices | selectattr('hm_is_gateway') | selectattr('inventory_hostname', 'in', candidates)
                              | map(attribute='inventory_hostname') | list }}"
       run_once: true
 
