@@ -27,6 +27,10 @@
 # After the reboot it waits for Proxmox's own onboot start (pve-guests) to finish, up to pve_guests_timeout
 # seconds (default 1800), before it starts the stopped guests that did not come up by themselves.
 # The Proxmox node name defaults to the inventory short name; set proxmox_node_name if it differs.
+# -e zabbix=true -e hm_scripts=$HM/scripts (under `with_secrets.py zabbix-rw -- …`, tasks/zabbix.yml, GitHub issue
+# #169): no open Zabbix problem at zabbix.patch_gate_severity on the node before the upgrade; a reboot run puts the
+# node and the guests it moves or stops in one maintenance window, and the run ends with their agents answering
+# again and no new problem.
 - name: Patch one Proxmox VE node
   hosts: "{{ proxmox_patch_node | default('__no_node__') }}"
   gather_facts: true
@@ -145,6 +149,12 @@
       become: false
 
   tasks:
+    - name: Zabbix gate before the upgrade (zabbix=true)
+      ansible.builtin.include_tasks: tasks/zabbix.yml
+      vars:
+        zabbix_phase: check
+      when: zabbix | default(false) | bool
+
     - name: Failed systemd units before the upgrade
       ansible.builtin.include_tasks: tasks/failed-units.yml
       vars:
@@ -260,6 +270,16 @@
           loop: "{{ pve_thin_check.results | default([]) | selectattr('rc', 'defined') | rejectattr('rc', 'equalto', 0) | list }}"
           loop_control:
             label: "{{ item.item.vg_name }}/{{ item.item.lv_name }}"
+
+    - name: Zabbix maintenance window for the node and the guests it moves or stops (zabbix=true)
+      ansible.builtin.include_tasks: tasks/zabbix.yml
+      vars:
+        zabbix_phase: window
+        zabbix_hosts: "{{ [inventory_hostname] + hm_zbx_guests }}"
+        hm_zbx_guests: >-
+          {{ plan.guests | selectattr('status', 'equalto', 'running') | selectattr('action', 'in', ['stop', 'migrate', 'ha'])
+             | map(attribute='name') | select | list }}
+      when: zabbix | default(false) | bool and hm_do_reboot | bool
 
     - name: Move guests off, reboot, bring them back
       when: hm_do_reboot | bool and not ansible_check_mode
@@ -417,6 +437,16 @@
       retries: 30
       delay: 10
       when: hm_do_reboot | bool and not ansible_check_mode
+
+    - name: Zabbix gate after patching and close the window (zabbix=true)
+      ansible.builtin.include_tasks: tasks/zabbix.yml
+      vars:
+        zabbix_phase: done
+        zabbix_hosts: "{{ [inventory_hostname] + (hm_zbx_guests if hm_do_reboot | bool else []) }}"
+        hm_zbx_guests: >-
+          {{ plan.guests | selectattr('status', 'equalto', 'running') | selectattr('action', 'in', ['stop', 'migrate', 'ha'])
+             | map(attribute='name') | select | list }}
+      when: zabbix | default(false) | bool
 
     # what was done only when the reboot block ran; otherwise the plan as planned_* (GitHub issue #86)
     - name: Result

@@ -88,8 +88,7 @@ COMPONENTS = {
                     "ansible/playbooks/hooks/k8s-health.yml"]),
     "monitoring": ("Zabbix monitoring: hosts, templates and maintenance as data, Agent 2 role (GitHub #168)",
                    ["ansible"], ["zabbix/", "docs/zabbix-api-users.md", "ansible/roles/zabbix_agent2/",
-                                 "ansible/playbooks/zabbix-agent2.yml", "ansible/playbooks/hooks/zabbix-maintenance.yml",
-                                 "ansible/playbooks/hooks/zabbix-health.yml"]),
+                                 "ansible/playbooks/zabbix-agent2.yml", "ansible/playbooks/tasks/zabbix.yml"]),
 }
 CORE = ["homelab.yaml", "README.md", "CLAUDE.md", "skill_issues.md", ".gitignore", ".claude/", "docs/README.md",
         "docs/decisions.md", "docs/recovery.md", "scripts/", "discovery/"]

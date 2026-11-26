@@ -14,8 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helpers import SCRIPTS  # noqa: E402
 
 sys.path.insert(0, str(SCRIPTS))
+import hmlib  # noqa: E402
 import zbxlib  # noqa: E402
 import zbx_sync  # noqa: E402
+import zbx_ops  # noqa: E402
+import zabbix_api  # noqa: E402
 
 
 class FakeZabbix(zbxlib.Client):
@@ -387,3 +390,116 @@ class ApplyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OpsTests(unittest.TestCase):
+    """maintenance, gate and ack (GitHub issues #169, #170): only managed hosts, windows that end by themselves."""
+
+    def setUp(self):
+        self.c = FakeZabbix(role="rw")
+        self.patches = [(zbxlib, "connect", lambda cfg, role="ro", env=None: self.c),
+                        (zabbix_api, "inventory", lambda root, cfg: copy.deepcopy(INV))]
+        self.saved = [(m, n, getattr(m, n)) for m, n, _ in self.patches]
+        for m, n, f in self.patches:
+            setattr(m, n, f)
+
+    def tearDown(self):
+        for m, n, f in self.saved:
+            setattr(m, n, f)
+
+    def args(self, **kw):
+        import argparse
+        base = {"action": "start", "hosts": [], "guests_of": None, "hours": None, "name": None, "phase": "pre",
+                "min": None, "since": None, "settle": 0, "host": None, "message": "", "commit": None, "close": False}
+        return argparse.Namespace(**{**base, **kw})
+
+    def problem(self, eventid, hostid, severity="4", manual_close="0", clock=1000, acked="0"):
+        self.c.data["problem"].append({"eventid": eventid, "objectid": "t" + eventid, "name": "Disk full",
+                                       "severity": severity, "clock": str(clock), "acknowledged": acked,
+                                       "suppressed": "0", "_hostids": [hostid]})
+        self.c.data["trigger"].append({"triggerid": "t" + eventid, "manual_close": manual_close,
+                                       "hosts": [{"hostid": hostid}]})
+
+    def test_window_only_for_managed_hosts_and_ends_by_itself(self):
+        with _quiet():
+            zbx_ops.cmd_maintenance(self.args(hosts=["web1", "new1"], name="patch web1", hours=2), CFG)
+        (method, params), = self.c.writes
+        self.assertEqual(method, "maintenance.create")
+        self.assertEqual(params["name"], "homelab-manager patch web1")
+        self.assertEqual(params["hosts"], [{"hostid": "10001"}])          # new1 is not in Zabbix
+        self.assertLessEqual(params["active_till"] - params["active_since"], 2 * 3600 + 60)
+        with self.assertRaises(hmlib.ConfigError):
+            zbx_ops.cmd_maintenance(self.args(hosts=["web1"], hours=48), CFG)
+
+    def test_stop_deletes_only_its_own_window(self):
+        self.c.data["maintenance"] = [{"maintenanceid": "7", "name": "homelab-manager patch web1", "hosts": []}]
+        with _quiet():
+            zbx_ops.cmd_maintenance(self.args(action="stop", name="patch web1"), CFG)
+        self.assertEqual(self.c.writes, [("maintenance.delete", ["7"])])
+
+    def test_guest_short_names_and_shared_group_host(self):
+        inv = {"web1.lab": {}, "db1": {}}
+        zabbix_api.inventory = lambda root, cfg: inv
+        cfg = copy.deepcopy(CFG)
+        cfg["zabbix"]["host_match"] = [{"pattern": "{short}.home.arpa"}]
+        found, skipped = zbx_ops.managed_hosts(self.c, cfg, ["web1", "db1", "ghost"])
+        self.assertEqual(sorted(found), ["db1", "web1.lab"])             # db1: shared group, matched → managed
+        self.assertEqual(skipped, ["ghost"])
+
+    def test_gate_pre_stops_on_open_problems_at_the_floor(self):
+        self.problem("1", "10001", severity="2")                           # warning: below high
+        with _quiet():
+            self.assertEqual(zbx_ops.cmd_gate(self.args(hosts=["web1"]), CFG), 0)
+        self.problem("3", "10001", severity="5", acked="1")               # known: passes
+        with _quiet():
+            self.assertEqual(zbx_ops.cmd_gate(self.args(hosts=["web1"]), CFG), 0)
+        self.problem("2", "10001", severity="4")
+        with _quiet():
+            self.assertEqual(zbx_ops.cmd_gate(self.args(hosts=["web1"]), CFG), 1)
+        self.assertEqual(self.c.writes, [])
+
+    def test_gate_post_only_new_problems_and_agent(self):
+        self.problem("2", "10001", severity="4", clock=1000)
+        with _quiet():
+            self.assertEqual(zbx_ops.cmd_gate(self.args(phase="post", hosts=["web1"], since=2000), CFG), 0)
+            self.c.data["host"][0]["active_available"] = "2"
+            self.c.data["host"][0]["interfaces"][0]["available"] = "2"
+            self.assertEqual(zbx_ops.cmd_gate(self.args(phase="post", hosts=["web1"], since=2000), CFG), 1)
+
+    def test_ack_closes_only_where_the_trigger_allows(self):
+        self.problem("1", "10001", manual_close="1")
+        self.problem("2", "10001", manual_close="0")
+        with _quiet():
+            zbx_ops.cmd_ack(self.args(host="web1", message="disk extended", commit="abc123", close=True,
+                                      min="information"), CFG)
+        acts = {tuple(p["eventids"]): p for m, p in self.c.writes}
+        self.assertEqual(acts[("1",)]["action"] & 1, 1)                    # closed
+        self.assertEqual(acts[("2",)]["action"] & 1, 0)                    # only acknowledged
+        self.assertIn("abc123", acts[("1",)]["message"])
+        with self.assertRaises(hmlib.ConfigError):
+            zbx_ops.cmd_ack(self.args(host="new1", message="x", min="information"), CFG)
+
+    def test_read_role_falls_back_to_the_rw_token(self):
+        cfg = copy.deepcopy(CFG)
+        self.saved_connect = [f for m, n, f in self.saved if n == "connect"][0]
+        env = {"ZABBIX_RW_TOKEN": "t"}
+        orig = zbxlib.Client.version
+        zbxlib.Client.version = lambda self: "8.0.0"
+        try:
+            c = self.saved_connect(cfg, "ro", env)
+        finally:
+            zbxlib.Client.version = orig
+        self.assertEqual((c.role, c.token), ("ro", "t"))
+
+
+class _quiet:
+    def __enter__(self):
+        import io
+        import contextlib
+        self.cm = contextlib.ExitStack()
+        self.cm.enter_context(contextlib.redirect_stdout(io.StringIO()))
+        self.cm.enter_context(contextlib.redirect_stderr(io.StringIO()))
+        return self
+
+    def __exit__(self, *exc):
+        self.cm.close()

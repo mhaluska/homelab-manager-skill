@@ -5,7 +5,12 @@
 #       [-e snapshot=true -e hm_scripts=$HM/scripts [-e snapshot_missing=skip]] [-e autoremove=false] [-e purge=true]
 #       [-e clean_cache=true] [-e patch_min_free_mb=500]
 #       [-e pre_hook=… -e post_hook=… -e health_check=…] [-e order=vip_holder_last -e vip=<ip>]
+#       [-e zabbix=true -e hm_scripts=$HM/scripts]   (under `with_secrets.py zabbix-rw -- ansible-playbook …`)
 #
+# zabbix=true (GitHub issue #169, tasks/zabbix.yml): each host must have no open Zabbix problem at
+# zabbix.patch_gate_severity or above before it is touched (-e zabbix_gate=ignore after the user's yes), is in a
+# maintenance window while it is patched (it ends by itself), and must come back with its agent answering and no
+# new problem before the next host; the window closes either way.
 # Free space first (GitHub issue #57): before any host is snapshotted or patched, every target needs
 # patch_min_free_mb (default 500) free on / and /var and patch_min_free_boot_mb (default 100) on a separate
 # /boot, else the run stops listing them: a full disk would fail one host's update mid-batch and leave the
@@ -327,6 +332,14 @@
       check_mode: false
       register: containers_before
 
+    # zabbix=true (GitHub issue #169): refuse a host with open problems, mute its alerts while it is patched
+    - name: Zabbix gate and maintenance window (zabbix=true)
+      ansible.builtin.include_tasks: tasks/zabbix.yml
+      loop: [check, window]
+      loop_control:
+        loop_var: zabbix_phase
+      when: zabbix | default(false) | bool
+
     - name: Pre-patch snapshot (snapshot=true; LXD/Incus for hosts with lxd_host, else Proxmox)
       ansible.builtin.command:
         argv: >-
@@ -628,6 +641,12 @@
       ansible.builtin.include_tasks:
         file: "{{ [playbook_dir, '..', health_check] | path_join }}"  # absolute paths win
       when: health_check is defined
+
+    - name: Zabbix gate after patching and close the window (zabbix=true)
+      ansible.builtin.include_tasks: tasks/zabbix.yml
+      vars:
+        zabbix_phase: done
+      when: zabbix | default(false) | bool
 
     - name: Result
       ansible.builtin.debug:

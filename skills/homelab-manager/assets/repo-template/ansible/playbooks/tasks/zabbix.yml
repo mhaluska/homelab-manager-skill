@@ -1,0 +1,65 @@
+# Zabbix around one patched host (GitHub issue #169): patch-linux.yml and patch-proxmox-node.yml with
+# -e zabbix=true -e hm_scripts=$HM/scripts, run under `with_secrets.py zabbix-rw -- ansible-playbook …`.
+# Everything runs on this Mac through zabbix_api.py; only managed Zabbix hosts are touched.
+#   zabbix_phase: check   stop when the hosts already have open problems at zabbix.patch_gate_severity or above
+#                         (patching would hide an outage; -e zabbix_gate=ignore after the user's yes)
+#   zabbix_phase: window  a maintenance window `homelab-manager patch <host>` (ends by itself after
+#                         zabbix.maintenance_hours, so a failed run never leaves alerts muted)
+#   zabbix_phase: done    wait (zabbix_settle seconds, default 600) until every agent answers again and no new
+#                         problem at that severity started since `check`; the window closes either way
+# zabbix_hosts: the inventory hosts the gate and window cover (default: this host). Proxmox guest names that
+# are inventory short names count too.
+- name: Zabbix hosts of this step
+  ansible.builtin.set_fact:
+    hm_zbx_hosts: "{{ zabbix_hosts | default([inventory_hostname]) }}"
+    hm_zbx_window: "patch {{ inventory_hostname }}"
+    hm_zbx_cmd: ["python3", "{{ hm_scripts }}/zabbix_api.py"]
+
+- name: Zabbix gate before patching (no open problems at the gate severity)
+  ansible.builtin.command:
+    argv: "{{ hm_zbx_cmd + ['gate', '--phase', 'pre', '--hosts'] + hm_zbx_hosts }}"
+    chdir: "{{ playbook_dir }}/../.."
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  check_mode: false
+  when: zabbix_phase == 'check' and zabbix_gate | default('') != 'ignore'
+
+- name: Remember when patching started (the gate after it looks for newer problems)
+  ansible.builtin.set_fact:
+    hm_zbx_since: "{{ now().timestamp() | int }}"
+  when: zabbix_phase == 'check'
+
+- name: Zabbix maintenance window
+  ansible.builtin.command:
+    argv: "{{ hm_zbx_cmd + ['maintenance', 'start', '--name', hm_zbx_window, '--hosts'] + hm_zbx_hosts }}"
+    chdir: "{{ playbook_dir }}/../.."
+  delegate_to: localhost
+  become: false
+  register: hm_zbx_started
+  changed_when: "'open for' in hm_zbx_started.stdout"
+  when: zabbix_phase == 'window' and not ansible_check_mode
+
+- name: Zabbix gate after patching, then close the window
+  when: zabbix_phase == 'done'
+  block:
+    - name: Zabbix gate after patching (agents back, no new problems)
+      ansible.builtin.command:
+        argv: >-
+          {{ hm_zbx_cmd + ['gate', '--phase', 'post', '--since', hm_zbx_since | default(0) | string,
+                           '--settle', zabbix_settle | default(600) | string, '--hosts'] + hm_zbx_hosts }}
+        chdir: "{{ playbook_dir }}/../.."
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      check_mode: false
+  always:
+    - name: Close the Zabbix maintenance window
+      ansible.builtin.command:
+        argv: "{{ hm_zbx_cmd + ['maintenance', 'stop', '--name', hm_zbx_window] }}"
+        chdir: "{{ playbook_dir }}/../.."
+      delegate_to: localhost
+      become: false
+      register: hm_zbx_stopped
+      changed_when: "'Closed' in hm_zbx_stopped.stdout"
+      when: not ansible_check_mode

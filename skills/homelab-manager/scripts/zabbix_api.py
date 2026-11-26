@@ -12,10 +12,11 @@ Read-only (token zabbix-ro):
     zabbix_api.py propose [--host H…]            # draft zabbix/config.yaml entries for unmonitored inventory hosts
     zabbix_api.py init-config [--dry-run]        # write zabbix/config.yaml from what the server has now
     zabbix_api.py maintenance list
+    zabbix_api.py gate --phase pre|post --hosts H…   # patch health gate: open problems, agent back (zbx_ops.py)
 Writes (token zabbix-rw, the guard asks; zabbix-admin for objects only a Super admin may change):
     zabbix_api.py plan [--out zabbix/plan.json] [--admin]   # diff of zabbix/config.yaml against the server (rw token reads)
     zabbix_api.py apply zabbix/plan.json                    # exactly that plan, refused if the server changed since
-    zabbix_api.py maintenance start --hosts H… [--hours 2] [--name N] | stop --name N
+    zabbix_api.py maintenance start --hosts H… [--guests-of NODE] [--hours 2] [--name N] | stop --name N
     zabbix_api.py ack <host> --message M [--close]          # acknowledge (and close) its open problems after a fix
     zabbix_api.py template-import <file.yaml> [--compare]   # import a template file (--compare: importcompare only)
     zabbix_api.py template-fetch <name…> [--branch release/8.0]  # official template YAML → zabbix/templates/
@@ -257,8 +258,10 @@ def main(argv=None) -> int:
     p.add_argument("--min", default="warning")
     import zbx_sync  # noqa: E402
     import zbx_reports  # noqa: E402
+    import zbx_ops  # noqa: E402
     zbx_sync.add_parsers(sub)
     zbx_reports.add_parsers(sub)
+    zbx_ops.add_parsers(sub)
     a = ap.parse_args(argv)
     if a.cmd == "probe":
         try:
@@ -268,7 +271,7 @@ def main(argv=None) -> int:
         return cmd_probe(a, cfg)
     _, cfg = repo()
     handler = {"check": cmd_check, "discover": cmd_discover, "problems": cmd_problems}.get(a.cmd) \
-        or zbx_sync.HANDLERS.get(a.cmd) or zbx_reports.HANDLERS[a.cmd]
+        or zbx_sync.HANDLERS.get(a.cmd) or zbx_ops.HANDLERS.get(a.cmd) or zbx_reports.HANDLERS[a.cmd]
     return handler(a, cfg)
 
 

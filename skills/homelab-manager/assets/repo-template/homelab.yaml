@@ -151,7 +151,7 @@ zabbix:                      # monitoring component (references/monitoring.md); 
     version: ""              # empty = the server's major version (zabbix_api.py check shows it)
     psk_secret: ""           # optional, a secret below (kind env) with the PSK; identity: psk_identity
     psk_identity: ""
-  patch_gate_severity: high  # patching stops on open problems at this severity or above (hooks/zabbix-health.yml)
+  patch_gate_severity: high  # patching stops on open problems at this severity or above (patch playbooks with -e zabbix=true)
   maintenance_hours: 2       # maintenance windows the skill opens end by themselves after this
   decommission_days: 30      # a decommissioned host is offered for deletion after this many days
 

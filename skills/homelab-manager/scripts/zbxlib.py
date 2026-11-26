@@ -155,6 +155,9 @@ def connect(cfg: dict, role: str = "ro", env=None) -> Client:
     z = settings(cfg)
     var = token_env(cfg, role)
     token = env.get(var)
+    if not token and role == "ro":
+        # a patch run has only the rw token: reads use it through a client that still refuses every write
+        token = env.get(token_env(cfg, "rw"))
     if not token:
         raise hmlib.ConfigError(f"{var} is not set: run under `with_secrets.py {secret_name(cfg, role)} -- …`")
     c = Client(z["url"], token, role, ssl_context(cfg), int(z.get("timeout") or 60))
