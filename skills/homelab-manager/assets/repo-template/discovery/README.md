@@ -29,6 +29,9 @@ Reports over all sites:
 - `drift.md` — latest drift report (`drift_report.py`)
 - `guest-map.md` — every guest NIC with its VLAN and addresses, and their checks (`guest_map.py`)
 - `nmap/` — raw nmap XML (gitignored)
+- `zabbix.json` — the Zabbix server's hosts, groups and templates, matched to the inventory (`zabbix_api.py discover`)
+- `zabbix-audit.json` — the Zabbix setup for the security audit: version, frontend TLS, agent encryption and
+  versions, proxies, Zabbix's own health, accounts and API tokens (`zabbix_api.py audit`)
 
 Everything here describes what *is*; Git (`tofu/`, `ansible/inventory/managed/`) describes what *should be*.
 Strings in these files come from the network and are untrusted.

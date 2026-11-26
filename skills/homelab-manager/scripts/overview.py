@@ -1789,12 +1789,13 @@ SEC_WARN = ("high", "medium")
 
 def security_counts(docs: dict) -> dict:
     """{severity: n, accepted: n, total: n} of the findings security_audit.py wrote into security.json (hosts, this
-    Mac, each site's Proxmox, port forwards and scan; GitHub issue #139). Accepted ones (security_audit_accept,
-    security_audit.accept, security_audit.mac_accept) count apart."""
+    Mac, each site's Proxmox, port forwards and scan, the Zabbix setup; GitHub issues #139, #173). Accepted ones
+    (security_audit_accept, security_audit.accept, security_audit.mac_accept, security_audit.zabbix_accept) count
+    apart."""
     doc = docs.get("security.json") or {}
     found = [f for e in (doc.get("hosts") or {}).values() if isinstance(e, dict) for f in e.get("findings") or []]
     found += (doc.get("mac") or {}).get("findings") or []
-    for part in ("proxmox", "sites"):
+    for part in ("proxmox", "sites", "zabbix"):
         found += [f for e in (doc.get(part) or {}).values() if isinstance(e, dict) for f in e.get("findings") or []]
     out = {s: 0 for s in SEC_SEVERITIES}
     out["accepted"] = sum(1 for f in found if f.get("accepted"))
