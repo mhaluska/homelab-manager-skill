@@ -5,7 +5,10 @@
 # (testparm -s), NFS exports, running containers (docker/podman: image, privileged, network mode, mounts) and tunnel
 # clients (cloudflared, tailscale, WireGuard); on a Proxmox Backup Server its ACL, user and token ids with their enable flags (never a
 # name, e-mail or comment) and datastore names (GitHub issue #148); on a Proxmox VE node the names, never the
-# content, of the storage encryption keys (/etc/pve/priv/storage/<storage>.enc).
+# content, of the storage encryption keys (/etc/pve/priv/storage/<storage>.enc); of the Zabbix agent's config
+# (zabbix_agent2.conf / zabbix_agentd.conf and their .d drop-ins, not plugins.d) only Server, ServerActive,
+# AllowKey, DenyKey, EnableRemoteCommands, AllowRoot, TLSConnect, TLSAccept and how many UserParameter lines
+# there are, never a PSK file or value (GitHub issue #173).
 # It changes nothing, runs in --check too, and needs become (shadow, sshd -T, ss -p, /etc/pve/priv).
 # Writes discovery/security.json, merged like check-updates.yml: hosts not checked this run keep their last result;
 # a host that fails or can't be reached gets an entry with `error`. The raw output is UNTRUSTED data:
@@ -110,6 +113,15 @@
           echo "dir|/etc/pve/priv"
           for f in /etc/pve/priv/storage/*.enc; do [ -f "$f" ] && b=${f##*/} && echo "enc|${b%.enc}"; done | head -n 200
         fi
+        echo "@@zabbix-agent"
+        for f in /etc/zabbix/zabbix_agent2.conf /etc/zabbix/zabbix_agentd.conf; do
+          [ -f "$f" ] || continue
+          case "$f" in *agent2*) a=agent2; u=zabbix-agent2 ;; *) a=agentd; u=zabbix-agent ;; esac
+          echo "agent|$a|$(systemctl is-active "$u" 2>/dev/null)"
+          zc() { for g in "$f" "${f%.conf}.d"/*.conf; do [ -f "$g" ] && cat "$g"; done; }
+          zc | grep -E '^[[:space:]]*(Server|ServerActive|AllowKey|DenyKey|EnableRemoteCommands|AllowRoot|TLSConnect|TLSAccept)[[:space:]]*=' | sed "s/^[[:space:]]*/key|$a|/" | head -n 100
+          echo "userparams|$a|$(zc | grep -cE '^[[:space:]]*UserParameter[[:space:]]*=')"
+        done
         echo "@@other"
         have systemctl && echo "fail2ban|$(systemctl is-active fail2ban 2>/dev/null)"
         echo "@@end"
