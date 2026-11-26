@@ -83,6 +83,10 @@ COMPONENTS = {
     "kubernetes": ("Kubernetes clusters (rolling patching with drain/uncordon)", ["ansible"],
                    ["ansible/playbooks/hooks/k8s-drain.yml", "ansible/playbooks/hooks/k8s-uncordon.yml",
                     "ansible/playbooks/hooks/k8s-health.yml"]),
+    "monitoring": ("Zabbix monitoring: hosts, templates and maintenance as data, Agent 2 role (GitHub #168)",
+                   ["ansible"], ["zabbix/", "docs/zabbix-api-users.md", "ansible/roles/zabbix_agent2/",
+                                 "ansible/playbooks/zabbix-agent2.yml", "ansible/playbooks/hooks/zabbix-maintenance.yml",
+                                 "ansible/playbooks/hooks/zabbix-health.yml"]),
 }
 CORE = ["homelab.yaml", "README.md", "CLAUDE.md", "skill_issues.md", ".gitignore", ".claude/", "docs/README.md",
         "docs/decisions.md", "docs/recovery.md", "scripts/", "discovery/"]
@@ -829,9 +833,19 @@ def current_components(target: Path) -> list[str]:
         return []
 
 
+def _covers(p: str, rel: str) -> bool:
+    return rel == p or (p.endswith("/") and rel.startswith(p))
+
+
 def wanted(rel: str, comps: list[str]) -> bool:
-    prefixes = CORE + [p for c in comps for p in COMPONENTS[c][2]]
-    return any(rel == p or (p.endswith("/") and rel.startswith(p)) for p in prefixes)
+    """A template file is scaffolded when the component owning it is selected: the one whose path prefix is the most
+    specific (ansible/roles/ is ansible's, ansible/roles/zabbix_agent2/ monitoring's)."""
+    owners = [(len(p), None) for p in CORE if _covers(p, rel)]
+    owners += [(len(p), c) for c, (_, _, ps) in COMPONENTS.items() for p in ps if _covers(p, rel)]
+    if not owners:
+        return False
+    best = max(n for n, _ in owners)
+    return any(c is None or c in comps for n, c in owners if n == best)
 
 
 def main():

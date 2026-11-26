@@ -14,6 +14,7 @@ components:
   windows: false
   appliances: false
   kubernetes: false
+  monitoring: false   # Zabbix: hosts, templates, maintenance as data (needs ansible)
 
 site:
   name: homelab
@@ -130,6 +131,30 @@ clusters: []
 #    reboot: always                   # never | if_required | always
 #    health_check: playbooks/hooks/vrrp-health.yml   # its settings: vip_port, health_services, health_containers
 
+zabbix:                      # monitoring component (references/monitoring.md); empty url = not set up
+  url: ""                    # API, e.g. https://zabbix.home.arpa/api_jsonrpc.php (zabbix_api.py probe <URL> finds it)
+  verify_tls: true
+  ca_cert: ""
+  secrets: {ro: zabbix-ro, rw: zabbix-rw, admin: zabbix-admin}   # names under secrets: below
+  host_match: []             # ordered rules inventory host → Zabbix host; the first `pattern` also names new hosts:
+                             # [{pattern: "{host}.home.arpa"}, {pattern: "{short}.lab.example", sites: [lab]},
+                             #  {regex: "^(?P<host>[a-z0-9-]+)[.]old[.]example$"}, {interface_ip: true}]
+                             # {host} = inventory name, {short} = up to the first dot; host var zabbix_host_name wins
+  managed_scope:             # the only objects ever written; the rest of the server stays read-only
+    host_groups: []          # your own group trees, e.g. ["Home/*"] (Home and everything under it)
+    shared_host_groups: []   # groups others use too (stock "Linux servers"): a host there is managed only when
+                             # it matches an inventory host; the group itself is never changed
+    template_groups: []      # where wrapper and imported templates live, e.g. ["Templates/Home/*"]
+  ignore_groups: []          # inventory groups that aren't monitored (host var zabbix_monitor: false for one host)
+  agent:                     # ansible/roles/zabbix_agent2 (playbooks/zabbix-agent2.yml)
+    server: ""               # Server= / ServerActive= of the agents, e.g. zabbix.home.arpa
+    version: ""              # empty = the server's major version (zabbix_api.py check shows it)
+    psk_secret: ""           # optional, a secret below (kind env) with the PSK; identity: psk_identity
+    psk_identity: ""
+  patch_gate_severity: high  # patching stops on open problems at this severity or above (hooks/zabbix-health.yml)
+  maintenance_hours: 2       # maintenance windows the skill opens end by themselves after this
+  decommission_days: 30      # a decommissioned host is offered for deletion after this many days
+
 # Keychain items (login keychain, account = $USER). Values are never stored in Git.
 # Create one:  security add-generic-password -U -T /usr/bin/security -a "$USER" -s <service> -w
 # (with nothing after -w, it prompts for the value so it never lands in shell history)
@@ -137,6 +162,9 @@ secrets:
   proxmox-ro:   {service: homelab/proxmox-ro,   kind: proxmox_token}   # user@pve!token=uuid
   proxmox-rw:   {service: homelab/proxmox-rw,   kind: proxmox_token}
   s3-state:     {service: homelab/s3-state,     kind: s3_credentials}  # ACCESS_KEY_ID:SECRET_ACCESS_KEY (S3 state only)
+  # zabbix-ro:  {service: homelab/zabbix-ro,    kind: env, env: ZABBIX_RO_TOKEN}     # docs/zabbix-api-users.md
+  # zabbix-rw:  {service: homelab/zabbix-rw,    kind: env, env: ZABBIX_RW_TOKEN}
+  # zabbix-admin: {service: homelab/zabbix-admin, kind: env, env: ZABBIX_ADMIN_TOKEN} # optional, Super admin
   # pbs-ro:     {service: homelab/pbs-ro,       kind: pbs_token}       # user@pbs!token:secret (pbs: above)
   # bmc:        {service: homelab/bmc,          kind: user_password, env: BMC}   # user:password → BMC_USER/BMC_PASSWORD
   # unifi-api:  {service: homelab/unifi-api,    kind: env, env: UNIFI_API_KEY}   # UniFi Network Integration API key
