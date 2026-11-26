@@ -472,3 +472,35 @@ def load_discovery(root) -> dict | None:
         return json.loads(p.read_text())
     except (OSError, ValueError):
         return None
+
+
+def monitoring_gaps(doc: dict, configured: dict, inventory: set[str], decommission_days: int = 30,
+                    today=None) -> list[tuple[str, list[str]]]:
+    """Monitoring findings from discovery/zabbix.json and zabbix/config.yaml, without calling Zabbix (drift_report,
+    overview): [(heading, rows)], only headings with rows."""
+    import datetime
+    today = today or datetime.date.today()
+    hosts = doc.get("hosts") or {}
+    out = [("Inventory hosts not monitored (`zabbix_api.py propose` drafts entries)", [f"`{n}`" for n in doc.get("not_monitored") or []
+                                              if n not in configured]),
+           ("Agent not available", [f"`{n}` ({h.get('host')})" for n, h in sorted(hosts.items())
+                                    if h.get("managed") and h.get("enabled") and h.get("agent") == "unavailable"]),
+           ("Ambiguous Zabbix matches (set zabbix_host_name)",
+            [f"`{a['inventory']}` → {', '.join(a['candidates'])}" for a in doc.get("ambiguous") or []]),
+           ("In own Zabbix groups but not in the inventory",
+            [f"{h['host']} ({', '.join(h.get('groups') or [])})" for h in doc.get("unmatched_in_scope") or []
+             if not (h.get("tags") or {}).get("decommissioned")]),
+           ("zabbix/config.yaml hosts not in the inventory (decommission them)",
+            [f"`{n}`" for n, e in sorted(configured.items()) if n not in inventory
+             and (e or {}).get("status") not in ("decommissioned", "disabled", "absent")])]
+    due = []
+    for n, h in sorted(hosts.items()):
+        since = (h.get("tags") or {}).get("decommissioned")
+        try:
+            age = (today - datetime.date.fromisoformat(since)).days if since else -1
+        except ValueError:
+            age = -1
+        if age >= decommission_days:
+            due.append(f"`{n}` (decommissioned {since}): delete with the user's yes (status: absent)")
+    out.append((f"Decommissioned over {decommission_days} days", due))
+    return [(t, rows) for t, rows in out if rows]

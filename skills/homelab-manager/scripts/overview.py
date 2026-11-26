@@ -54,6 +54,7 @@ SOURCES = [  # (discovery file, what writes it)
     ("unifi.json", "unifi-info.yml"), ("routeros.json", "routeros_audit.py"), ("bmc.json", "bmc-info.yml"),
     ("containers.json", "docker-containers.yml"), ("qnap-containers.json", "qnap-containers.yml"),
     ("updates.json", "check-updates.yml"), ("security.json", "security-audit.yml, then security_audit.py"),
+    ("zabbix.json", "zabbix_api.py discover"),
 ]
 # inventory groups whose hosts are network devices / appliances, first match names the kind
 DEVICE_KINDS = [("routeros", "RouterOS"), ("unifi", "UniFi"), ("bmc", "BMC"), ("qnap", "QNAP NAS"),
@@ -904,7 +905,8 @@ def tls_url(ip: str, p: dict) -> str | None:
 
 # --------------------------------------------------------------------------- sections
 
-SOURCE_COMPONENT = {"proxmox.json": "proxmox", "network.json": "discovery"}   # GitHub issue #123
+SOURCE_COMPONENT = {"proxmox.json": "proxmox", "network.json": "discovery",   # GitHub issue #123
+                    "zabbix.json": "monitoring"}
 
 
 def sources(root: Path, docs: dict, cfg: dict | None = None) -> list[str]:
@@ -912,7 +914,7 @@ def sources(root: Path, docs: dict, cfg: dict | None = None) -> list[str]:
     for name, cmd in SOURCES:
         f = root / "discovery" / name
         comp = SOURCE_COMPONENT.get(name)
-        if comp and not f.is_file() and not hmlib.get(cfg or {}, f"components.{comp}", True):
+        if comp and not f.is_file() and not hmlib.get(cfg or {}, f"components.{comp}", comp != "monitoring"):
             rows.append([f"discovery/{name}", f"not used (components.{comp}: false)", ""])
             continue
         rows.append([f"discovery/{name}", collected(docs[name]) or ("present, no time" if f.is_file() else "–"),
@@ -1757,6 +1759,7 @@ def health(cfg: dict, root: Path, docs: dict, managed: dict, warnings: list[str]
         out += ["RouterOS updates available: " + ", ".join(
             f"{cell(known_name(devs, h))} {cell(u.get('installed-version'))} → {cell(u.get('latest-version'))}"
             for h, u in newer) + ".", ""]
+    out += monitoring_lines(cfg, root, docs, managed)
     if warnings:
         out += ["Capacity and coverage:", ""] + [f"- {cell(w, 300)}" for w in sorted(warnings)] + [""]
     drift = drift_summary(root)
@@ -1770,9 +1773,45 @@ def health(cfg: dict, root: Path, docs: dict, managed: dict, warnings: list[str]
         links.append(f"[latest security audit](docs/{audits[-1].name})")
     if (root / "discovery" / "guest-map.md").is_file():
         links.append("[guest network map](discovery/guest-map.md)")
+    if (root / "discovery" / "zabbix-report.md").is_file():
+        links.append("[Zabbix report](discovery/zabbix-report.md)")
     if links:
         out += ["Details: " + ", ".join(links) + ".", ""]
     return out if len(out) > 2 else []
+
+
+ZBX_WARN = ("disaster", "high")
+
+
+def zabbix_counts(docs: dict) -> dict:
+    """Open problems by severity and unavailable agents of the managed hosts in zabbix.json (GitHub issue #168)."""
+    doc = docs.get("zabbix.json") or {}
+    sev: dict = {}
+    for p in doc.get("problems") or []:
+        if not p.get("acknowledged"):
+            sev[str(p.get("severity"))] = sev.get(str(p.get("severity")), 0) + 1
+    down = sorted(n for n, h in (doc.get("hosts") or {}).items()
+                  if h.get("managed") and h.get("enabled") and h.get("agent") == "unavailable")
+    return {"severity": sev, "down": down, "not_monitored": list(doc.get("not_monitored") or [])}
+
+
+def monitoring_lines(cfg: dict, root: Path, docs: dict, managed: dict) -> list[str]:
+    doc = docs.get("zabbix.json") or {}
+    if not doc.get("hosts"):
+        return []
+    z = zabbix_counts(docs)
+    sev = ", ".join(f"{n} {cell(k)}" for k, n in sorted(z["severity"].items(), key=lambda x: (ZBX_RANK.get(x[0], 9), x[0])))
+    out = [f"Monitoring (Zabbix {cell(doc.get('version'))}): {doc.get('counts', {}).get('managed', 0)} managed hosts, "
+           + (f"open problems not acknowledged: {sev}" if sev else "no unacknowledged problems") + "."]
+    if z["down"]:
+        out.append("Agent not available: " + ", ".join(cell(h) for h in z["down"]) + ".")
+    if z["not_monitored"]:
+        out.append(f"Not monitored ({len(z['not_monitored'])}): " + ", ".join(cell(h) for h in z["not_monitored"])
+                   + " (`zabbix_api.py propose`).")
+    return out + [""]
+
+
+ZBX_RANK = {"disaster": 0, "high": 1, "average": 2, "warning": 3, "information": 4, "not classified": 5}
 
 
 def ros_state(d: dict) -> str:
@@ -1837,6 +1876,11 @@ def glance_warnings(docs: dict, managed: dict, counts: dict) -> list[str]:
                 sev[k] = sev.get(k, 0) + 1
     if sev:
         out.append("RouterOS audit: " + ", ".join(f"{sev[k]} {k}" for k in ROS_WARN if k in sev))
+    zc = zabbix_counts(docs)
+    zw = [f"{zc['severity'][k]} {k}" for k in ZBX_WARN if zc["severity"].get(k)]
+    if zw or zc["down"]:
+        out.append("Zabbix: " + ", ".join(zw + ([f"{plural(len(zc['down']), 'agent')} not available"]
+                                                if zc["down"] else [])))
     sec = security_counts(docs)
     if any(sec[k] for k in SEC_WARN):
         out.append("Security audit: " + ", ".join(f"{sec[k]} {k}" for k in SEC_WARN if sec[k]))

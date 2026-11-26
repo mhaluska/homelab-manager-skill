@@ -35,6 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hmlib  # noqa: E402
+import zbxlib  # noqa: E402
 
 VM_TYPES = {"proxmox_virtual_environment_vm": "vm", "proxmox_virtual_environment_container": "lxc"}
 
@@ -178,7 +179,7 @@ def compare_state(px: dict, state: dict, prefix: str = "") -> tuple[list[str], i
 
 
 STALE_INPUTS = ["homelab.yaml", "ansible/inventory", "discovery/proxmox.json", "discovery/network.json",
-                "discovery/containers.json"]
+                "discovery/containers.json", "discovery/zabbix.json", "zabbix/config.yaml"]
 
 
 def container_ips(root: Path) -> dict[str, str]:
@@ -565,6 +566,23 @@ def main():
             L += [f"Container addresses (`discovery/*containers.json`, {len(seen_containers)}):", ""]
             L += [f"- {ip} → {containers[ip]}" + vlan_suffix(cfg, ip) for ip in seen_containers]
             L.append("")
+
+    zdoc = zbxlib.load_discovery(root)
+    if zdoc and cfg.get("zabbix"):   # GitHub issue #168: from discovery/zabbix.json, no Zabbix call
+        try:
+            zconf = zbxlib.load_yaml(root / "zabbix" / "config.yaml") or {}
+        except hmlib.ConfigError:
+            zconf = {}
+        gaps = zbxlib.monitoring_gaps(zdoc, zconf.get("hosts") or {}, set(ans or {}),
+                                      int(hmlib.get(cfg, "zabbix.decommission_days") or 30))
+        L += ["## Monitoring (Zabbix)", "",
+              f"`discovery/zabbix.json` from {zdoc.get('collected_at', '?')}: {zdoc['counts']['managed']} managed "
+              f"host(s), {len(zdoc.get('problems') or [])} open problem(s) (`zabbix_api.py problems`).", ""]
+        for title, rows in gaps:
+            issues += len(rows)
+            L += [f"**{title} ({len(rows)})**:", "", *[f"- {r}" for r in rows], ""]
+        if not gaps:
+            L += ["Every inventory host is monitored, and every managed Zabbix host is in the inventory.", ""]
 
     if snaps:  # VLAN/IP per guest NIC is checked there (GitHub issue #62)
         L += ["Guest NICs (VLAN, addresses, subnet and ansible_host checks): `discovery/guest-map.md`"
