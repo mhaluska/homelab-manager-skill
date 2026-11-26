@@ -148,6 +148,16 @@ show the user what it would disable; with their yes, run it again with `-e homel
 again afterwards and fails if one is still enabled. It needs a user with write rights (group `full`), not the
 audit user.
 
+"Patch my MikroTiks" is two steps, each its own reboot: RouterOS first, then RouterBOOT.
+
+RouterOS behind its channel (`update-<version>`, `behind-fleet-<version>`): `playbooks/routeros-upgrade.yml`.
+`-l <host> --check` shows installed → latest as of the device's last update check (it asks no update server, so
+"unknown" or an old version is possible: say so). With the user's yes, `-e homelab_read_only=false` checks for
+updates on the device, keeps the device's channel, downloads, stops before any reboot when the download did not
+complete (full flash: remove old files or unused packages), reboots, waits for SSH and fails unless the new version
+runs. Same limits and flags as below, named `routeros_upgrade_many` / `routeros_upgrade_gateway`; a device whose
+last check gave no result counts as one that may need the upgrade. Then RouterBOOT, then `routeros_audit.py <host>`.
+
 RouterBOOT behind the installed RouterOS (`routerboot-<version>`): `playbooks/routeros-routerboot-upgrade.yml`,
 same flow: `-l <host> --check` shows current → target, `-e homelab_read_only=false` applies it with the user's yes.
 It skips CHR/x86 and current devices, stages the firmware, checks the log for "Firmware upgraded successfully",

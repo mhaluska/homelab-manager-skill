@@ -280,6 +280,9 @@ Firmware updates for NAS/firewall/switch/BMC are vendor-specific and risky: repo
 versions if the vendor API/CLI shows them, and give the user steps; don't automate unless
 there's a tested role and explicit approval.
 
+MikroTik RouterOS has tested playbooks: `routeros-upgrade.yml` (RouterOS), then `routeros-routerboot-upgrade.yml`
+(RouterBOOT), one device and one reboot at a time (references/windows-appliances.md "MikroTik RouterOS").
+
 ## When things go wrong
 
 A host fails mid-patch → the play stops; nothing else is touched. Report what failed, the

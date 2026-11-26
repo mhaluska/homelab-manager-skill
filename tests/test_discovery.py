@@ -604,6 +604,26 @@ class DiscoveryLayoutTests(unittest.TestCase):  # GitHub issue #73
         self.assertEqual(pb.count(":execute script="), 2)                    # no interactive prompt over network_cli
         self.assertIn("ansible/playbooks/routeros-routerboot-upgrade.yml", (SCRIPTS / "init_repo.py").read_text())
 
+    def test_routeros_upgrade_playbook(self):  # GitHub issue #161
+        pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/routeros-upgrade.yml").read_text()
+        order = [pb.index(t) for t in ("- name: Read the state\n", "- name: One device per run", "- name: Upgrade RouterOS\n",
+                                       "- name: Applying needs the user's yes", "- name: Check for updates on the device",
+                                       "- name: Download the packages", "- name: The download is complete",
+                                       "- name: Reboot (installs", "- name: Wait for the device to go down",
+                                       "- name: Wait for SSH to come back", "- name: The new RouterOS is running")]
+        self.assertEqual(order, sorted(order))
+        plan = pb[pb.index("- name: Read RouterOS update state\n"):pb.index("- name: Upgrade RouterOS\n")]
+        self.assertNotIn("check-for-updates", plan)                          # the plan asks no update server
+        self.assertIn("check-for-updates once", pb[pb.index("- name: Upgrade RouterOS\n"):])
+        self.assertIn("homelab_read_only | default(true)", pb)
+        self.assertIn("serial: 1", pb)
+        self.assertIn("routeros_upgrade_many | default(false)", pb)
+        self.assertIn("routeros_upgrade_gateway | default(false)", pb)
+        self.assertNotIn("check_mode: false", pb[pb.index("- name: Upgrade RouterOS\n"):])  # nothing runs under --check
+        self.assertEqual(pb.count(":execute script="), 2)                    # background jobs, no prompt over network_cli
+        self.assertNotIn("stdout[0] | trim", pb)                             # value lines only (GitHub #160)
+        self.assertIn("ansible/playbooks/routeros-upgrade.yml", (SCRIPTS / "init_repo.py").read_text())
+
     def test_check_updates_target_scopes_every_play(self):  # GitHub issue #92
         pb = (SCRIPTS.parent / "assets/repo-template/ansible/playbooks/check-updates.yml").read_text()
         hosts = dict(re.findall(r'^- name: (.+)\n  hosts: "(.+)"$', pb, re.M))

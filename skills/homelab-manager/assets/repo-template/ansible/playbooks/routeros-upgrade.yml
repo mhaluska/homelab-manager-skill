@@ -1,0 +1,252 @@
+# Upgrade RouterOS to the latest version of each device's update channel (e.g. long-term), the upgrade
+# routeros_audit.py flags (`update-<version>`, `behind-fleet-<version>`), GitHub #161:
+#   ansible-playbook playbooks/routeros-upgrade.yml -l <host> --check                  # the plan
+#   ansible-playbook playbooks/routeros-upgrade.yml -l <host> -e homelab_read_only=false  # apply
+# Appliances are read-only (group_vars/appliances.yml): without -e homelab_read_only=false (the user's yes) the
+# play only shows what it would install. The plan reads the device's last update check and asks no update server:
+# a device that never checked, or checked long ago, shows as "unknown" or with an old version. Applying first
+# checks for updates on the device (`check-for-updates once`, an online query), downloads the packages, checks
+# that the download completed (a full flash fails here, before anything reboots), reboots and verifies the new
+# version: whatever the device routes or switches is down for a few minutes.
+# - One device per run: refused when more may need the upgrade, unless -e routeros_upgrade_many=true (they are
+#   then done one after another, each verified before the next).
+# - Refused for the device that holds this Mac's default gateway unless -e routeros_upgrade_gateway=true:
+#   its reboot cuts this Mac (and Claude) off the network until it is back.
+# Needs a user with write rights (group `full`), not the audit user. RouterBOOT is behind afterwards on
+# RouterBOARD devices: playbooks/routeros-routerboot-upgrade.yml (a second reboot), then refresh the audit:
+# routeros_audit.py <host>.
+- name: Read RouterOS update state
+  hosts: "{{ target | default('routeros') }}"
+  gather_facts: false
+  vars:
+    ansible_connection: ansible.netcommon.network_cli
+    ansible_network_os: community.routeros.routeros
+    # One line per fact, as of the device's last update check (no check is triggered here).
+    state_script: >-
+      :put ("version|" . [/system resource get version]);
+      :put ("channel|" . [/system package update get channel]);
+      :put ("latest|" . [/system package update get latest-version]);
+      :put ("status|" . [/system package update get status]);
+      :put ("freehdd|" . [/system resource get free-hdd-space]);
+      :put ("totalhdd|" . [/system resource get total-hdd-space]);
+      :put ("board|" . [/system resource get board-name]);
+      :foreach a in=[/ip address find where !disabled] do={:put ("addr|" . [/ip address get $a address])}
+  tasks:
+    - name: Read the state
+      community.routeros.command:
+        commands: ["{{ state_script }}"]
+      register: before
+      changed_when: false
+      check_mode: false
+
+    - name: Work out the plan
+      ansible.builtin.set_fact:
+        hm_version: "{{ (facts.version | default('')).split(' ')[0] }}"
+        hm_latest: "{{ facts.latest | default('') }}"
+        hm_channel: "{{ facts.channel | default('') }}"
+        hm_status: "{{ facts.status | default('') }}"
+        hm_board: "{{ facts.board | default('') }}"
+        hm_freehdd: "{{ facts.freehdd | default('0') }}"
+        hm_totalhdd: "{{ facts.totalhdd | default('0') }}"
+        hm_addresses: "{{ addrs }}"
+        # upgrade known from the last check
+        hm_needs: "{{ facts.latest | default('') | length > 0
+                      and facts.latest != (facts.version | default('')).split(' ')[0] }}"
+        # no check result yet: applying checks first and may upgrade
+        hm_unknown: "{{ facts.latest | default('') | length == 0 }}"
+      vars:
+        lines: "{{ before.stdout_lines[0] | map('trim') | select | list }}"
+        facts: >-
+          {%- set out = {} -%}
+          {%- for l in lines if not l.startswith('addr|') and l | regex_search('^[a-z]+[|]') -%}
+            {%- set _ = out.update({l.split('|')[0]: l.split('|', 1)[1] | trim}) -%}
+          {%- endfor -%}
+          {{ out }}
+        addrs: "{{ lines | select('match', '^addr[|]') | map('regex_replace', '^addr[|]', '')
+                 | map('regex_replace', '/.*$', '') | list }}"
+
+    - name: What would change
+      ansible.builtin.debug:
+        msg: >-
+          {{ hm_board }}: RouterOS {{ hm_version }} (channel {{ hm_channel }}, free flash
+          {{ (hm_freehdd | int / 1048576) | round(1) }} of {{ (hm_totalhdd | int / 1048576) | round(1) }} MiB):
+          {{ ('upgrade to ' ~ hm_latest ~ ', then a reboot (as of the last update check: "' ~ hm_status
+              ~ '"; applying checks again first)') if hm_needs
+             else ('unknown: the device has no update check result; applying checks for updates first and upgrades'
+                   ~ ' only if a newer version exists') if hm_unknown
+             else ('current as of the last update check ("' ~ hm_status ~ '"); it may be stale: routeros_audit.py'
+                   ~ ' compares it with the other devices (behind-fleet-*)') }}
+
+    - name: Read this Mac's default gateway
+      ansible.builtin.shell: >-
+        route -n get default 2>/dev/null | awk '/gateway:/ {print $2}';
+        ip route show default 2>/dev/null | awk '{print $3}'
+      delegate_to: localhost
+      run_once: true
+      register: gateway
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Is this device the gateway
+      ansible.builtin.set_fact:
+        hm_is_gateway: "{{ hm_addresses | intersect(gateway.stdout_lines | default([])) | length > 0 }}"
+
+    - name: One device per run, and not this Mac's gateway unless asked
+      ansible.builtin.assert:
+        that:
+          - allow_many or candidates | length <= 1
+          - allow_gateway or gateway_devices | length == 0
+        fail_msg: >-
+          {% if candidates | length > 1 and not allow_many %}{{ candidates | join(', ') }} may need the upgrade:
+          limit the run to one with -l <host>, or with the user's yes run them one after another with
+          -e routeros_upgrade_many=true. {% endif %}{% if gateway_devices | length > 0 and not allow_gateway %}{{
+          gateway_devices | join(', ') }} holds this Mac's default gateway ({{ gateway.stdout_lines | join(', ') }}):
+          its reboot cuts this Mac and Claude off the network for a few minutes. With the user's yes, run again
+          with -e routeros_upgrade_gateway=true. {% endif %}Nothing was changed.
+      vars:
+        allow_many: "{{ routeros_upgrade_many | default(false) | bool }}"
+        allow_gateway: "{{ routeros_upgrade_gateway | default(false) | bool }}"
+        hosts: "{{ ansible_play_hosts | map('extract', hostvars) | list }}"
+        candidates: "{{ (hosts | selectattr('hm_needs') | list + hosts | selectattr('hm_unknown') | list)
+                        | map(attribute='inventory_hostname') | unique | list }}"
+        gateway_devices: "{{ hosts | selectattr('hm_is_gateway') | selectattr('inventory_hostname', 'in', candidates)
+                             | map(attribute='inventory_hostname') | list }}"
+      run_once: true
+
+- name: Upgrade RouterOS
+  hosts: "{{ target | default('routeros') }}"
+  gather_facts: false
+  serial: 1
+  vars:
+    ansible_connection: ansible.netcommon.network_cli
+    ansible_network_os: community.routeros.routeros
+    hm_candidate: "{{ hm_needs | bool or hm_unknown | bool }}"
+    # Asks the update server (no config change), then the fresh result, one line per fact.
+    check_script: >-
+      /system package update check-for-updates once; :delay 8s;
+      :put ("latest|" . [/system package update get latest-version]);
+      :put ("status|" . [/system package update get status])
+    status_cmd: ':put ("status|" . [/system package update get status])'
+    version_cmd: ':put ("version|" . [/system resource get version])'
+  tasks:
+    - name: Applying needs the user's yes
+      ansible.builtin.assert:
+        that: not (homelab_read_only | default(true) | bool)
+        fail_msg: >-
+          {{ inventory_hostname }} is an appliance (homelab_read_only). Nothing was changed. With the user's yes,
+          run again with -e homelab_read_only=false.
+      when:
+        - hm_candidate | bool
+        - not ansible_check_mode
+
+    - name: Check, download, reboot and verify
+      when:
+        - hm_candidate | bool
+        - not ansible_check_mode
+      block:
+        - name: Check for updates on the device
+          community.routeros.command:
+            commands: ["{{ check_script }}"]
+          register: checked
+          changed_when: false
+
+        # Value lines only: the output may also hold the echoed command (GitHub issue #160).
+        - name: The version to install
+          ansible.builtin.set_fact:
+            hm_target: "{{ checked.stdout[0] | regex_search('(?m)^latest\\|(\\S+)', '\\1') | default([''], true) | first }}"
+            hm_check_status: "{{ checked.stdout[0] | regex_search('(?m)^status\\|(.*)$', '\\1') | default([''], true) | first | trim }}"
+
+        - name: The update server answered
+          ansible.builtin.assert:
+            that: hm_target | length > 0
+            fail_msg: >-
+              {{ inventory_hostname }}: the update check gave no version ("{{ hm_check_status }}"). It needs DNS and
+              HTTPS to MikroTik's update server. Nothing was changed.
+
+        - name: Already current
+          ansible.builtin.debug:
+            msg: "{{ inventory_hostname }} runs RouterOS {{ hm_version }}, the latest on {{ hm_channel }}: nothing to do."
+          when: hm_target == hm_version
+
+        - name: Upgrade
+          when: hm_target != hm_version
+          block:
+            # A background job, so network_cli doesn't wait; the packages go to flash (or RAM on 16 MiB devices).
+            - name: Download the packages
+              community.routeros.command:
+                commands: [':execute script="/system package update download"']
+              changed_when: true
+
+            - name: Wait for the download
+              community.routeros.command:
+                commands: ["{{ status_cmd }}"]
+              register: dl
+              changed_when: false
+              # done: "Downloaded, please reboot router to upgrade it", or an error; "downloaded 43%" is progress
+              until: dl.stdout[0] | default('') is search('(?mi)^status[|].*(please reboot|error|not enough|failed)')
+              retries: 60
+              delay: 5
+
+            - name: The download is complete (nothing rebooted yet)
+              ansible.builtin.assert:
+                that: dl_status is search('(?i)please reboot') and dl_status is not search('(?i)error|not enough|failed')
+                fail_msg: >-
+                  {{ inventory_hostname }}: download of RouterOS {{ hm_target }} did not complete ("{{ dl_status }}",
+                  free flash {{ (hm_freehdd | int / 1048576) | round(1) }} MiB). Nothing was rebooted. Not enough
+                  space: remove old files (/file) or unused packages, then run again.
+              vars:
+                dl_status: "{{ dl.stdout[0] | default('') | regex_search('(?m)^status\\|(.*)$', '\\1') | default([''], true) | first | trim }}"
+
+            - name: Reboot (installs the downloaded packages)
+              community.routeros.command:
+                commands: [':execute script=":delay 3s; /system reboot"']
+              changed_when: true
+
+            - name: Drop the old connection
+              ansible.builtin.meta: reset_connection
+
+            - name: Wait for the device to go down
+              ansible.builtin.wait_for:
+                host: "{{ ansible_host | default(inventory_hostname) }}"
+                port: "{{ ansible_port | default(22) | int }}"
+                state: stopped
+                timeout: 300
+              delegate_to: localhost
+
+            - name: Wait for SSH to come back
+              ansible.builtin.wait_for:
+                host: "{{ ansible_host | default(inventory_hostname) }}"
+                port: "{{ ansible_port | default(22) | int }}"
+                state: started
+                delay: 20
+                timeout: 900
+              delegate_to: localhost
+
+            - name: Read the version again
+              community.routeros.command:
+                commands: ["{{ version_cmd }}"]
+              register: after
+              changed_when: false
+              until: after is succeeded
+              retries: 6
+              delay: 10
+
+            - name: The new RouterOS is running
+              ansible.builtin.assert:
+                that: running == hm_target
+                fail_msg: >-
+                  {{ inventory_hostname }} runs RouterOS {{ running | default('?', true) }}, expected {{ hm_target }}.
+                  Look at /log and /system package on the device.
+                success_msg: >-
+                  {{ inventory_hostname }} runs RouterOS {{ hm_target }}. Next: ansible-playbook
+                  playbooks/routeros-routerboot-upgrade.yml -l {{ inventory_hostname }} --check (RouterBOARD only),
+                  then routeros_audit.py {{ inventory_hostname }}.
+              vars:
+                running: "{{ after.stdout[0] | regex_search('(?m)^version\\|(\\S+)', '\\1') | default([''], true) | first }}"
+      rescue:
+        - name: Upgrade failed
+          ansible.builtin.fail:
+            msg: >-
+              {{ inventory_hostname }}: {{ ansible_failed_task.name }} failed ({{ ansible_failed_result.msg
+              | default('see above') }}). If the device is down, check it on the console.
