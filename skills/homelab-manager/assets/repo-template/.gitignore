@@ -34,6 +34,9 @@ id_*
 # --- Discovery: raw scan output stays local; JSON summaries are committed ---
 discovery/nmap/
 
+# --- Zabbix: a plan is applied once and deleted; it may be stale by the next session ---
+zabbix/plan.json
+
 # --- OS / editors ---
 .DS_Store
 .vscode/

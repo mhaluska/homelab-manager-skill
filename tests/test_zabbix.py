@@ -18,6 +18,7 @@ import hmlib  # noqa: E402
 import zbxlib  # noqa: E402
 import zbx_sync  # noqa: E402
 import zbx_ops  # noqa: E402
+import zbx_reports  # noqa: E402
 import zabbix_api  # noqa: E402
 
 
@@ -490,6 +491,59 @@ class OpsTests(unittest.TestCase):
         finally:
             zbxlib.Client.version = orig
         self.assertEqual((c.role, c.token), ("ro", "t"))
+
+
+class ReportTests(unittest.TestCase):
+    """export, report and propose (GitHub issues #170, #172)."""
+
+    def test_export_leaves_secrets_out(self):
+        data = {"hosts": [{"macros": [{"macro": "{$P}", "type": "SECRET_TEXT", "value": "s3cret"},
+                                      {"macro": "{$Q}", "value": "plain"}],
+                           "interfaces": [{"details": {"community": "public", "authpassphrase": "x"}}],
+                           "items": [{"password": "pw", "username": "u"}], "tls_psk": "abcd"}]}
+        text = json.dumps(zbx_reports.strip_secrets(data))
+        for secret in ("s3cret", "public", '"x"', '"pw"', "abcd"):
+            self.assertNotIn(secret, text)
+        self.assertIn("plain", text)
+        self.assertIn('"u"', text)
+
+    def test_disk_forecast(self):
+        day = zbx_reports.DAY
+        rising = [(i * 3600, 50 + i * 1.0 / 24) for i in range(24 * 10)]      # +1 %/day, at ~60 % now
+        self.assertAlmostEqual(zbx_reports.linear_days_to(rising, 95), 35, delta=1)
+        flat = [(i * 3600, 60.0) for i in range(48)]
+        self.assertIsNone(zbx_reports.linear_days_to(flat, 95))
+        self.assertIsNone(zbx_reports.linear_days_to(rising[:5], 95))       # too few points
+        self.assertEqual(day, 86400)
+
+    def test_quality_os_template_duplicates_decommissioned(self):
+        c = FakeZabbix()
+        tmpl = {t["host"]: dict(t, templategroups=t["templategroups"]) for t in base_data()["template"]}
+        web1 = host("10001", "web1.home.arpa", ["Home/KVM"], ["Home Linux", "Linux by Zabbix agent"])
+        db1 = host("10002", "db1.home.arpa", ["Linux servers"], ["Other Linux"])
+        old = host("10004", "old1.home.arpa", ["Home/KVM"], [], status="1",
+                   tags={"decommissioned": "2020-01-01"})
+        s = {"z": {"decommission_days": 30}, "managed": {"web1": web1, "db1": db1, "old1": old}, "stale": [],
+             "ambiguous": [], "templates": tmpl}
+        r = zbx_reports.report_settings({})
+        q = zbx_reports.quality(c, s, r, 0)
+        self.assertEqual(q["no_os_template"], ["db1"])                          # Other Linux: not an OS group
+        self.assertEqual(q["duplicate_links"], ["web1: Linux by Zabbix agent (already in Home Linux)"])
+        self.assertEqual(len(q["decommissioned_due"]), 1)
+        self.assertEqual(c.writes, [])
+
+    def test_propose_from_specific_peers(self):
+        inv = {"web1": {"groups": ["web", "site_home"]}, "web2": {"groups": ["web", "site_home"]},
+               "web3": {"groups": ["web", "site_home"]}, "bmc1": {"groups": ["bmc", "site_home"]},
+               "db9": {"groups": ["db"]}}
+        managed = {"web1": {"groups": ["Home/Web"], "templates": ["Home Linux"]},
+                   "web2": {"groups": ["Home/Web"], "templates": ["Home Linux"]}}
+        conf = {"profiles": {"db": {"groups": ["Home/DB"], "templates": ["Home Linux"]}}}
+        out = zbx_reports.propose(conf, inv, managed, None)
+        self.assertEqual(out["web3"]["entry"], {"groups": ["Home/Web"], "templates": ["Home Linux"]})
+        self.assertEqual(out["bmc1"]["entry"], {"groups": [], "templates": []})  # site_home is no peer group
+        self.assertEqual(out["db9"]["entry"], {})                                # the profile describes it
+        self.assertNotIn("web1", out)
 
 
 class _quiet:
