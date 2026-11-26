@@ -1154,18 +1154,19 @@ _CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 _INVISIBLE = {"Cf", "Co", "Cs", "Zl", "Zp"}
 
 
-def clean(value, limit: int = 200):
+def clean(value, limit: int | None = 200):
     """Sanitise strings that come from the network (banners, hostnames, VM notes).
 
     They are data, not instructions: strip control characters and characters that are invisible or reorder text,
     and cap the length so a hostile banner can't smuggle a wall of text (or hidden text) into the conversation.
+    limit=None: no cap (text Claude wrote itself, such as a skill issue's body; GitHub issue #167).
     """
     if value is None:
         return None
     s = _CTRL.sub("", str(value))
     if not s.isascii():
         s = "".join(c for c in s if unicodedata.category(c) not in _INVISIBLE)
-    return s if len(s) <= limit else s[:limit] + "…"
+    return s if limit is None or len(s) <= limit else s[:limit] + "…"
 
 
 def id_list(value):
