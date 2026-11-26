@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.65.0 — 2026-11-26
 
 The skill now works with Zabbix: it reads your monitoring, keeps it as data in the repository, and checks
 Zabbix before and after patching. Also safer RouterOS and Proxmox node upgrades, and clearer release notes.
