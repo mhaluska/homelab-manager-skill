@@ -445,9 +445,11 @@
         planned_migrate: "{{ by_action.migrate | default([]) | map(attribute='vmid') | list }}"
         planned_ha: "{{ by_action.ha | default([]) | map(attribute='vmid') | list }}"
 
+    # Ansible renders fail_msg even when the assertion holds: everything in it has a default
     - name: No unit failed after the reboot (the guests are back)
       ansible.builtin.assert:
         that: hm_reboot_new_failed | default([]) | length == 0
         fail_msg: >-
-          {{ hm_reboot_failed_msg }}. {{ pve_node }} was rebooted and its guests are back; check
+          {{ hm_reboot_failed_msg | default('') }}. {{ pve_node }} was rebooted and its guests are back; check
           `journalctl -b -u <unit>` on it.
+      when: hm_reboot_new_failed is defined

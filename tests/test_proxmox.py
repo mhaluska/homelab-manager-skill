@@ -923,6 +923,9 @@ class PveNodePlanTests(unittest.TestCase):  # issue 23
         self.assertLess(idx("- name: Failed systemd units after the reboot"), idx("- name: Migrate guests back"))
         last = pb.split("\n    - name: ")[-1]
         self.assertTrue(last.startswith("No unit failed after the reboot (the guests are back)"), last[:80])
+        # Ansible renders fail_msg even when the assertion holds: an upgrade-only run has no reboot facts
+        self.assertIn("{{ hm_reboot_failed_msg | default('') }}", last)
+        self.assertIn("when: hm_reboot_new_failed is defined", last)
         result = pb.split("- name: Result")[1].split("\n    - name:")[0]
         self.assertIn("new_failed_units={{ hm_upgrade_new_failed | default([]) }}", result)
         self.assertIn("new_failed_disabled=", result)
