@@ -937,6 +937,19 @@ class GuardConfigTests(unittest.TestCase):
                     "python3 /p/lxd_snapshot.py prune app1 --older-than 30 --dry-run"):
             self.assertIsNone(self.d(cmd), cmd)
 
+    def test_zabbix_writes_and_downloads_ask(self):  # GitHub issues #168-#174
+        w = "python3 /p/with_secrets.py zabbix-rw -- python3 /p/zabbix_api.py"
+        for cmd in (f"{w} apply zabbix/plan.json", f"{w} maintenance start --hosts web01 --hours 2",
+                    f"{w} maintenance stop --name x", f"{w} ack web01 --message fixed --close",
+                    f"{w} template-import zabbix/templates/a.yaml", "python3 /p/zabbix_api.py template-fetch 'Linux'",
+                    "python3 /p/zabbix_api.py templates --upstream"):
+            self.assertEqual(self.d(cmd), "ask", cmd)
+        r = "python3 /p/with_secrets.py zabbix-ro -- python3 /p/zabbix_api.py"
+        for cmd in (f"{r} discover", f"{r} plan", f"{r} problems --min high", f"{r} maintenance list",
+                    f"{r} templates", f"{w} template-import zabbix/templates/a.yaml --compare", f"{r} export",
+                    f"{r} check", "python3 /p/zabbix_api.py probe https://zabbix.example"):
+            self.assertIsNone(self.d(cmd), cmd)
+
     def test_pve_guest_shutdown_and_stop_ask(self):  # GitHub issue #155
         for cmd in ("python3 /p/pve_guest.py shutdown web01", "python3 /p/pve_guest.py shutdown 101 --timeout 300",
                     "python3 /p/pve_guest.py stop web01 --site offsite", "python3 /p/pve_guest.py --site b stop 101"):

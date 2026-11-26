@@ -102,6 +102,17 @@ RULES: list[tuple[re.Pattern, str, str]] = [
      "Deletes guest snapshots or rolls a guest back to one (its changes since are lost)."),
     (re.compile(r"pve_guest\.py\b[^\n;&|]*\s(shutdown|stop)\b"), ASK,
      "Shuts a Proxmox guest down or stops it hard (its services go down; stop is like pulling the power)."),
+    # --- Zabbix (zabbix_api.py, GitHub issues #168-#174) --------------------------------
+    (re.compile(r"zabbix_api\.py\b[^\n;&|]*\sapply\b"), ASK,
+     "Applies a Zabbix plan: changes hosts, templates or other monitoring objects on the Zabbix server."),
+    (re.compile(r"zabbix_api\.py\b[^\n;&|]*\smaintenance\s+(start|stop)\b"), ASK,
+     "Opens or closes a Zabbix maintenance window (problems on those hosts stop alerting while it is open)."),
+    (re.compile(r"zabbix_api\.py\b[^\n;&|]*\sack\b"), ASK,
+     "Acknowledges (and may close) Zabbix problems on a host."),
+    (re.compile(r"zabbix_api\.py\b(?![^\n;&|]*--compare)[^\n;&|]*\stemplate-import\b"), ASK,
+     "Imports a template into Zabbix (updates it on every host that links it)."),
+    (re.compile(r"zabbix_api\.py\b[^\n;&|]*\s(template-fetch\b|templates\b[^\n;&|]*--upstream\b)"), ASK,
+     "Downloads official Zabbix template files from the Zabbix repository on GitHub."),
     # --- launchd (the scheduled read-only check, GitHub issue #150) ----------------------
     (re.compile(r"scheduled_check\.py\b[^\n;&|]*\s(install|uninstall)\b"), ASK,
      "Installs or removes a LaunchAgent that runs the homelab check on a schedule (persistent; user's yes)."),
