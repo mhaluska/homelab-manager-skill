@@ -135,6 +135,7 @@ class FakeRepo:
         for f in ("template_history.py", "release.py", "release_notes.py"):
             shutil.copy(GITHUB / f, self.d / ".github" / f)
         (self.d / ".claude-plugin").mkdir()
+        (self.d / ".gitignore").write_text("__pycache__/\n")   # as in the real repo: release.py imports release_notes.py
         self.tpl = self.d / "skills/homelab-manager/assets/repo-template"
         self.tpl.mkdir(parents=True)
         self.git("init", "-q", "-b", "main")
