@@ -45,6 +45,23 @@ class IssuesTests(unittest.TestCase):
                         "--body", "### Evidence\n```\nChyba: súbor neexistuje\n```")  # lang: allow (log in a code block)
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_add_keeps_long_lines_and_refuses_long_titles(self):  # GitHub issue #167
+        para = "A Summary paragraph that runs on. " * 20                       # ~680 characters on one line
+        r = self.issues("add", "--title", "drift_report.py crashes", "--kind", "script",
+                        "--body", f"### Summary\n{para.strip()}​")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        text = Path(self.d, "skill_issues.md").read_text()
+        self.assertIn(para.strip() + "\n", text)                               # whole, invisible char stripped
+        self.assertNotIn("…", text.split("## SKILL-001")[1])
+        r = self.issues("add", "--title", "t" * 121, "--kind", "script")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("121 characters, more than 120", r.stderr)
+        self.assertEqual(self.issues("add", "--title", "t" * 120, "--kind", "script").returncode, 0)
+        r = self.issues("add", "--title", "huge body", "--kind", "script", "--body", "### Summary\n" + "x" * 70000)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("more than 64000", r.stderr)
+        self.assertNotIn("huge body", Path(self.d, "skill_issues.md").read_text())
+
     def test_add_list_resolve_roundtrip(self):
         r = self.issues("add", "--title", "drift_report.py crashes without backup_jobs", "--kind", "script",
                         "--key", "script:drift_report:backup_jobs",
@@ -240,6 +257,20 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(r.returncode, 5)
         self.assertFalse(any(c[:2] == ["issue", "create"] for c in self.calls()))
         self.assertNotIn("reported-through", p.read_text())
+
+    def test_report_refuses_text_cut_by_an_older_version(self):  # GitHub issue #167
+        self.issues("add", "--title", "Guard asks for gh issue list", "--kind", "guard",
+                    "--body", "### Summary\nShort.")
+        p = Path(self.d, "skill_issues.md")
+        p.write_text(p.read_text().replace("Guard asks for gh issue list", "G" * 120 + "…")
+                     .replace("Short.", "s" * 500 + "…"))
+        dry = self.issues("report", "--dry-run")
+        self.assertEqual(dry.returncode, 5)
+        self.assertRegex(dry.stderr, r"SKILL-001: title cut at 120 characters; body line \d+ cut at 500 characters\n")
+        r = self.issues("report")
+        self.assertEqual(r.returncode, 5)
+        self.assertIn("Nothing sent", r.stderr)
+        self.assertFalse(any(c[:2] == ["issue", "create"] for c in self.calls()))
 
     def test_report_stops_on_names_and_tokens_left_after_redaction(self):
         self.issues("add", "--title", "nmap_scan.py misses nas.mylab.cz", "--kind", "script",

@@ -668,12 +668,39 @@ def cmd_template(a, cfg=None):
     return 0
 
 
+TITLE_MAX = 120     # a GitHub list stays readable; shorten rather than cut (GitHub issue #167)
+BODY_MAX = 64000    # GitHub refuses bodies over 65,536 characters; room for the footer the report adds
+
+
+def cut_text(i: dict) -> list[str]:
+    """Where an entry's stored text was cut by an older issues.py (title at 120, body lines at 500 characters,
+    with "…"): such text ends mid-sentence on GitHub (GitHub issue #167)."""
+    out = []
+    if len(i.get("title") or "") == TITLE_MAX + 1 and i["title"].endswith("…"):
+        out.append(f"title cut at {TITLE_MAX} characters")
+    lines = [n for n, line in enumerate((i.get("body") or "").splitlines(), 1)
+             if len(line) == 501 and line.endswith("…")]
+    if lines:
+        out.append("body line" + ("s " if len(lines) > 1 else " ") + ", ".join(map(str, lines))
+                   + " cut at 500 characters")
+    return out
+
+
+CUT_HINT = ("Re-add each with `issues.py add` and the same --key, the full title (at most 120 characters) and the "
+            "full body: the text was cut by an older issues.py.")
+
+
 def cmd_add(a, cfg):
     path = issues_path(cfg)
     items = load(path)
     given = a.body_file is not None or a.body is not None
+    title = hmlib.clean(a.title, None)
+    if len(title) > TITLE_MAX:
+        print(f"Not added — the title has {len(title)} characters, more than {TITLE_MAX}: shorten it (the details "
+              "go in the body).", file=sys.stderr)
+        return 2
     body = Path(a.body_file).read_text() if a.body_file else (a.body or "")
-    body = "\n".join(hmlib.clean(l, 500) for l in body.splitlines())
+    body = "\n".join(hmlib.clean(l, None) for l in body.splitlines())
     problems = not_english(a.title, body)
     if problems:
         print("Not added — not English:\n  " + "\n  ".join(problems) + "\n" + ENGLISH_HINT, file=sys.stderr)
@@ -682,6 +709,10 @@ def cmd_add(a, cfg):
     if existing and not given:
         body = existing["body"]  # seen again without new details: keep them, refresh only Environment
     body, blank = structure(body, environment(cfg), a.kind)
+    if len(body) > BODY_MAX:
+        print(f"Not added — the body has {len(body)} characters, more than {BODY_MAX} (GitHub's limit, with room for "
+              "the footer): shorten it; keep long logs to the lines that matter.", file=sys.stderr)
+        return 2
     if blank:
         print(f"note: no {', '.join(blank)} yet — fill {'it' if len(blank) == 1 else 'them'} in "
               f"(issues.py template{' --kind ' + a.kind if is_idea(a.kind) else ''} shows what goes where)",
@@ -690,7 +721,6 @@ def cmd_add(a, cfg):
         i, changed = existing, []
         i["last_seen"] = today()
         i["last_seen_version"] = plugin_info().get("version", "")  # a fix must be newer than this
-        title = hmlib.clean(a.title, 120)
         for field, new in (("title", title), ("kind", a.kind), ("body", body)):
             if new != i[field]:
                 i[field] = new
@@ -702,7 +732,7 @@ def cmd_add(a, cfg):
               + (f"updated {', '.join(changed)}, " if changed else "") + "last seen updated.")
         return 0
     nums = [int(m.group(1)) for i in items if (m := re.match(r"SKILL-(\d+)$", i["id"]))]
-    item = {"id": f"SKILL-{max(nums + [0]) + 1:03d}", "title": hmlib.clean(a.title, 120), "kind": a.kind,
+    item = {"id": f"SKILL-{max(nums + [0]) + 1:03d}", "title": title, "kind": a.kind,
             "status": "open", "found": today(), "seen_at": now_iso(), "key": a.key or "",
             "plugin_version": plugin_info().get("version", ""), "body": body}
     items.append(item)
@@ -1026,6 +1056,8 @@ def cmd_report(a, cfg):
     plan = plan_report(items, gl, marker, a, cfg)
     foreign = {st["item"]["id"]: not_english(st["item"]["title"], st["item"]["body"]) for st in plan}
     foreign = {k: v for k, v in foreign.items() if v}
+    planned = {st["item"]["id"] for st in plan}
+    cut = {i["id"]: c for i in items if i["status"] != "resolved" and (c := cut_text(i))}
     print(f"Target: {repo} (public) — reported through: {marker or 'never'} — "
           f"{len(plan)} issue(s) to report, {len(gl)} GitHub issue(s) checked")
     for st in plan:  # render (and so redact) every text now, in both modes: the summary below counts what is
@@ -1069,10 +1101,19 @@ def cmd_report(a, cfg):
         if not a.dry_run:
             print("Nothing sent.", file=sys.stderr)
             return 5
+    if cut:
+        sending = [k for k in cut if k in planned]
+        print("\nText cut by an older issues.py" + (" (not sent until fixed)" if sending else "") + ":\n"
+              + "\n".join(f"  {k}: " + "; ".join(v) + ("" if k in planned else " (already reported: re-adding it "
+                                                         "sends the full text as an update)") for k, v in cut.items())
+              + "\n" + CUT_HINT, file=sys.stderr)
+        if sending and not a.dry_run:
+            print("Nothing sent.", file=sys.stderr)
+            return 5
     if a.dry_run:
         print("\nDry run — nothing sent. Read the text above: anything still site-specific? Edit the issue in "
               "skill_issues.md and re-run. Override matches with --match ID=NUMBER or --new ID.")
-        return 5 if foreign else 0
+        return 5 if foreign or any(k in planned for k in cut) else 0
     failed = []
     for st in plan:
         i, g = st["item"], st["target"]

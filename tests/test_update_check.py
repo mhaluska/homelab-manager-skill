@@ -1,5 +1,6 @@
 """Tests for hooks/update_check.py (daily update check) and plugin agent definitions."""
 import json
+import shlex
 import re
 import os
 import shutil
@@ -85,7 +86,7 @@ class UpdateCheckTests(unittest.TestCase):
         self.assertIn("1 suggested opt-in change(s)", out["systemMessage"])
         ctx = out["hookSpecificOutput"]["additionalContext"]
         self.assertIn("guest-agent privilege", ctx)
-        self.assertIn("--sync-managed --dry-run", ctx)
+        self.assertIn(f"--sync-managed --dry-run {shlex.quote(str(repo.resolve()))}`", ctx)   # absolute (#164)
         self.assertIn("needs the user's yes", ctx)
 
     def test_repo_language_in_session_context(self):
