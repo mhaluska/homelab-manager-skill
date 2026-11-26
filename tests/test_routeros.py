@@ -354,7 +354,7 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         out = r.stdout
         self.assertIn("| 10.0.0.1 | sw-rack | CRS326-24G-2S+ | 7.16.1 (stable) | 7.12 | 3.1MiB |", out)
         self.assertIn("| 10.0.0.2 | core-chr | CHR QEMU", out)
-        self.assertIn("**Version drift:** 7.15.3: 10.0.0.2; 7.16.1: 10.0.0.1", out)
+        self.assertIn("**Version drift:** 7.15.3: 10.0.0.2 (behind); 7.16.1: 10.0.0.1", out)
         sw = out[out.index("## 10.0.0.1"):out.index("## 10.0.0.2")]
         self.assertIn("**high** — plain-text service `telnet` enabled (port 23, from any address): disable it and use ssh", sw)
         self.assertIn("**low** — plain-text service `www` enabled (port 80, limited to 10.0.0.0/24): disable it and use www-ssl · `plaintext-www`\n", sw)
@@ -431,6 +431,77 @@ class RouterosAuditTests(unittest.TestCase):  # issue 26
         f = {x["key"]: x for x in json.loads((self.d / "discovery/routeros.json").read_text())["devices"]["10.0.0.1"]["findings"]}
         self.assertEqual([k for k, x in f.items() if x.get("accepted")], ["plaintext-www"])
         self.assertEqual(self.ra.accept_lists({"r1": {"ansible_host": "10.0.0.7", "routeros_audit_accept": ["{{ x }}", " "]}}), {})
+
+    def test_behind_the_fleet(self):  # GitHub issue #159
+        dev = lambda host, inst, latest=None, ch="long-term", users=(): {
+            "host": host, "reachable": True, "resource": {"version": f"{inst} ({ch})"},
+            "update": {"channel": ch, "installed-version": inst, **({"latest-version": latest} if latest else {})},
+            "users": [{"name": n, "group": g, "_flags": ""} for n, g in users]}
+        keys = lambda d, devs: [k for k, _, _ in self.ra.keyed_findings(d, fleet=self.ra.fleet_context(devs))]
+        fleet = [dev("10.0.0.1", "7.24.7", "7.24.7"),
+                 dev("10.0.0.2", "7.21.4"),                        # never checked: no latest-version
+                 dev("10.0.0.3", "7.23.7", "7.23.7"),              # a stale check: "already up to date"
+                 dev("10.0.0.4", "7.22.1", "7.24.7"),              # its own check knows: update-*, no second finding
+                 dev("10.0.0.5", "7.25.1", ch="testing"),          # another channel doesn't count
+                 {"host": "10.0.0.6", "reachable": False}]
+        self.assertEqual(keys(fleet[1], fleet), ["behind-fleet-7.24.7"])
+        self.assertEqual(keys(fleet[2], fleet), ["behind-fleet-7.24.7"])
+        self.assertEqual(keys(fleet[3], fleet), ["update-7.24.7"])
+        self.assertEqual(keys(fleet[0], fleet), [])
+        self.assertEqual(keys(fleet[4], fleet), [])
+        text = dict((k, t) for k, _, t in self.ra.keyed_findings(fleet[1], fleet=self.ra.fleet_context(fleet)))
+        self.assertIn("RouterOS 7.21.4 is behind 7.24.7, the newest on channel long-term in the audited fleet "
+                      "(seen on 10.0.0.1); it has no update check result", text["behind-fleet-7.24.7"])
+        self.assertIn("its last update check offers only 7.23.7, so the check is stale",
+                      dict((k, t) for k, _, t in self.ra.keyed_findings(fleet[2], fleet=self.ra.fleet_context(fleet)))
+                      ["behind-fleet-7.24.7"])
+        current = [dev("10.0.0.1", "7.24.7", "7.24.7"), dev("10.0.0.2", "7.24.7")]   # an up-to-date fleet
+        self.assertEqual(keys(current[1], current), [])
+        self.assertLess(self.ra.ros_vtuple("7.16beta3"), self.ra.ros_vtuple("7.16rc1"))
+        self.assertLess(self.ra.ros_vtuple("7.16rc1"), self.ra.ros_vtuple("7.16"))
+        self.assertLess(self.ra.ros_vtuple("7.16"), self.ra.ros_vtuple("7.16.1"))
+        self.assertIsNone(self.ra.ros_vtuple("7.16 (stable)"))
+
+    def test_user_group_drift(self):  # GitHub issue #159
+        dev = lambda host, *users: {"host": host, "reachable": True, "resource": {},
+                                    "users": [{"name": n, "group": g, "_flags": ""} for n, g in users]}
+        fleet = [dev("10.0.0.1", ("backup", "read"), ("ops", "full")), dev("10.0.0.2", ("backup", "read")),
+                 dev("10.0.0.3", ("backup", "full"), ("ops", "full"))]
+        ctx = self.ra.fleet_context(fleet)
+        f = {d["host"]: {k: t for k, _, t in self.ra.keyed_findings(d, fleet=ctx)} for d in fleet}
+        self.assertEqual(list(f["10.0.0.1"]), [])                                      # the common group: fine
+        self.assertEqual(list(f["10.0.0.3"]), ["user-group-drift-backup"])
+        self.assertIn("user `backup` is in group `full` here, `read` on 10.0.0.1, 10.0.0.2", f["10.0.0.3"]["user-group-drift-backup"])
+        tie = [dev("10.0.0.1", ("svc", "read")), dev("10.0.0.2", ("svc", "write"))]   # a tie: both are named
+        ctx = self.ra.fleet_context(tie)
+        self.assertEqual([[k for k, _, _ in self.ra.keyed_findings(d, fleet=ctx)] for d in tie],
+                         [["user-group-drift-svc"], ["user-group-drift-svc"]])
+
+    def test_fleet_findings_from_routeros_json(self):  # GitHub issue #159: recompute, accept list, report
+        (self.d / "discovery").mkdir(exist_ok=True)
+        dev = lambda inst, latest=None, group="read": {
+            "reachable": True, "resource": {"version": f"{inst} (long-term)"},
+            "update": {"channel": "long-term", "installed-version": inst,
+                       **({"latest-version": latest} if latest else {})},
+            "users": [{"name": "backup", "group": group, "_flags": ""}]}
+        (self.d / "discovery/routeros.json").write_text(json.dumps({"devices": {
+            "10.0.0.1": dev("7.24.7", "7.24.7"), "10.0.0.2": dev("7.21.4", group="full"),
+            "10.0.0.3": dev("7.24.7", "7.24.7")}}))
+        r = self.audit("--recompute")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        db = json.loads((self.d / "discovery/routeros.json").read_text())["devices"]
+        self.assertEqual(sorted(x["key"] for x in db["10.0.0.2"]["findings"]),
+                         ["behind-fleet-7.24.7", "user-group-drift-backup"])
+        self.assertIn("**Version drift:** 7.21.4: 10.0.0.2 (behind); 7.24.7: 10.0.0.1, 10.0.0.3", r.stdout)
+        inv = self.d / "ansible/inventory/managed"
+        (inv / "hosts.yml").write_text((inv / "hosts.yml").read_text().replace(
+            "ansible_host: 10.0.0.2\n", "ansible_host: 10.0.0.2\n              routeros_audit_accept: "
+            "[behind-fleet-7.24.7, user-group-drift-backup]\n"))
+        r = self.audit("--recompute")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        db = json.loads((self.d / "discovery/routeros.json").read_text())["devices"]
+        self.assertTrue(all(x.get("accepted") for x in db["10.0.0.2"]["findings"]))
+        self.assertIn("7.21.4: 10.0.0.2;", r.stdout)                                  # accepted: not marked
 
     def test_input_firewall_evidence(self):  # GitHub issue #138
         fw = lambda rules, port=22: self.ra.input_firewall({"filter": rules, "errors": {}}, port)

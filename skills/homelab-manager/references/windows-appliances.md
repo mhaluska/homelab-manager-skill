@@ -140,6 +140,13 @@ The report lists them as accepted and gives no fix for them, OVERVIEW.md doesn't
 shows; keys that no longer match are listed so the user can remove them. Version keys change with each release, so
 accepting an update postpones only that one. Only on the user's request.
 
+The audit never triggers an update check, so `update-<version>` only shows what the device's own last check found.
+It also compares the devices (this run and those already in `routeros.json`): a device behind the newest RouterOS
+another device on its update channel runs or was offered, while its own check is missing or stale, gets
+`behind-fleet-<version>` (low; switches that never check for updates are typical), and a user name whose group
+differs between devices gets `user-group-drift-<name>` (info: usually a shared service account with `full` where it
+should be `read`). The fleet is only as current as the devices audited; the "Version drift" line marks those behind.
+
 Plain-text services the audit flags: `playbooks/routeros-disable-services.yml` (the report prints the command
 for each device in the inventory). `routeros_disable_services` (default `[api, www]`; may add `telnet`, `ftp`,
 `api-ssl`, `www-ssl`, `winbox`, never `ssh`) lists what to turn off. Run it with `-l <host> --check` first and

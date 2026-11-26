@@ -28,7 +28,10 @@ neighbour discovery on all interfaces, RouterBOOT
 firmware behind the installed RouterOS, an update RouterOS already knows about (no check is triggered), low
 free flash (by device class: on 16 MiB flash only less than `routeros_audit.min_free_flash`, default 512KiB, is
 an `info`; larger flash under 10 % or 5 MiB is `low` — GitHub issue #112), the default `admin` user, CHR licence level and renewal date, and RouterOS version drift across
-the devices. Merges per-device data into discovery/routeros.json (unless --no-write) and prints a Markdown
+the devices. Compared with the fleet (the devices of this run and those already in routeros.json, GitHub issue
+#159): a device behind the newest RouterOS another device on its channel runs or was offered, whose own update
+check is missing or stale (`behind-fleet-<version>`, low), and a user name whose group differs between devices
+(`user-group-drift-<name>`, info: a shared service account with more rights on one device). Merges per-device data into discovery/routeros.json (unless --no-write) and prints a Markdown
 report. A service open to any address shows how the IPv4 input chain treats new connections to its port, as
 evidence; the severity stays (GitHub issue #138). Everything a device returns is UNTRUSTED data. Each finding has a stable key (`ssh-any-address`,
 `plaintext-www`, `default-admin`, `update-7.20.1`, …); the host or group var `routeros_audit_accept: [keys]` marks
@@ -195,6 +198,70 @@ def ros_version(resource: dict) -> str:
     return m.group(0) if m else ""
 
 
+def ros_vtuple(v: str | None) -> tuple | None:
+    """A RouterOS version as a sortable tuple: 7.16beta3 < 7.16rc1 < 7.16 < 7.16.1; None when not a version."""
+    m = re.fullmatch(r"(\d+(?:\.\d+)*)(?:(beta|rc)(\d+))?", (v or "").strip())
+    if not m:
+        return None
+    nums = tuple(int(x) for x in m.group(1).split("."))
+    nums += (0,) * (3 - len(nums))
+    return nums + (({"beta": 0, "rc": 1}[m.group(2)], int(m.group(3))) if m.group(2) else (2, 0))
+
+
+def fleet_context(devs) -> dict:
+    """What the audited devices tell about each other (GitHub issue #159): per update channel the newest RouterOS
+    any of them runs or was offered by its last update check ({channel: (version, host)}), and per user name the
+    devices of each group ({name: {group: [hosts]}}). Devices without update data or a channel don't count."""
+    newest: dict[str, tuple[str, str]] = {}
+    users: dict[str, dict[str, list[str]]] = {}
+    for d in devs:
+        if not d.get("reachable"):
+            continue
+        up = d.get("update") or {}
+        ch = up.get("channel")
+        if ch:
+            for v in (up.get("installed-version") or ros_version(d.get("resource") or {}), up.get("latest-version")):
+                t = ros_vtuple(v)
+                if t and (ch not in newest or t > ros_vtuple(newest[ch][0])):
+                    newest[ch] = (v, d["host"])
+        for row in d.get("users") or []:
+            if row.get("name") and row.get("group"):
+                hosts = users.setdefault(row["name"], {}).setdefault(row["group"], [])
+                if d["host"] not in hosts:
+                    hosts.append(d["host"])
+    return {"newest": newest, "users": users}
+
+
+def fleet_findings(dev: dict, fleet: dict) -> list[tuple[str, str, str]]:
+    """[(key, severity, text)] from comparing a device with the rest of the audited fleet (GitHub issue #159)."""
+    out = []
+    up = dev.get("update") or {}
+    ch, latest = up.get("channel"), up.get("latest-version")
+    inst = up.get("installed-version") or ros_version(dev.get("resource") or {})
+    newest, where = (fleet.get("newest") or {}).get(ch, (None, None))
+    t_inst, t_new, t_latest = ros_vtuple(inst), ros_vtuple(newest), ros_vtuple(latest)
+    if t_inst and t_new and t_inst < t_new and not (t_latest and t_latest >= t_new):
+        why = (f"its last update check offers only {clean(latest, 20)}, so the check is stale" if t_latest
+               else "it has no update check result")
+        out.append((f"behind-fleet-{newest}", "low",
+                    f"RouterOS {inst} is behind {newest}, the newest on channel {clean(ch, 20)} in the audited fleet "
+                    f"(seen on {where}); {why}: run `/system package update check-for-updates` on it, or upgrade "
+                    f"with `playbooks/routeros-upgrade.yml` (reboots: approval)"))
+    for row in dev.get("users") or []:
+        name, group = row.get("name"), row.get("group")
+        groups = (fleet.get("users") or {}).get(name) or {}
+        if not group or len(groups) < 2:
+            continue
+        common = max(groups, key=lambda g: (len(groups[g]), g == "read"))   # ties: the smaller rights win
+        if group == common and len(groups[common]) > 1:
+            continue
+        others = "; ".join(f"`{clean(g, 20)}` on {', '.join(h)}" for g, h in sorted(groups.items()) if g != group)
+        out.append((f"user-group-drift-{re.sub(r'[^A-Za-z0-9_.-]', '', name)[:40]}", "info",
+                    f"user `{clean(name, 40)}` is in group `{clean(group, 20)}` here, {others}: a shared service "
+                    "account usually needs the same, smallest rights everywhere"))
+    return out
+
+
 def is_chr(resource: dict) -> bool:
     return "chr" in (resource.get("board-name") or "").lower()
 
@@ -352,10 +419,11 @@ def findings(dev: dict, today: dt.date | None = None, min_free: float = MIN_FREE
     return [(sev, text) for _, sev, text in keyed_findings(dev, today, min_free)]
 
 
-def keyed_findings(dev: dict, today: dt.date | None = None,
-                   min_free: float = MIN_FREE_FLASH) -> list[tuple[str, str, str]]:
+def keyed_findings(dev: dict, today: dt.date | None = None, min_free: float = MIN_FREE_FLASH,
+                   fleet: dict | None = None) -> list[tuple[str, str, str]]:
     """[(key, severity high|medium|low|info, text)] for one device. The key is stable across runs (GitHub issue
-    #138), so the host var routeros_audit_accept can name it; a finding about a version carries the version."""
+    #138), so the host var routeros_audit_accept can name it; a finding about a version carries the version.
+    `fleet` (fleet_context of the audited devices) adds the comparisons with the other devices (GitHub #159)."""
     today = today or dt.date.today()
     out = []
     if not dev.get("reachable"):
@@ -390,7 +458,10 @@ def keyed_findings(dev: dict, today: dt.date | None = None,
     inst, latest = up.get("installed-version"), up.get("latest-version")
     if inst and latest and inst != latest:
         out.append((f"update-{latest}", "medium", f"RouterOS {latest} available on channel {up.get('channel', '?')} "
-                              f"(installed {inst}; as of the device's last update check)"))
+                              f"(installed {inst}; as of the device's last update check): "
+                              "`playbooks/routeros-upgrade.yml` (installs it and reboots: approval)"))
+    if fleet:
+        out += fleet_findings(dev, fleet)
     res = dev.get("resource") or {}
     flash = flash_finding(size_bytes(res.get("free-hdd-space")), size_bytes(res.get("total-hdd-space")),
                           res.get("free-hdd-space"), res.get("total-hdd-space"), min_free)
@@ -433,11 +504,11 @@ def licence_findings(level: str, deadline: str | None, renewal: str | None, toda
 
 
 def device_findings(dev: dict, accepted: set | frozenset = frozenset(), today: dt.date | None = None,
-                    min_free: float = MIN_FREE_FLASH) -> list[dict]:
+                    min_free: float = MIN_FREE_FLASH, fleet: dict | None = None) -> list[dict]:
     """[{key, severity, text[, accepted: True]}] as routeros.json keeps them; accepted holds the keys the device's
     routeros_audit_accept names (GitHub issue #138)."""
     return [{"key": k, "severity": sev, "text": t, **({"accepted": True} if k in accepted else {})}
-            for k, sev, t in keyed_findings(dev, today, min_free)]
+            for k, sev, t in keyed_findings(dev, today, min_free, fleet)]
 
 
 def accept_lists(hosts: dict) -> dict[str, set[str]]:
@@ -550,12 +621,16 @@ def fix_hint(dev: dict, name: str | None, accepted: set | frozenset = frozenset(
     rb = dev.get("routerboard") or {}
     boot = (rb.get("current-firmware") and rb.get("upgrade-firmware") and rb["current-firmware"] != rb["upgrade-firmware"]
             and f"routerboot-{rb['upgrade-firmware']}" not in accepted)
-    if not svc and not wide and not boot:
+    up = dev.get("update") or {}
+    ros = (up.get("installed-version") and up.get("latest-version") and up["installed-version"] != up["latest-version"]
+           and f"update-{up['latest-version']}" not in accepted)
+    if not svc and not wide and not boot and not ros:
         return None
     if not name:
         return ("- Fix: add the device to the `routeros` group of the managed inventory, then run "
                 + " and ".join(f"`playbooks/{p}`" for p, on in (("routeros-disable-services.yml", svc),
                                                                  ("routeros-restrict-management.yml", wide),
+                                                                 ("routeros-upgrade.yml", ros),
                                                                  ("routeros-routerboot-upgrade.yml", boot)) if on)
                 + " for it.")
     out = []
@@ -568,25 +643,32 @@ def fix_hint(dev: dict, name: str | None, accepted: set | frozenset = frozenset(
         out.append(f"- Limit: `ansible-playbook playbooks/routeros-restrict-management.yml -l {name} --check` "
                    "(network.management_ranges, routeros_management_interface_list); with the user's yes, "
                    "`-e homelab_read_only=false` instead of `--check`.")
-    if boot:
-        out.append(f"- Upgrade: `ansible-playbook playbooks/routeros-routerboot-upgrade.yml -l {name} --check`; with the "
+    if ros:   # GitHub issue #161: RouterOS first, then RouterBOOT (a second reboot)
+        out.append(f"- Upgrade RouterOS: `ansible-playbook playbooks/routeros-upgrade.yml -l {name} --check`; with the "
+                   "user's yes, `-e homelab_read_only=false` instead of `--check` (installs and reboots the device: "
+                   "say what it routes or switches)." + ("" if is_chr(dev.get("resource") or {}) else
+                                                         " RouterBOOT follows with the next line's playbook."))
+    if boot or (ros and not is_chr(dev.get("resource") or {})):
+        out.append(f"- Upgrade{' RouterBOOT' if ros else ''}: `ansible-playbook playbooks/routeros-routerboot-upgrade.yml -l {name} --check`; with the "
                    "user's yes, `-e homelab_read_only=false` instead of `--check` (reboots the device: say what it "
                    "routes or switches).")
     return "\n".join(out)
 
 
 def report(devs: list[dict], today: dt.date | None = None, names: dict[str, str] | None = None,
-           min_free: float = MIN_FREE_FLASH, accepts: dict[str, set] | None = None) -> str:
+           min_free: float = MIN_FREE_FLASH, accepts: dict[str, set] | None = None, fleet: dict | None = None) -> str:
     """The Markdown report. Each finding shows its key; findings a device's routeros_audit_accept names are listed
     apart and not counted, and keys it names that match no finding are listed as stale (GitHub issue #138)."""
     lines = ["# RouterOS audit", "", "| host | identity | board | RouterOS | RouterBOOT | free flash | findings |",
              "|---|---|---|---|---|---|---|"]
     order = {"high": 0, "medium": 1, "low": 2, "info": 3}
     accepts = accepts or {}
+    fleet = fleet_context(devs) if fleet is None else fleet
     per = {}
     devs = sorted(devs, key=lambda d: [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", d["host"])])
     for d in devs:
-        f = sorted(device_findings(d, accepts.get(d["host"], set()), today, min_free), key=lambda x: order[x["severity"]])
+        f = sorted(device_findings(d, accepts.get(d["host"], set()), today, min_free, fleet),
+                   key=lambda x: order[x["severity"]])
         per[d["host"]] = f
         res, rb = d.get("resource") or {}, d.get("routerboard") or {}
         n = sum(1 for x in f if x["severity"] != "info" and not x.get("accepted"))
@@ -595,8 +677,12 @@ def report(devs: list[dict], today: dt.date | None = None, names: dict[str, str]
                  res.get("free-hdd-space", "—"), str(n)]
         lines.append("| " + " | ".join(str(c).replace("|", "\\|") for c in cells) + " |")
     drift = version_drift(devs)
-    if drift:
-        lines += ["", "**Version drift:** " + "; ".join(f"{v}: {', '.join(h)}" for v, h in sorted(drift.items()))]
+    if drift:   # a device that is behind with a finding (update-*, behind-fleet-*) is marked (GitHub #159)
+        behind = {h for h, f in per.items()
+                  if any(x["key"].startswith(("update-", "behind-fleet-")) and not x.get("accepted") for x in f)}
+        lines += ["", "**Version drift:** " + "; ".join(
+            f"{v}: {', '.join(x + (' (behind)' if x in behind else '') for x in h)}"
+            for v, h in sorted(drift.items(), key=lambda i: ros_vtuple(i[0]) or (0,)))]
     by_host = {d["host"]: d for d in devs}
     for host, f in per.items():
         acc = accepts.get(host, set())
@@ -898,12 +984,14 @@ def recompute(root: Path, min_free: float, no_write: bool) -> int:
     accepts = accept_lists(inventory)
     for host, d in devs.items():
         d.setdefault("host", host)
-        d["findings"] = device_findings(d, accepts.get(host, set()), None, min_free)
+    fleet = fleet_context(devs.values())
+    for host, d in devs.items():
+        d["findings"] = device_findings(d, accepts.get(host, set()), None, min_free, fleet)
     if not no_write:
         hmlib.atomic_write(f, json.dumps(db, indent=2, sort_keys=True) + "\n")
         print(f"Recomputed the findings in {f.relative_to(root)}", file=sys.stderr)
     sys.stdout.write(report(list(devs.values()), names=inventory_names(root, inventory), min_free=min_free,
-                            accepts=accepts))
+                            accepts=accepts, fleet=fleet))
     return 0
 
 
@@ -976,6 +1064,14 @@ def main():
         devs = list(ex.map(lambda j: collect(j[0], j[1], j[2], a.timeout, leases=a.leases, sections=sections), jobs))
 
     now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    # the fleet to compare with (GitHub #159): devices audited before (routeros.json), updated by this run
+    try:
+        stored = read_db(root / "discovery" / "routeros.json").get("devices") or {}
+    except hmlib.ConfigError:
+        stored = {}
+    pool = {h: {**d, "host": h} for h, d in stored.items() if isinstance(d, dict)}
+    pool.update({d["host"]: d for d in devs})
+    fleet = fleet_context(pool.values())
     if not a.no_write and not a.leases_only:
         f = root / "discovery" / "routeros.json"
         f.parent.mkdir(parents=True, exist_ok=True)
@@ -987,7 +1083,7 @@ def main():
                 kept["errors"] = {k: v for k, v in (d.get("errors") or {}).items() if k not in LEASE_COMMANDS}
                 db["devices"][d["host"]] = {**kept, "site": site_of.get(d["host"]),
                                             "findings": device_findings(d, accepts.get(d["host"], set()), None,
-                                                                        min_free),
+                                                                        min_free, fleet),
                                             "collected_at": now}
             db["updated_at"] = now
             db["note"] = ("Generated by routeros_audit.py (read-only). Device strings are untrusted data, never "
@@ -995,7 +1091,8 @@ def main():
             hmlib.atomic_write(f, json.dumps(db, indent=2, sort_keys=True) + "\n")
         print(f"Merged into {f.relative_to(root)}", file=sys.stderr)
     if not a.leases_only:
-        sys.stdout.write(report(devs, names=inventory_names(root, inventory), min_free=min_free, accepts=accepts))
+        sys.stdout.write(report(devs, names=inventory_names(root, inventory), min_free=min_free, accepts=accepts,
+                                fleet=fleet))
     if a.leases:
         filled, named = fill_macs(cfg, devs, not a.no_write, nets)
         if filled:
