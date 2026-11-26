@@ -35,6 +35,9 @@
 - Hosting: GitHub (`mhaluska/homelab-manager-skill`, public). Issues via `gh`, never `glab`.
 - Commits: use the identity in this clone's `git config user.name/user.email` (set by the maintainer).
 - Scripts: Python 3 stdlib only (the target Mac has no pip packages); YAML via `yq`.
+- README.md is the user-facing front page and must match the current state: when a change adds or alters a
+  feature, requirement, install or update step, safety rule or repo layout, update README.md in the same work
+  (plain, friendly prose; no release needed for README-only changes).
 - Keep SKILL.md under ~250 lines; domain detail goes to `references/`, one file per domain, no duplication.
 - Every guard rule change needs a test in `tests/test_guard.py`. Run `python3 -m unittest discover -s tests`.
 - Template changes: `.github/validate_template.sh` scaffolds every component into a temp dir and runs
