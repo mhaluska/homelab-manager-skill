@@ -19,7 +19,8 @@ mismatch it writes nothing and exits 1 — then note a skill issue (SKILL.md §6
 
 Values: JSON if they parse as JSON (`true`, `3`, `["a", "b"]`, `"3"`), YAML flow syntax for a mapping or list
 (`network.vlans+={id: 20, name: DMZ, cidr: 10.0.20.0/24}`), otherwise a plain string.
-Missing keys (and parent mappings) are added at the end of their parent block.
+Missing keys (and parent mappings) are added at the end of their parent block. A mapping (or a list of mappings) set
+on a new or empty key is written in block style; a value that is flow already stays flow.
 """
 from __future__ import annotations
 
@@ -73,6 +74,31 @@ def render(v, quote_strings: bool = False) -> str:
         return "{" + ", ".join(f"{k if plain_ok(str(k)) else json.dumps(str(k))}: {render(x)}"
                                for k, x in v.items()) + "}"
     raise EditError(f"unsupported value type {type(v).__name__}")
+
+
+def blocky(v) -> bool:
+    """A value written in block style when it is new: a mapping, or a list holding one (GitHub issue #176)."""
+    return (isinstance(v, dict) and bool(v)) or (isinstance(v, list) and any(isinstance(x, dict) and x for x in v))
+
+
+def render_block(v, ind: int) -> list[str]:
+    """Block-style YAML lines for a mapping or list, its keys at indent ind; scalars and empty values in flow."""
+    pad, out = " " * ind, []
+    if isinstance(v, dict):
+        for k, x in v.items():
+            key = k if plain_ok(str(k)) else json.dumps(str(k))
+            if isinstance(x, (dict, list)) and x and (isinstance(x, dict) or blocky(x)):
+                out += [f"{pad}{key}:\n"] + render_block(x, ind + 2)
+            else:
+                out.append(f"{pad}{key}: {render(x)}\n")
+        return out
+    for x in v:
+        if isinstance(x, dict) and x:
+            sub = render_block(x, ind + 2)
+            out += [f"{pad}- {sub[0][ind + 2:]}"] + sub[1:]
+        else:
+            out.append(f"{pad}- {render(x)}\n")
+    return out
 
 
 def parse_value(text: str):
@@ -169,6 +195,14 @@ def _replace_value(lines, i, value, comment=None, keep_quotes=True):
     old_val, old_comment = _split_comment(line[m.end():])
     end = _block_end(lines, i)
     old_block = lines[i + 1:end]
+    if blocky(value) and old_val.strip() in ("", "{}", "[]", "~", "null", '""', "''") and not any(
+            x.lstrip().startswith("- ") for x in old_block if _significant(x)):
+        # an empty value or a block mapping becomes a block (GitHub issue #176); a flow value stays flow
+        text = old_comment.lstrip() if comment is None else (f"# {comment}" if comment else "")
+        gap = len(old_val) + len(old_comment) - len(old_comment.lstrip())     # keep the comment's column
+        tail = (" " * max(2, gap) + text) if text and old_comment else (("  " + text) if text else "")
+        lines[i:end] = [head + tail + "\n"] + render_block(value, _indent(line) + 2)
+        return
     if isinstance(value, list) and old_block and old_block[-1].lstrip().startswith("- ") and value:
         # block list stays a block list
         ind = " " * _indent(next(x for x in old_block if x.lstrip().startswith("- ")))
@@ -342,13 +376,16 @@ def _edit_text(lines: list[str], path: list, kind: str, root, comment, top: int 
         if k < len(rest) - 1:
             new.append(f"{pad}{p}:\n")
         else:
-            body = f"{pad}{p}: {render(_get(root, path))}"
+            v = _get(root, path)
+            body = f"{pad}{p}:" if blocky(v) else f"{pad}{p}: {render(v)}"
             c = ""
             if comment:   # line the comment up with the sibling above, if it has one
                 prev = lines[at - 1] if at else ""
                 col = prev.find(" #") + 1 if _KEY.match(prev) and " #" in prev else 0
                 c = " " * max(2, col - len(body)) + f"# {comment}"
             new.append(f"{body}{c}\n")
+            if blocky(v):
+                new += render_block(v, ind + 2 * k + 2)
     lines[at:at] = new
 
 

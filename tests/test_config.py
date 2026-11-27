@@ -145,6 +145,25 @@ class ConfigSetTests(unittest.TestCase):
         self.assertEqual(cfg["discovery"], None)
         self.assertEqual(len(self.f.read_text().splitlines()), len(self.orig.splitlines()))
 
+    def test_new_mapping_is_written_in_block_style(self):   # GitHub issue #176
+        r = run("config_set.py", "zabbix.secrets={ro: a, rw: b}", cwd=self.d)   # a flow value stays flow
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertRegex(self.f.read_text(), r"\n  secrets: \{ro: a, rw: b\} +# names under secrets: below\n")
+        r = run("config_set.py", "--delete", "zabbix", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = run("config_set.py", 'zabbix={url: "https://z.example/api_jsonrpc.php", managed_scope: {host_groups: '
+                '["Home/*"], template_groups: []}, host_match: [{pattern: "{host}.home.arpa", sites: [lab]}]}',
+                'clusters+={name: k8s, ansible_group: k8s_workers}', "secrets.ro={service: homelab/z, kind: env}",
+                cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        text = self.f.read_text()
+        self.assertIn('zabbix:\n  url: "https://z.example/api_jsonrpc.php"\n  managed_scope:\n'
+                      '    host_groups: ["Home/*"]\n    template_groups: []\n  host_match:\n'
+                      '    - pattern: "{host}.home.arpa"\n      sites: [lab]\n', text)
+        self.assertIn("clusters:\n  - name: k8s\n    ansible_group: k8s_workers\n", text)
+        self.assertIn("  ro:\n    service: homelab/z\n    kind: env\n", text)
+        self.assertFalse(any(len(l) > 60 for l in self.changed()))
+
     def test_dry_run_and_bad_input_write_nothing(self):
         r = run("config_set.py", "--dry-run", "site.domain=x", cwd=self.d)
         self.assertIn('+  domain: "x"', r.stdout)
