@@ -15,7 +15,7 @@
    ],
    "84c144729c966b2c2d08b18d5fb08dbb6a95f794": [
     "0.56.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   ".github/ISSUE_TEMPLATE/config.yml": {
@@ -41,7 +41,7 @@
    ],
    "da3e4981a158500e8e395d581ec95f294ac3295f": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "CLAUDE.md": {
@@ -71,7 +71,7 @@
    ],
    "0b430983831be1fefff2b272763c39b4e908d0b1": [
     "0.16.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ISSUES.md": {
@@ -111,13 +111,13 @@
    ],
    "ea43f76a770079bd746578e03735676011a3e5b0": [
     "0.9.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/ansible.cfg": {
    "cc53b878778ad18107922d16fdd9fc9258329768": [
     "0.2.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/inventory/managed/group_vars/all.yml": {
@@ -127,13 +127,13 @@
    ],
    "a776e1e7a0865fb1e52a37cb27cd3a10ed26eae0": [
     "0.18.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/inventory/managed/group_vars/appliances.yml": {
    "7d81931d0e38a025826bd11f949f60b19392464d": [
     "0.2.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/inventory/managed/group_vars/bmc.yml": {
@@ -151,19 +151,19 @@
    ],
    "a0aac563d24aadc3dc886d2ed2ab6f6866f8c926": [
     "0.54.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/inventory/managed/group_vars/proxmox_nodes.yml": {
    "5de3fd1b835c980374a5b484448a1cb5a88014ce": [
     "0.13.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/inventory/managed/group_vars/qnap.yml": {
    "4a65a79a7490c015642a588a313ca6743074fc49": [
     "0.30.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/inventory/managed/group_vars/unifi.yml": {
@@ -177,13 +177,13 @@
    ],
    "cfc396a73aa40341ad7400c1b6e6e72c1d0fe303": [
     "0.54.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/inventory/managed/group_vars/windows.yml": {
    "61a6f6adb749ca915ea4d783f9e6f320b719d141": [
     "0.2.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/inventory/managed/hosts.yml": {
@@ -193,7 +193,7 @@
    ],
    "8fda988bd4eda501aac348f58a74e1a6e2483fd6": [
     "0.16.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/bmc-info.yml": {
@@ -215,7 +215,7 @@
    ],
    "e365252aa02f1763cfdff6e66f13c0c186d93dff": [
     "0.37.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/check-updates.yml": {
@@ -261,7 +261,7 @@
    ],
    "e890e8f8f39d2bdf30bf49195008233b3bc9027b": [
     "0.59.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/dist-upgrade-debian.yml": {
@@ -279,7 +279,7 @@
    ],
    "b01ac947d3755b491c392239e6a9c8034c797743": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/dist-upgrade-ubuntu.yml": {
@@ -293,7 +293,7 @@
    ],
    "8d646371af4b421e2fd8eb0ec8404e7e5415b717": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/docker-containers.yml": {
@@ -319,31 +319,31 @@
    ],
    "1176d2dfe1579e302dfea0440d38b017ce39c002": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/hooks/k8s-drain.yml": {
    "797d83cc4eaeefccd5e54d65e5b81fb958b8abad": [
     "0.2.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/hooks/k8s-health.yml": {
    "f0e8fe42e62d8c8fe59d4acfcd60dee9958edfd2": [
     "0.61.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/hooks/k8s-uncordon.yml": {
    "1bd045181853dee88fbd81c71599d5cb887b105b": [
     "0.2.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/hooks/vrrp-health.yml": {
    "fcf19b9e013285c905e032d44572c1ef1bacb5aa": [
     "0.16.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/patch-linux.yml": {
@@ -397,7 +397,7 @@
    ],
    "13d71fed5272bf3a2259ba90d8b2d683cb03e9ce": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/patch-proxmox-node.yml": {
@@ -435,19 +435,19 @@
    ],
    "0b04476df64ed67927847ecd885391426b84a028": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/patch-windows.yml": {
    "8a22515384cb2f101962ea3ed453db76379022ff": [
     "0.61.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/ping.yml": {
    "e8ccd5fd6b83d58fd4538960c40302ea4c380732": [
     "0.2.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/qnap-containers.yml": {
@@ -457,19 +457,19 @@
    ],
    "1cbc395997c07b853db64dcdfbbbc8e1be3f0b27": [
     "0.35.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/routeros-disable-services.yml": {
    "28fd863efb7927810f1d7e116d304e67c51ad608": [
     "0.30.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/routeros-restrict-management.yml": {
    "b695aa8e745171b9caf177b241ecd2d014115e3e": [
     "0.31.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/routeros-routerboot-upgrade.yml": {
@@ -479,13 +479,13 @@
    ],
    "0740f68844ec6089f6f77ae3744847d9e96267b0": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/routeros-upgrade.yml": {
    "0319060ad3a3be86bbf13f5c5141dd59a04c2dc1": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/security-audit.yml": {
@@ -499,37 +499,37 @@
    ],
    "019cc1a2d2cb24ffeb97ba4f35c00b2ac391773b": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/tasks/debian-sources.sh": {
    "3c881a96357774e70ab69a2771026330b51e3eb5": [
     "0.31.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/tasks/failed-units.yml": {
    "a1aeb2ee1e2e7f80ca5d15859bf8bc76f9906cef": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/tasks/pve-migrate.yml": {
    "748e7739862e6c03b71f8e89944b7255ceb2c1b3": [
     "0.13.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/tasks/restart-check.yml": {
    "681685cfe08cecdeff4301a1716cccfcb1eba7de": [
     "0.16.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/tasks/zabbix.yml": {
    "199854fef0b41ee8597bfc4fdf1d3dbdf98b42db": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/unifi-info.yml": {
@@ -543,19 +543,23 @@
    ],
    "42e527e2af75e575347a27a384747724be07607f": [
     "0.29.1",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/vars/patch-lists.yml": {
    "32451e129fcb3ef7ad4765eba9fb5fd6d3f59ca6": [
     "0.59.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/playbooks/zabbix-agent2.yml": {
    "539cab3eed890897e6daf1d09ff7d383140e28e2": [
     "0.65.0",
     "0.65.0"
+   ],
+   "590c06a7893b52543af71e3712f5f5b60e4011a4": [
+    "0.66.0",
+    "0.66.0"
    ]
   },
   "ansible/requirements.yml": {
@@ -569,79 +573,105 @@
    ],
    "dc639cbdd5e678e12dd2a66aa2e63eeb0382deb9": [
     "0.59.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/roles/README.md": {
    "c12c0d74e9c7ba197e9d7040b6115bbb64688abe": [
     "0.2.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/roles/zabbix_agent2/defaults/main.yml": {
    "5117b7668f285459fb027876bce55038bbb31d89": [
     "0.65.0",
     "0.65.0"
+   ],
+   "8ad859fd032f6da73c6e511a8f5dc4bb063e3756": [
+    "0.66.0",
+    "0.66.0"
    ]
   },
   "ansible/roles/zabbix_agent2/handlers/main.yml": {
    "1f2d1a733168d4f10a9f10ae5599bb50041e8a09": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/roles/zabbix_agent2/meta/main.yml": {
    "e7a4137a8581dbab5ca1ca868a59f9559134313b": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/roles/zabbix_agent2/tasks/health.yml": {
    "91607345c3d3800758571bda04e53d00ab4d1899": [
     "0.65.0",
     "0.65.0"
+   ],
+   "6633fd10be56f07442effc26bb0bccbd3bcdc5b8": [
+    "0.66.0",
+    "0.66.0"
    ]
   },
   "ansible/roles/zabbix_agent2/tasks/linux.yml": {
    "b2d13e7655778eb44ea29ee813e1172eeb58c582": [
     "0.65.0",
     "0.65.0"
+   ],
+   "247bc1cfd64eb863553c0e86be6802ac5faf7ad7": [
+    "0.66.0",
+    "0.66.0"
    ]
   },
   "ansible/roles/zabbix_agent2/tasks/main.yml": {
    "c2e4fc998ba6f558f31cb4117a1016600383902e": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/roles/zabbix_agent2/tasks/repo-debian.yml": {
    "6ed3025fcfa31a037cc4346cfcb8fbc5e1270602": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "ansible/roles/zabbix_agent2/tasks/repo-redhat.yml": {
    "8d1de9fb7ad47a1b40c45a1cb2816b8d4dafc641": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
+   ]
+  },
+  "ansible/roles/zabbix_agent2/tasks/settings.yml": {
+   "2cbcf57579521c52d8d84693ffbfec1131ca2392": [
+    "0.66.0",
+    "0.66.0"
    ]
   },
   "ansible/roles/zabbix_agent2/tasks/windows.yml": {
    "9339a998661b057ec705e4141496256d69f4a768": [
     "0.65.0",
     "0.65.0"
+   ],
+   "7568c1504b86a1085a2d6c003ec8364d3c1af488": [
+    "0.66.0",
+    "0.66.0"
    ]
   },
   "ansible/roles/zabbix_agent2/templates/homelab-manager.conf.j2": {
    "6f28eb2b6ffd90cc4553a6bc4094a75dcb442edb": [
     "0.65.0",
     "0.65.0"
+   ],
+   "b2838f1a156b0b33bdc098e75f41f7d500a04265": [
+    "0.66.0",
+    "0.66.0"
    ]
   },
   "ansible/roles/zabbix_agent2/vars/main.yml": {
    "adf467bcc849c3efb5afc10d5d6a2a7990a1d9b3": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "discovery/README.md": {
@@ -675,7 +705,7 @@
    ],
    "5c2fa97ce2603f5ea01d52a979ff95a2e3d5de7e": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "docs/README.md": {
@@ -685,7 +715,7 @@
    ],
    "5472694f34c6840886fc5b46c83f5a83a8517593": [
     "0.61.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "docs/decisions.md": {
@@ -695,7 +725,7 @@
    ],
    "67b5db3ae7dd842643cc872add780d5745217a7d": [
     "0.5.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "docs/proxmox-tokens.md": {
@@ -725,25 +755,25 @@
    ],
    "a44e107a90f96f72973f33dbee933b2105f9080a": [
     "0.61.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "docs/recovery.md": {
    "dcd7fc459faa0d6b0b4cd680b0482e644722b66c": [
     "0.61.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "docs/templates.md": {
    "3e06e5cf1fc0988268a3c835ccff42e7b93b843d": [
     "0.2.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "docs/zabbix-api-users.md": {
    "9cd309ec236fbe5c9cf0854917e9b0ae769bf907": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "homelab.yaml": {
@@ -842,6 +872,10 @@
    "08c110ec54292b79003dd916e321b2d0590d5394": [
     "0.65.0",
     "0.65.0"
+   ],
+   "a476f31dfa6bcad485290e63436d943a0e093b05": [
+    "0.66.0",
+    "0.66.0"
    ]
   },
   "packer/README.md": {
@@ -859,7 +893,7 @@
    ],
    "5ee8e6b4025d9ed48b20c123341fde7d233593dd": [
     "0.61.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "packer/linux/distros/debian13.pkrvars.hcl": {
@@ -869,7 +903,7 @@
    ],
    "d5a7518b56bc1d0b03c6e942f9f4e15d54815ae9": [
     "0.59.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "packer/linux/distros/rocky9.pkrvars.hcl": {
@@ -879,7 +913,7 @@
    ],
    "6b1704a4e1997f294c6e5b9063722d2bb8569e3c": [
     "0.59.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "packer/linux/distros/ubuntu2404.pkrvars.hcl": {
@@ -889,7 +923,7 @@
    ],
    "73c27d7eaa0920c71bbffd486700088c0a9f2648": [
     "0.59.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "packer/linux/linux.pkr.hcl": {
@@ -903,7 +937,7 @@
    ],
    "21304f0bac0ef08f37979b2bb33629818b0a47ce": [
     "0.59.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "packer/linux/plugins.pkr.hcl": {
@@ -913,7 +947,7 @@
    ],
    "3549e196a4b457b37f3c81134722b62df010413a": [
     "0.59.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "packer/linux/scripts/cleanup.sh": {
@@ -923,7 +957,7 @@
    ],
    "d25053c2931e847f6087171ed86bbef330098c70": [
     "0.59.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "packer/linux/scripts/provision.sh": {
@@ -933,7 +967,7 @@
    ],
    "54f8ad772d224c045532752bbaa8775e7deed019": [
     "0.59.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "packer/linux/variables.pkr.hcl": {
@@ -947,7 +981,7 @@
    ],
    "ee00a156d46f3698b04b7f139edb2d10beb583fe": [
     "0.59.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "scripts/git-hooks/pre-commit": {
@@ -965,7 +999,7 @@
    ],
    "adbd162a83d3320614fcb5d6b81b73571b57db52": [
     "0.59.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "skill_issues.md": {
@@ -975,7 +1009,7 @@
    ],
    "4ebd0e9b07a7b137d79dafe2367ca4b1eee316aa": [
     "0.9.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/environments/homelab/backend.tf": {
@@ -985,13 +1019,13 @@
    ],
    "a3ab874cd4d720bc19b358b3c4fde745509549ed": [
     "0.5.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/environments/homelab/backup-jobs.tf": {
    "aebca4941abb14156ecd46f23f0db374a3acc890": [
     "0.61.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/environments/homelab/homelab.auto.tfvars": {
@@ -1013,7 +1047,7 @@
    ],
    "7d7e50b8749a5af5fd5f836c80d20c2aa087d37f": [
     "0.61.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/environments/homelab/main.tf": {
@@ -1047,19 +1081,19 @@
    ],
    "bf2fc1fc940ecb369dc58e4dc6adee8b6345bcd8": [
     "0.64.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/environments/homelab/outputs.tf": {
    "5d2b5dbc7b0293a989a80d3c6ca96f9b2dfa0d00": [
     "0.2.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/environments/homelab/providers.tf": {
    "c8ca9666a902ed99144b101ea49eeb5771f84538": [
     "0.2.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/environments/homelab/variables.tf": {
@@ -1093,13 +1127,13 @@
    ],
    "60c310efc2edb0dc26f04481da1711b766a39b50": [
     "0.64.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/environments/homelab/versions.tf": {
    "331659d8b7e1e5869e16e2f6b7adb292b025350e": [
     "0.2.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/modules/cloud-image-base/main.tf": {
@@ -1109,13 +1143,13 @@
    ],
    "26438ac6889c48da02ac3a088288e50aa578e1be": [
     "0.54.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/modules/cloud-image-base/outputs.tf": {
    "b54d2adb3781f2bcac23f824b2e2c1d961f59512": [
     "0.2.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/modules/cloud-image-base/variables.tf": {
@@ -1129,13 +1163,13 @@
    ],
    "81632ff0ad6bd7c1defd058e32e2a7182752630c": [
     "0.59.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/modules/cloud-image-base/versions.tf": {
    "331659d8b7e1e5869e16e2f6b7adb292b025350e": [
     "0.2.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/modules/proxmox-lxc/main.tf": {
@@ -1157,7 +1191,7 @@
    ],
    "b69558bef94101baa62947a38de20bef7137c585": [
     "0.63.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/modules/proxmox-lxc/outputs.tf": {
@@ -1167,7 +1201,7 @@
    ],
    "2bb8fb828733c51ef8b82597779e1edecc4d4ec5": [
     "0.63.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/modules/proxmox-lxc/variables.tf": {
@@ -1189,13 +1223,13 @@
    ],
    "1844f983a92f5362b78c34cd1326b68dbc30a9c7": [
     "0.63.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/modules/proxmox-lxc/versions.tf": {
    "331659d8b7e1e5869e16e2f6b7adb292b025350e": [
     "0.2.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/modules/proxmox-vm/main.tf": {
@@ -1221,7 +1255,7 @@
    ],
    "37f88d7c233cac899772fa5b7987789f6e93a024": [
     "0.64.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/modules/proxmox-vm/outputs.tf": {
@@ -1231,7 +1265,7 @@
    ],
    "ec79cf56dfc7b855bc13d573703caf4faa710bdc": [
     "0.63.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/modules/proxmox-vm/variables.tf": {
@@ -1257,25 +1291,25 @@
    ],
    "de458846d98da1725f91e6c7dc86a82830eb88d4": [
     "0.64.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/modules/proxmox-vm/versions.tf": {
    "331659d8b7e1e5869e16e2f6b7adb292b025350e": [
     "0.2.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "tofu/snippets/example-vendor-data.yaml": {
    "5d183874748d6786ab6943f01c82a65b3cd651e9": [
     "0.61.0",
-    "0.65.0"
+    "0.66.0"
    ]
   },
   "zabbix/README.md": {
    "1058e600ea065d2cb366c784412a95843882e909": [
     "0.65.0",
-    "0.65.0"
+    "0.66.0"
    ]
   }
  }

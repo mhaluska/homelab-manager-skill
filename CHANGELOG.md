@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.66.0 — 2026-11-28
 
 Adding a component or syncing after an update now touches only what it should, and the Zabbix Agent 2 role fits
 servers that already have agents and autoregistration set up.
