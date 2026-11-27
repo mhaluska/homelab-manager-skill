@@ -202,6 +202,59 @@ def unedited_templates(target: Path) -> list[tuple[str, str, list[str]]]:
     return out
 
 
+_INCLUDE = re.compile(r"""\b(?:include_tasks|import_tasks|import_playbook):[ \t]*(?:#.*)?\n?(?:[ \t]+file:)?[ \t]*["']?([^"'\s#]*)""")
+
+
+def missing_includes(target: Path, texts: dict[str, str] | None = None) -> list[tuple[str, str]]:
+    """Template files the repo's playbooks and roles include (include_tasks, import_tasks, import_playbook) that
+    the repo lacks: [(missing file, the file that includes it)] (GitHub issue #175). texts: repo path → the text
+    the file will have (a file --sync-managed replaces). Targets with Jinja in them are skipped, and so are files
+    of disabled components (patch-linux.yml includes tasks/zabbix.yml only with monitoring on)."""
+    out, seen = [], set()
+    comps = current_components(target) or list(COMPONENTS)
+    files = {f.relative_to(target).as_posix() for f in (target / "ansible").rglob("*.yml") if f.is_file()} \
+        if (target / "ansible").is_dir() else set()
+    for rel in sorted(files | set(texts or {})):
+        if rel.startswith("ansible/inventory/"):
+            continue
+        text = (texts or {}).get(rel)
+        if text is None:
+            text = (target / rel).read_text(errors="replace")
+        here = Path(rel).parent
+        role = Path(*Path(rel).parts[:3]) if rel.startswith("ansible/roles/") else None
+        for m in _INCLUDE.finditer(text):
+            inc = m.group(1)
+            if not inc or "{" in inc or inc.startswith("/"):
+                continue
+            cands = [(here / inc).as_posix(), ("ansible/playbooks/" + inc)]
+            if role is not None:
+                cands.append((role / "tasks" / inc).as_posix())
+            cands = [c for c in dict.fromkeys(cands) if ".." not in c]
+            if any((target / c).exists() for c in cands):
+                continue
+            src = next((c for c in cands if (TEMPLATE / c).is_file()), None)
+            if src and src not in seen and wanted(src, comps):
+                seen.add(src)
+                out.append((src, rel))
+    return out
+
+
+def missing_templates(target: Path, skip: set[str]) -> list[str]:
+    """Template files of the enabled components the repo lacks and nothing adds (listed, never added): not the
+    files upgrade notes offer, nor the default OpenTofu environment of a repo with per-site ones."""
+    comps = current_components(target) or list(COMPONENTS)
+    opt_in = {n["when"]["file_missing"] for n in upgrade_notes.all_notes() if "file_missing" in (n.get("when") or {})}
+    no_env = multi_site(target)
+    out = []
+    for p in sorted(TEMPLATE.rglob("*")):
+        rel = p.relative_to(TEMPLATE).as_posix()
+        if (p.is_file() and p.name != ".DS_Store" and wanted(rel, comps) and not (target / rel).exists()
+                and rel not in opt_in and rel not in skip and rel not in NEVER_REPLACE
+                and not (no_env and rel.startswith(DEFAULT_ENV)) and not any(rel.startswith(m) for m in MANAGED)):
+            out.append(rel)
+    return out
+
+
 def upgrades(target: Path) -> list[tuple[str, callable]]:
     """Changes that bring a repo set up by an older plugin version in line with this one: [(description, apply)]."""
     out = []
@@ -216,6 +269,16 @@ def upgrades(target: Path) -> list[tuple[str, callable]]:
                 shutil.copy2(TEMPLATE / r, target / r)
         out.append((f"replace {rel} with the current template (no local edits since {since})"
                     + (f"; add {', '.join(new)} (it uses them)" if new else ""), replace))
+    # a file a playbook or role includes but the repo never got: the playbook fails without it (GitHub issue #175)
+    texts = {r: (TEMPLATE / r).read_text(errors="replace") for r in replaced}
+    for rel, by in missing_includes(target, texts):
+        if rel in added:
+            continue
+        added.add(rel)
+        def add(rel=rel):
+            (target / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(TEMPLATE / rel, target / rel)
+        out.append((f"add {rel} ({by} includes it, the repo lacks it)", add))
     first = len(out)
     for src in sorted(TEMPLATE.rglob("*")):
         rel = src.relative_to(TEMPLATE).as_posix()
@@ -499,13 +562,23 @@ def _reviewed_lags(target: Path) -> bool:
     return upgrade_notes.vtuple(have) < upgrade_notes.vtuple(upgrade_notes.installed_version())
 
 
+def _print_absent(absent: list[str]):
+    if absent:
+        print(f"Template files of enabled components this repo doesn't have (not added; left out on purpose? "
+              f"else copy from {TEMPLATE}): " + ", ".join(absent))
+
+
 def sync_managed(target: Path, dry_run: bool) -> int:
     steps = upgrades(target)
     covered = covered_notes(target)
     notes, fixed = suggestions(target)
     lags = _reviewed_lags(target)
+    adds = {d.split(" ", 2)[1] for d, _ in steps if d.startswith("add ")}
+    adds |= {c for r, _, new in unedited_templates(target) for c in new}
+    absent = missing_templates(target, adds) if (target / "homelab.yaml").exists() else []
     if not (steps or notes or fixed or lags):
         print("Up to date with the plugin — nothing to change.")
+        _print_absent(absent)
         return 0
     if steps:
         print("One-time updates" + (" (applied by this command):" if dry_run else ":"))
@@ -530,6 +603,7 @@ def sync_managed(target: Path, dry_run: bool) -> int:
         for i, v in fixed:
             print(f"  {i['id']} (#{i['github_number']}) fixed in {v}: {i['title']}")
         print("    → mark them resolved with their yes: `issues.py fixed --apply`")
+    _print_absent(absent)
     have = upgrade_notes.installed_version()
     if dry_run:
         if steps:

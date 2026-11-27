@@ -122,7 +122,8 @@ with `/plugin marketplace update homelab-manager-skill` and then `/plugin`.
 
 **After an update**, the first session in your homelab repo tells you what the new version brings for it:
 
-- **Automatic updates**: template files you never edited are replaced with the new version, after your yes.
+- **Automatic updates**: template files you never edited are replaced with the new version, and a file a playbook
+  needs but your repo is missing is added, after your yes. Template files you don't have are only listed.
 - **Suggestions**: new settings, changes to files you've edited, snapshots to refresh, steps on Proxmox. Each one
   waits until you accept or decline it.
 - **Fixed skill issues**: problems you reported that this release fixed.

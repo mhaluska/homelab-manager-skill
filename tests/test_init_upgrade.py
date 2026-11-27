@@ -790,6 +790,26 @@ class UneditedTemplateTests(unittest.TestCase):  # GitHub issue #68
         self.assertTrue((self.d / "ansible/playbooks/tasks/restart-check.yml").exists())
         self.assertFalse((self.d / "ansible/playbooks/patch-proxmox-node.yml").exists())
 
+    def test_missing_included_file_is_added(self):   # GitHub issue #175
+        rel = "ansible/playbooks/tasks/pve-migrate.yml"
+        (self.d / rel).unlink()                      # never copied, though patch-proxmox-node.yml is current
+        (self.d / "tofu/snippets/example-vendor-data.yaml").unlink()
+        (self.d / "ansible/playbooks/patch-proxmox-node.yml").rename(self.d / "keep.yml")   # an upgrade note offers it
+        shutil.move(self.d / "tofu/environments/homelab", self.d / "tofu/environments/home")   # per-site only
+        out = self.sync("--dry-run").stdout
+        self.assertNotIn("patch-proxmox-node.yml", out.partition("doesn't have")[2])
+        self.assertNotIn("tofu/environments/homelab", out)
+        (self.d / "keep.yml").rename(self.d / "ansible/playbooks/patch-proxmox-node.yml")
+        out = self.sync("--dry-run").stdout
+        self.assertIn(f"would add {rel} (ansible/playbooks/patch-proxmox-node.yml includes it, the repo lacks it)", out)
+        self.assertIn("doesn't have (not added", out)
+        self.assertIn("tofu/snippets/example-vendor-data.yaml", out)
+        self.assertNotIn("tasks/zabbix.yml", out)    # monitoring is off: patch-linux.yml includes it only then
+        self.sync()
+        self.assertEqual((self.d / rel).read_bytes(), (ROOT / self.TPL / rel).read_bytes())
+        self.assertFalse((self.d / "tofu/snippets/example-vendor-data.yaml").exists())
+        self.assertNotIn(rel, self.sync("--dry-run").stdout)
+
     def test_covered_note_drops_edited_text_and_multi_file_note_names_the_rest(self):  # GitHub issue #76
         run("config_set.py", "upgrades.reviewed=0.28.1", cwd=self.d)
         pb = "ansible/playbooks/"
