@@ -12,6 +12,7 @@
     port: "{{ zabbix_agent_port | int }}"
     host: "{{ zbx_now.main.ListenIP | default('127.0.0.1', true) | split(',') | first | trim | regex_replace('^0\\.0\\.0\\.0$', '127.0.0.1') }}"
     timeout: 30
+  when: zabbix_agent_mode != 'active'   # without Server= Agent 2 doesn't listen
 
 - name: It answers agent.ping
   ansible.builtin.command: zabbix_agent2 -c {{ zbx_main_conf }} -t agent.ping

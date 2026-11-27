@@ -147,7 +147,11 @@ zabbix:                      # monitoring component (references/monitoring.md); 
     template_groups: []      # where wrapper and imported templates live, e.g. ["Templates/Home/*"]
   ignore_groups: []          # inventory groups that aren't monitored (host var zabbix_monitor: false for one host)
   agent:                     # ansible/roles/zabbix_agent2 (playbooks/zabbix-agent2.yml)
-    server: ""               # Server= / ServerActive= of the agents, e.g. zabbix.home.arpa
+    server: ""               # Server=: who may poll the agents (passive checks), e.g. zabbix.home.arpa
+    server_active: ""        # ServerActive=: where they send active checks (host[:port], a proxy); empty = server
+    mode: both               # both | passive (no active checks) | active (no passive checks: the agent doesn't listen)
+    host_metadata: ""        # for hosts without HostMetadata, matching your autoregistration actions (zabbix_api.py
+                             # discover lists their conditions), e.g. ":{os}:{distro}{major}:{virt}:"; empty = none
     version: ""              # empty = the server's major version (zabbix_api.py check shows it)
     psk_secret: ""           # optional, a secret below (kind env) with the PSK; identity: psk_identity
     psk_identity: ""

@@ -14,19 +14,29 @@ zabbix_agent_version: >-
      or (((lookup('ansible.builtin.file', playbook_dir ~ '/../../discovery/zabbix.json', errors='ignore') or '{}')
           | from_json).version | default('') | regex_search('^\d+\.\d+') or '') }}
 
-# Server= and ServerActive= (comma-separated, names or addresses). Empty: zabbix.agent.server, else what the
-# host's agent (Agent 2, else the classic agent) already uses.
+# Server= (who may poll the agent: passive checks) and ServerActive= (where it sends active checks; host[:port],
+# several comma-separated, a cluster's nodes separated by ;). Server: zabbix.agent.server; ServerActive:
+# zabbix.agent.server_active, else server. Empty: what the agent that runs on the host already uses.
 zabbix_agent_server: "{{ (zabbix_agent_settings.agent | default({}, true)).server | default('', true) }}"
-zabbix_agent_server_active: "{{ zabbix_agent_server }}"
+zabbix_agent_server_active: >-
+  {{ (zabbix_agent_settings.agent | default({}, true)).server_active | default('', true) or zabbix_agent_server }}
+# both | passive (no ServerActive: active checks off) | active (no Server: passive checks off and the agent doesn't
+# listen; needs templates whose items are "Zabbix agent (active)"). zabbix.agent.mode, default both.
+zabbix_agent_mode: "{{ (zabbix_agent_settings.agent | default({}, true)).mode | default('both', true) }}"
 
 # Hostname= : the host var zabbix_host_name, else the first `pattern` rule of zabbix.host_match that applies to
 # the host (sites:/groups: filters; {host}/{inventory_hostname} = inventory name, {short} = up to the first dot,
 # {domain} = site.domain): the same name zabbix_api.py gives the host in Zabbix.
 zabbix_agent_hostname: "{{ zabbix_host_name | default('', true) }}"
 
-# HostMetadata= (for autoregistration actions): empty = keep what the agent (or the classic agent) has, else
-# "site=<site> os=<distro><major> <inventory groups>".
-zabbix_agent_host_metadata: ""
+# HostMetadata= (what autoregistration actions match): a host keeps the metadata its running agent has; one without
+# gets this pattern (zabbix.agent.host_metadata), e.g. ":{os}:{distro}{major}:{virt}:" → :Linux:Debian13:LXC:.
+# {os} Linux, {distro} Debian/Ubuntu/Rocky…, {major}, {family} Debian/RedHat, {virt} LXC/KVM/Proxmox/Physical/…,
+# {site}, {groups} (inventory groups, space-separated), {host} (inventory name). Empty: no HostMetadata line.
+# -e zabbix_agent_host_metadata_force=true replaces existing metadata too: autoregistration then runs again for
+# those hosts (their actions add groups and templates again).
+zabbix_agent_host_metadata: "{{ (zabbix_agent_settings.agent | default({}, true)).host_metadata | default('', true) }}"
+zabbix_agent_host_metadata_force: false
 
 # PSK encryption: zabbix.agent.psk_secret names a secret (kind env) whose value is the PSK (hex, 32+ chars);
 # run the playbook under `with_secrets.py <that secret> --`. Without it, TLS settings of a migrated classic agent

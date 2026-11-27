@@ -1,0 +1,197 @@
+# Works out this host's agent settings from what linux.yml read (zbx_read, zbx_inc_read, zbx_pkg_state, service facts)
+# and homelab.yaml. It touches nothing on the host.
+- name: What the agents have now
+  ansible.builtin.set_fact:
+    zbx_now: >-
+      {%- set out = {'main': {}, 'dropin': {}, 'classic': {}} -%}
+      {%- for r in zbx_read.results -%}
+        {%- set kind = 'main' if r.item.item == zbx_main_conf else 'dropin' if r.item.item == zbx_dropin else 'classic' -%}
+        {%- for l in (r.content | b64decode).splitlines() | map('trim') | reject('match', '^(#|$)') | select('search', '=') -%}
+          {%- set k, v = l.split('=', 1) -%}
+          {%- if k | trim not in ['UserParameter', 'Include', 'AllowKey', 'DenyKey'] -%}
+            {%- set _ = out[kind].update({k | trim: v | trim}) -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out }}
+    zbx_lines: >-
+      {%- set out = {'classic': [], 'agent2': []} -%}
+      {%- for r in zbx_read.results | selectattr('item.item', 'equalto', zbx_classic_conf) -%}
+        {%- set _ = out.classic.extend((r.content | b64decode).splitlines() | map('trim')) -%}
+      {%- endfor -%}
+      {%- for r in zbx_inc_read.results -%}
+        {%- set _ = out['classic' if r.item.path.startswith('/etc/zabbix/zabbix_agentd.d/') else 'agent2'].extend(
+                      (r.content | b64decode).splitlines() | map('trim')) -%}
+      {%- endfor -%}
+      {{ out }}
+    # package → dpkg status (ii installed, rc removed with its config left); rpm lists installed ones only
+    zbx_pkgs: >-
+      {%- set out = {} -%}
+      {%- for l in zbx_pkg_state.stdout_lines | default([]) if l.split() | length >= 2 -%}
+        {%- set _ = out.update({l.split()[0]: l.split()[1]}) -%}
+      {%- endfor -%}
+      {{ out }}
+    zbx_classic_running: >-
+      {{ (ansible_facts.services['zabbix-agent.service'] | default({})).state | default('') == 'running' }}
+    zbx_agent2_running: >-
+      {{ (ansible_facts.services['zabbix-agent2.service'] | default({})).state | default('') == 'running' }}
+
+# Settings come from the agent that runs. While the classic agent runs and Agent 2 doesn't: its file, then the
+# drop-in, never zabbix_agent2.conf (package defaults such as Server=127.0.0.1, or a leftover of a removed Agent 2).
+# A config whose package isn't installed is never a source.
+- name: Installed agent packages
+  ansible.builtin.set_fact:
+    zbx_installed: >-
+      {%- set known = zbx_pkg_state.stdout is defined -%}
+      {{ {'dropin': not known or (zbx_pkgs['zabbix-agent2'] | default(''))[1:2] == 'i',
+          'main': not known or (zbx_pkgs['zabbix-agent2'] | default(''))[1:2] == 'i',
+          'classic': not known or (zbx_pkgs['zabbix-agent'] | default(''))[1:2] == 'i'} }}
+
+- name: Which configuration counts
+  ansible.builtin.set_fact:
+    zbx_sources: >-
+      {%- set a2 = ['dropin', 'main'] if zbx_installed.main | bool else [] -%}
+      {%- set cl = ['classic'] if zbx_installed.classic | bool else [] -%}
+      {{ (cl + a2 | reject('equalto', 'main') | list) if zbx_classic_running | bool and not zbx_agent2_running | bool
+         else (a2 + cl) }}
+
+- name: Current values
+  ansible.builtin.set_fact:
+    zbx_cur: >-
+      {%- set out = {} -%}
+      {%- for kind in zbx_sources | reverse -%}{%- set _ = out.update(zbx_now[kind]) -%}{%- endfor -%}
+      {{ out }}
+    zbx_leftover: >-
+      {%- set out = [] -%}
+      {%- for kind, path in [['main', zbx_main_conf], ['dropin', zbx_dropin], ['classic', zbx_classic_conf]]
+            if zbx_now[kind] and not zbx_installed[kind] | bool -%}
+        {%- set _ = out.append(path) -%}
+      {%- endfor -%}
+      {{ out }}
+    zbx_classic_present: "{{ 'classic' in zbx_sources and zbx_now.classic | length > 0 }}"
+    zbx_virt: >-
+      {%- set f = ansible_facts -%}
+      {%- if 'proxmox_nodes' in group_names -%}Proxmox
+      {%- elif f.virtualization_role | default('') == 'guest' -%}
+        {{ {'lxc': 'LXC', 'kvm': 'KVM', 'openvz': 'OpenVZ', 'xen': 'Xen', 'docker': 'Docker', 'podman': 'Podman',
+            'container': 'Container', 'VMware': 'VMware', 'VirtualBox': 'VirtualBox'}.get(
+            f.virtualization_type | default(''), f.virtualization_type | default('VM')) }}
+      {%- else -%}Physical{%- endif -%}
+
+- name: The settings for this host
+  ansible.builtin.set_fact:
+    zbx_server: "{{ '' if zabbix_agent_mode == 'active' else (zabbix_agent_server or zbx_cur.Server | default('')) }}"
+    zbx_server_active: >-
+      {{ '' if zabbix_agent_mode == 'passive' else (zabbix_agent_server_active or zbx_cur.ServerActive | default('')) }}
+    zbx_hostname: >-
+      {%- set ns = namespace(name='') -%}
+      {%- set sites = group_names | select('match', '^site_') | map('regex_replace', '^site_', '') | list or ['default'] -%}
+      {%- set domain = (zabbix_agent_homelab.site | default({}, true)).domain | default('', true) -%}
+      {%- for r in zabbix_agent_settings.host_match | default([], true) if not ns.name and r.pattern is defined -%}
+        {%- if (not r.sites | default([]) or r.sites | map('string') | intersect(sites))
+               and (not r.groups | default([]) or r.groups | map('string') | intersect(group_names)) -%}
+          {%- set ns.name = r.pattern | replace('{inventory_hostname}', inventory_hostname)
+                            | replace('{host}', inventory_hostname) | replace('{short}', inventory_hostname.split('.')[0])
+                            | replace('{domain}', domain) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ zabbix_agent_hostname or ns.name }}
+    zbx_metadata_have: "{{ zbx_cur.HostMetadata | default('') }}"
+    zbx_metadata_new: >-
+      {{ zabbix_agent_host_metadata
+         | replace('{os}', ansible_facts.system | default('Linux'))
+         | replace('{distro}', ansible_facts.distribution | default(''))
+         | replace('{major}', ansible_facts.distribution_major_version | default(''))
+         | replace('{family}', ansible_facts.os_family | default(''))
+         | replace('{virt}', zbx_virt)
+         | replace('{site}', group_names | select('match', '^site_') | map('regex_replace', '^site_', '')
+                             | first | default('default'))
+         | replace('{groups}', group_names | reject('match', '^site_') | join(' '))
+         | replace('{host}', inventory_hostname) | truncate(255, true, '') }}
+    zbx_psk_env: >-
+      {{ ((zabbix_agent_homelab.secrets | default({}, true))[zabbix_agent_psk_secret] | default({})).env | default('')
+         if zabbix_agent_psk_secret else '' }}
+
+# The server's autoregistration actions (zabbix_api.py discover records their host-metadata conditions): a value
+# that matches none of them gives a new or re-registered host no groups or templates. An action's metadata
+# conditions count together for "and" (and a custom formula: an approximation), any one for "or" and "and/or"
+# (Zabbix ORs conditions of one type there); conditions of other types aren't known here.
+- name: HostMetadata
+  ansible.builtin.set_fact:
+    zbx_metadata: >-
+      {{ zbx_metadata_new if zbx_metadata_new and (not zbx_metadata_have or zabbix_agent_host_metadata_force | bool)
+         else zbx_metadata_have }}
+    zbx_autoreg: >-
+      {{ ((lookup('ansible.builtin.file', playbook_dir ~ '/../../discovery/zabbix.json', errors='ignore') or '{}')
+          | from_json).autoregistration | default([], true) | selectattr('enabled') | selectattr('metadata') | list }}
+
+- name: Does an autoregistration action match it
+  ansible.builtin.set_fact:
+    zbx_metadata_unmatched: >-
+      {%- set ns = namespace(hit=false) -%}
+      {%- for a in zbx_autoreg -%}
+        {%- set r = namespace(all=true, any=false) -%}
+        {%- for c in a.metadata -%}
+          {%- set ok = (c.op == 'contains' and c.value in zbx_metadata)
+                       or (c.op == 'not contains' and c.value not in zbx_metadata)
+                       or (c.op == 'matches' and zbx_metadata is search(c.value))
+                       or (c.op == 'not matches' and zbx_metadata is not search(c.value)) -%}
+          {%- set r.all = r.all and ok -%}
+          {%- set r.any = r.any or ok -%}
+        {%- endfor -%}
+        {%- if (r.all if a.eval | default('and/or') in ['and', 'custom'] else r.any) -%}{%- set ns.hit = true -%}{%- endif -%}
+      {%- endfor -%}
+      {{ zbx_autoreg | length > 0 and zbx_metadata | length > 0 and not ns.hit }}
+
+- name: Server and Hostname are known
+  ansible.builtin.assert:
+    that:
+      - zabbix_agent_mode in ['both', 'passive', 'active']
+      - zabbix_agent_mode == 'active' or zbx_server | length > 0
+      - zabbix_agent_mode != 'active' or zbx_server_active | length > 0
+      - zbx_hostname | length > 0
+      - not zabbix_agent_psk_secret or (zbx_psk_env | length > 0 and zabbix_agent_psk_identity | length > 0
+                                        and lookup('ansible.builtin.env', zbx_psk_env) | length >= 32)
+    fail_msg: >-
+      {{ inventory_hostname }}:
+      {{- (' zabbix.agent.mode is ' ~ zabbix_agent_mode ~ ': use both, passive or active;')
+          if zabbix_agent_mode not in ['both', 'passive', 'active'] else '' }}
+      {{- ' no Server: set zabbix.agent.server in homelab.yaml (the address agents report to);'
+          if zabbix_agent_mode != 'active' and not zbx_server else '' }}
+      {{- ' no ServerActive: set zabbix.agent.server_active (or server) for active-only agents;'
+          if zabbix_agent_mode == 'active' and not zbx_server_active else '' }}
+      {{- ' no Hostname: set the host var zabbix_host_name or a `pattern` rule in zabbix.host_match;' if not zbx_hostname else '' }}
+      {{- (' PSK: zabbix.agent.psk_secret is ' ~ zabbix_agent_psk_secret ~ ': it needs an `env` under secrets:, '
+           'zabbix.agent.psk_identity, and the run under `with_secrets.py ' ~ zabbix_agent_psk_secret
+           ~ ' --` (a hex PSK of at least 32 characters)') if zabbix_agent_psk_secret else '' }}
+
+# An empty value is left out of the drop-in (Server unset: no passive checks; ServerActive unset: no active checks);
+# the key is still commented out in zabbix_agent2.conf so the package's default doesn't apply.
+- name: What goes into the drop-in
+  ansible.builtin.set_fact:
+    zbx_settings: >-
+      {%- set s = {'Server': zbx_server, 'ServerActive': zbx_server_active, 'Hostname': zbx_hostname,
+                   'HostMetadata': zbx_metadata} -%}
+      {%- if zabbix_agent_port | int != 10050 -%}{%- set _ = s.update({'ListenPort': zabbix_agent_port | string}) -%}{%- endif -%}
+      {%- if zabbix_agent_psk_secret -%}
+        {%- set _ = s.update({'TLSConnect': 'psk', 'TLSAccept': 'psk', 'TLSPSKIdentity': zabbix_agent_psk_identity,
+                              'TLSPSKFile': zabbix_agent_psk_file}) -%}
+      {%- else -%}
+        {%- for k in zbx_tls_keys if zbx_cur[k] | default('') -%}
+          {%- set _ = s.update({k: zbx_cur[k]}) -%}
+        {%- endfor -%}
+      {%- endif -%}
+      {%- for k in zabbix_agent_carry_over if zbx_cur[k] | default('') -%}
+        {%- set _ = s.update({k: zbx_cur[k]}) -%}
+      {%- endfor -%}
+      {{ s }}
+    # classic UserParameters Agent 2 doesn't have yet (a key defined twice stops the agent); none from a leftover file
+    zbx_userparams: >-
+      {%- set have = zbx_lines.agent2 | select('match', '^UserParameter\s*=') | map('regex_replace', '^UserParameter\s*=\s*([^,]+),.*$', '\1')
+                     | map('trim') | list -%}
+      {{ (zbx_lines.classic if 'classic' in zbx_sources else []) | select('match', '^UserParameter\s*=')
+         | reject('search', '^UserParameter\s*=\s*(' ~ (have | map('regex_escape') | join('|') or '(?!)') ~ ')\s*,')
+         | unique | list }}
+    zbx_not_copied: >-
+      {{ (zbx_lines.classic if 'classic' in zbx_sources else []) | select('match', '^(' ~ zbx_risky_keys | join('|') ~ ')\s*=')
+         | unique | list }}

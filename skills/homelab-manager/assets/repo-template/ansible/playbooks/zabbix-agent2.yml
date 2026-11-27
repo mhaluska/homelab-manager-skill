@@ -2,8 +2,9 @@
 #   ansible-playbook playbooks/zabbix-agent2.yml -l <host> --check --diff     # what would change, always first
 #   ansible-playbook playbooks/zabbix-agent2.yml -l <host>                     # one host, then the rest
 #   ansible-playbook playbooks/zabbix-agent2.yml [-e target=<group>]           # default: linux
-# Settings come from homelab.yaml (zabbix.agent: server, version, psk_secret, psk_identity; zabbix.host_match names the
-# agent like zabbix_api.py names the host). With a PSK: run under `with_secrets.py <zabbix.agent.psk_secret> --`.
+# Settings come from homelab.yaml (zabbix.agent: server, server_active, mode, host_metadata, version, psk_secret,
+# psk_identity; zabbix.host_match names the agent like zabbix_api.py names the host). With a PSK: run under
+# `with_secrets.py <zabbix.agent.psk_secret> --`.
 # Installing on many hosts is an approval item. A host running the classic zabbix-agent gets Agent 2 installed and
 # configured (its Server, TLS and UserParameter settings carried over) but keeps the classic agent running;
 # -e zabbix_agent_migrate=true switches: stops the classic agent, starts and checks Agent 2, disables the classic

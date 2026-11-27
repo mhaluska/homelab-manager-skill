@@ -30,8 +30,13 @@
 
 - name: Server and Hostname are set
   ansible.builtin.assert:
-    that: [zabbix_agent_server | length > 0, zbx_win_hostname | length > 0]
-    fail_msg: "{{ inventory_hostname }}: set zabbix.agent.server and a host_match pattern (or zabbix_host_name)."
+    that:
+      - zabbix_agent_mode in ['both', 'passive', 'active']
+      - (zabbix_agent_server if zabbix_agent_mode != 'active' else zabbix_agent_server_active) | length > 0
+      - zbx_win_hostname | length > 0
+    fail_msg: >-
+      {{ inventory_hostname }}: set zabbix.agent.server (server_active for zabbix.agent.mode active; mode is both,
+      passive or active) and a host_match pattern (or zabbix_host_name).
 
 - name: Download the MSI (checked by its SHA-256)
   ansible.windows.win_get_url:
@@ -47,7 +52,8 @@
     path: C:\Windows\Temp\zabbix_agent2-{{ zabbix_agent_windows_version }}.msi
     state: present
     arguments: >-
-      /qn SERVER={{ zabbix_agent_server }} SERVERACTIVE={{ zabbix_agent_server_active }}
+      /qn {{ ('SERVER=' ~ zabbix_agent_server) if zabbix_agent_mode != 'active' else '' }}
+      {{ ('SERVERACTIVE=' ~ zabbix_agent_server_active) if zabbix_agent_mode != 'passive' else '' }}
       HOSTNAME={{ zbx_win_hostname }} LISTENPORT={{ zabbix_agent_port }}
   when: not ansible_check_mode
 
