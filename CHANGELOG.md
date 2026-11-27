@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased
+
+Adding a component or syncing after an update now touches only what it should, and the Zabbix Agent 2 role fits
+servers that already have agents and autoregistration set up.
+
+### Improved
+- **New `homelab.yaml` sections stay readable.** `init_repo.py --add-components` adds the new component's section
+  from the template, with its comments, when your `homelab.yaml` lacks it. `config_set.py` writes a new mapping, or
+  a list of mappings, in block style instead of one long line; values that are already inline stay inline.
+  ([#176](https://github.com/mhaluska/homelab-manager-skill/issues/176))
+
+### Fixed
+- **Zabbix Agent 2 role: separate ServerActive and a mode.** `zabbix.agent.server_active` now sets ServerActive=
+  (it used to copy Server=), and `zabbix.agent.mode` chooses `both`, `passive` or `active` agents.
+  `zabbix_api.py discover` shows which checks your agents and templates use and suggests the mode.
+  ([#178](https://github.com/mhaluska/homelab-manager-skill/issues/178))
+- **Agent 2 role: host metadata that your autoregistration matches.** Hosts keep their own HostMetadata; one
+  without gets your pattern `zabbix.agent.host_metadata` (e.g. `:{os}:{distro}{major}:{virt}:`) instead of a
+  format no action matched. `discover` lists the actions' conditions and the run warns when nothing would match.
+  Settings now come from the agent that runs, never from a leftover config of a removed one.
+  ([#179](https://github.com/mhaluska/homelab-manager-skill/issues/179))
+- **`--check --diff` works on hosts without Agent 2.** The role's check run no longer fails there on a package
+  the not-yet-added Zabbix repository would provide; it says what it would install.
+- **`--add-components` adds only the new component.** It used to create every missing file of all enabled parts,
+  including a default OpenTofu environment next to per-site ones and files still waiting for your yes. Gaps in the
+  other parts are now listed by `--sync-managed`, never filled silently. It no longer registers the plugin
+  marketplace in an existing repo either. ([#177](https://github.com/mhaluska/homelab-manager-skill/issues/177))
+- **`--sync-managed` adds files your playbooks include but the repo lacks.** A repo whose
+  `patch-proxmox-node.yml` came without `tasks/pve-migrate.yml` gets it as a one-time update, so a node patch
+  that migrates guests no longer fails on the include. ([#175](https://github.com/mhaluska/homelab-manager-skill/issues/175))
+
+### Upgrading
+- With the monitoring component, `--sync-managed` replaces an unedited `zabbix_agent2` role, or suggests merging
+  an edited one. Then run `zabbix_api.py discover`, set the `zabbix.agent` keys it suggests and drop a
+  `group_vars` line that set `zabbix_agent_server_active` by hand.
+
 ## 0.65.0 — 2026-11-26
 
 The skill now works with Zabbix: it reads your monitoring, keeps it as data in the repository, and checks
