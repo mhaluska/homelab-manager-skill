@@ -27,7 +27,9 @@
   upgrade-note suggestions instead.
 - Records the choice under `components:` in homelab.yaml — the skill ignores disabled parts.
 - `git init -b main` if needed; core.hooksPath → scripts/git-hooks (blocks committing secrets).
-- Registers this plugin's marketplace in .claude/settings.json when its Git remote is known.
+- A new repo: registers this plugin's marketplace in .claude/settings.json when its Git remote is known.
+- --add-components: only the files of the newly enabled components (and their homelab.yaml sections, from the
+  template with its comments, when missing); never the default OpenTofu environment in a repo with per-site ones.
 - --add-site: the site's OpenTofu environment tofu/environments/<name> (proxmox component) and a site.tf in it
   and in the default environment that refuses another site's token; group_vars/site_<name>.yml (ansible). For the
   default site only group_vars/site_<name>.yml (it uses the top-level settings and environment). It points out
@@ -90,6 +92,11 @@ COMPONENTS = {
                    ["ansible"], ["zabbix/", "docs/zabbix-api-users.md", "ansible/roles/zabbix_agent2/",
                                  "ansible/playbooks/zabbix-agent2.yml", "ansible/playbooks/tasks/zabbix.yml"]),
 }
+# Top-level homelab.yaml sections of a component: --add-components inserts the template's (with its comments) into a
+# repo that lacks them (GitHub issue #176).
+SECTIONS = {"proxmox": ["proxmox", "vmid_ranges", "opentofu"], "templates": ["templates"],
+            "ansible": ["ansible", "clusters"], "discovery": ["discovery"], "monitoring": ["zabbix"]}
+DEFAULT_ENV = "tofu/environments/homelab/"
 CORE = ["homelab.yaml", "README.md", "CLAUDE.md", "skill_issues.md", ".gitignore", ".claude/", "docs/README.md",
         "docs/decisions.md", "docs/recovery.md", "scripts/", "discovery/"]
 # Owned by the plugin: kept identical to the template by --sync-managed (headers say so). None at the moment.
@@ -795,6 +802,85 @@ def name_default_site(target: Path, name: str, steps: list[str], dry_run: bool) 
     return 0
 
 
+def _section_lines(lines: list[str], key: str) -> tuple[int, int] | None:
+    """(first, end) of top-level `key:` in lines: the comment lines right above it, its body and comments that
+    follow it directly; not the blank line and comments that lead into the next section."""
+    rx = re.compile(rf"^{re.escape(key)}:(\s|$)")
+    at = next((i for i, l in enumerate(lines) if rx.match(l)), None)
+    if at is None:
+        return None
+    first = at
+    while first and lines[first - 1].startswith("#"):
+        first -= 1
+    end = at + 1
+    for j in range(at + 1, len(lines)):
+        l = lines[j]
+        if not l.strip():
+            continue
+        if l[0] not in " #" or (l[0] == "#" and not lines[j - 1].strip()):
+            break
+        end = j + 1
+    return first, end
+
+
+def _top_keys(lines: list[str]) -> list[str]:
+    return [m.group(1) for m in (re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):(\s|$)", l) for l in lines) if m]
+
+
+def missing_sections(target: Path, comps: list[str]) -> list[str]:
+    """Top-level homelab.yaml sections of these components that the repo's homelab.yaml lacks."""
+    cfg = target / "homelab.yaml"
+    if not cfg.is_file():
+        return []
+    have = set(_top_keys(cfg.read_text().splitlines()))
+    tpl = set(_top_keys((TEMPLATE / "homelab.yaml").read_text().splitlines()))
+    return [k for c in comps for k in SECTIONS.get(c, []) if k in tpl and k not in have]
+
+
+def add_sections(target: Path, keys: list[str]) -> None:
+    """Insert the template's sections (with their comments) where the template has them; checked with yq."""
+    cfg = target / "homelab.yaml"
+    old = cfg.read_text()
+    lines = old.splitlines(keepends=True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    tpl_lines = (TEMPLATE / "homelab.yaml").read_text().splitlines(keepends=True)
+    order = _top_keys(tpl_lines)
+    for key in keys:
+        a, b = _section_lines(tpl_lines, key)
+        block = tpl_lines[a:b]
+        later = order[order.index(key) + 1:]
+        have = _top_keys(lines)
+        nxt = next((k for k in later if k in have), None)
+        if nxt is None:
+            at = len(lines)
+            block = (["\n"] if lines and lines[-1].strip() else []) + block
+        else:
+            at = _section_lines(lines, nxt)[0]
+            block = block + ["\n"]
+        lines[at:at] = block
+    new = "".join(lines)
+    want, got, tpl = config_set.yq_json(old), config_set.yq_json(new), config_set.yq_json("".join(tpl_lines))
+    want.update({k: tpl.get(k) for k in keys})
+    if got != want:
+        raise config_set.EditError(f"adding {', '.join(keys)} to homelab.yaml did not give the template's sections; "
+                                   "nothing was written. Copy them from the template homelab.yaml by hand.")
+    hmlib.atomic_write(cfg, new)
+
+
+def multi_site(target: Path) -> bool:
+    """The repo has per-site OpenTofu environments (or sites:): the default environment is not scaffolded."""
+    envs = target / "tofu" / "environments"
+    if envs.is_dir() and any(d.is_dir() and d.name != "homelab" for d in envs.iterdir()):
+        return True
+    cfg = target / "homelab.yaml"
+    if not cfg.is_file():
+        return False
+    r = subprocess.run([hmlib.yq_bin(), '.sites // [] | length', str(cfg)], capture_output=True, text=True,
+                       timeout=hmlib.YQ_TIMEOUT)
+    return r.stdout.strip() not in ("", "0")
+
+
 def git(*args, cwd=None):
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
 
@@ -919,14 +1005,24 @@ def main():
     else:
         comps = existing or list(COMPONENTS)
     added = [c for c in comps if c not in existing]
+    # Adding components to a repo: only the files of the newly enabled ones (GitHub issue #177). Missing files of
+    # components already on are --sync-managed's to list; the files upgrade notes offer stay opt-in there.
+    only_new = bool(a.add_components and existing)
+    no_default_env = multi_site(target)
+    sections = missing_sections(target, added) if only_new else []
 
-    created, kept, merged = [], [], []
+    created, kept, merged, skipped_env = [], [], [], False
     kinds = None if not (target / "homelab.yaml").exists() else TIGHTENING   # allow rules: a new repo only (#157)
     for src in sorted(TEMPLATE.rglob("*")):
         if src.is_dir() or src.name == ".DS_Store":
             continue
         rel = src.relative_to(TEMPLATE).as_posix()
         if not wanted(rel, comps):
+            continue
+        if only_new and wanted(rel, existing) and rel != ".claude/settings.json":
+            continue
+        if no_default_env and rel.startswith(DEFAULT_ENV) and not (target / DEFAULT_ENV).is_dir():
+            skipped_env = True
             continue
         dst = target / rel
         if dst.exists():
@@ -946,6 +1042,8 @@ def main():
             shutil.copy2(src, dst)
 
     if not a.dry_run:
+        if sections:
+            add_sections(target, sections)
         config_set.edit_file(target / "homelab.yaml", [("set", f"components.{n}", n in comps) for n in COMPONENTS])
         if "homelab.yaml" in created:  # a new repo has every current feature: no upgrade notes for it
             record_reviewed(target)
@@ -954,7 +1052,7 @@ def main():
             print(r.stdout.strip() or r.stderr.strip())
         git("config", "core.hooksPath", "scripts/git-hooks", cwd=target)
         settings = target / ".claude" / "settings.json"
-        src = marketplace_source()
+        src = marketplace_source() if "homelab.yaml" in created else None   # a new repo only (GitHub issue #177)
         if src and settings.exists():
             data = json.loads(settings.read_text())
             data.setdefault("extraKnownMarketplaces", {}).setdefault("homelab-manager-skill", {"source": src})
@@ -965,6 +1063,12 @@ def main():
     print(f"{'Would create' if a.dry_run else 'Created'} {len(created)} file(s) in {target}")
     for c in created:
         print(f"  + {c}")
+    if sections:
+        print(f"{'Would add' if a.dry_run else 'Added'} the template's homelab.yaml section(s) {', '.join(sections)} "
+              "(fill in the values with config_set.py)")
+    if skipped_env:
+        print(f"Left out the default OpenTofu environment {DEFAULT_ENV}: this repo has per-site environments "
+              "(init_repo.py --add-site NAME scaffolds one)")
     if merged:
         print(f"{'Would merge' if a.dry_run else 'Merged'} template permission rules into: {', '.join(merged)}")
     if kept:

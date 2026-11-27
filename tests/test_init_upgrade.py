@@ -63,6 +63,47 @@ class InitComponentsTests(unittest.TestCase):
         comps = json.loads(yq(".components", Path(self.d) / "homelab.yaml"))
         self.assertTrue(comps["ansible"] and comps["proxmox"])
 
+    def test_add_component_creates_only_its_files_and_section(self):   # GitHub issues #177, #176
+        run("init_repo.py", self.d, "--components", "proxmox,ansible,kubernetes", cwd=self.d)
+        p = Path(self.d)
+        subprocess.run(["git", "-C", self.d, "remote", "add", "origin", "https://example.invalid/x.git"], check=True)
+        cfg = p / "homelab.yaml"
+        settings = json.loads((p / ".claude/settings.json").read_text())
+        settings.pop("extraKnownMarketplaces", None)
+        (p / ".claude/settings.json").write_text(json.dumps(settings))          # the user removed it on purpose
+        run("config_set.py", "--delete", "zabbix", cwd=self.d)
+        shutil.rmtree(p / "tofu/environments/homelab")                          # per-site environments only
+        (p / "tofu/environments/home").mkdir()
+        gone = ["ansible/playbooks/hooks/k8s-health.yml", "tofu/snippets/example-vendor-data.yaml",
+                "ansible/playbooks/ping.yml"]
+        for rel in gone:
+            (p / rel).unlink()
+        r = run("init_repo.py", self.d, "--add-components", "monitoring", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("newly enabled: monitoring", r.stdout)
+        for rel in gone:
+            self.assertFalse((p / rel).exists(), rel)                       # other components: --sync-managed lists
+        self.assertFalse((p / "tofu/environments/homelab").exists())
+        for rel in ("zabbix/README.md", "ansible/roles/zabbix_agent2/tasks/main.yml", "ansible/playbooks/tasks/zabbix.yml"):
+            self.assertTrue((p / rel).exists(), rel)
+        self.assertIn("Added the template's homelab.yaml section(s) zabbix", r.stdout)
+        tpl = (SCRIPTS.parent / "assets/repo-template/homelab.yaml").read_text()
+        block = tpl[tpl.index("zabbix:"):tpl.index("\n\n", tpl.index("zabbix:"))]
+        self.assertIn(block + "\n\n# Keychain items", cfg.read_text())       # with its comments, before secrets:
+        self.assertEqual(yq(".components.monitoring", cfg), "true")
+        self.assertNotIn("extraKnownMarketplaces", (p / ".claude/settings.json").read_text())
+        r = run("init_repo.py", self.d, "--add-components", "proxmox", "--dry-run", cwd=self.d)
+        self.assertIn("Would create 0 file(s)", r.stdout)
+
+    def test_add_proxmox_to_a_multi_site_repo_skips_the_default_environment(self):
+        run("init_repo.py", self.d, "--components", "ansible", cwd=self.d)
+        run("config_set.py", "sites+={name: home}", cwd=self.d)
+        r = run("init_repo.py", self.d, "--add-components", "proxmox", cwd=self.d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(Path(self.d, "tofu/environments/homelab").exists())
+        self.assertTrue(Path(self.d, "tofu/modules/proxmox-vm/main.tf").exists())
+        self.assertIn("--add-site NAME", r.stdout)
+
     def test_repo_modes_find_the_repo_from_a_subdirectory(self):
         # GitHub issue #164: run from ansible/, --sync-managed said "up to date" for a repo with pending notes
         run("init_repo.py", self.d, "--components", "ansible", cwd=self.d)

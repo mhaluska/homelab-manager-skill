@@ -49,7 +49,8 @@ flowchart LR
 
 ## What it can do
 
-Setup asks which parts you use and scaffolds only those; you can add the others later.
+Setup asks which parts you use and scaffolds only those; you can add the others later. Adding one brings in only
+its files and its `homelab.yaml` section, with the template's comments.
 
 | Area | What you get | Try saying |
 |---|---|---|
