@@ -172,14 +172,21 @@ def discover(c: zbxlib.Client, cfg: dict, inv: dict[str, dict]) -> dict:
                              for i in p.pop("hostids")})
     tids = sorted({t["templateid"] for zh in zhosts if zh["hostid"] in managed_ids for t in zh.get("parentTemplates") or []})
     templates = {}
+    kinds = {}   # agent item types of the managed hosts' templates: 0 passive, 7 active (GitHub issue #178)
     if tids:
+        for it in c.call("item.get", {"output": ["hostid", "type"], "hostids": tids, "templated": True,
+                                      "filter": {"type": ["0", "7"]}}) or []:
+            kind = {"0": "agent", "7": "agent_active"}.get(str(it.get("type")))
+            if kind:
+                kinds.setdefault(it.get("hostid"), {"agent": 0, "agent_active": 0})[kind] += 1
         for t in c.call("template.get", {"output": ["templateid", "host", "vendor_name", "vendor_version"],
                                          "templateids": tids, "selectTemplateGroups": ["name"],
                                          "selectParentTemplates": ["host"]}) or []:
             templates[hmlib.clean(t["host"], 128)] = {
                 "vendor": f"{t.get('vendor_name') or ''} {t.get('vendor_version') or ''}".strip(),
                 "groups": [g["name"] for g in t.get("templategroups") or []],
-                "links": [p["host"] for p in t.get("parentTemplates") or []]}
+                "links": [p["host"] for p in t.get("parentTemplates") or []],
+                "agent_items": kinds.get(t["templateid"], {"agent": 0, "agent_active": 0})}
     maint = c.call("maintenance.get", {"output": ["maintenanceid", "name", "active_since", "active_till"],
                                        "selectHosts": ["hostid"], "selectHostGroups": ["name"]}) or []
     proxies = c.call("proxy.get", {"output": ["proxyid", "name", "lastaccess", "version"]}) or []
@@ -200,7 +207,37 @@ def discover(c: zbxlib.Client, cfg: dict, inv: dict[str, dict]) -> dict:
                           "ours": str(x["name"]).startswith(MAINT_PREFIX)} for x in maint],
         "proxies": [{"name": hmlib.clean(p["name"], 128), "lastaccess": int(p.get("lastaccess") or 0),
                      "version": p.get("version") or ""} for p in proxies],
+        "autoregistration": zbxlib.read_autoregistration(c),
     }
+
+
+def agent_setup(data: dict) -> list[str]:
+    """What the agent settings (zabbix.agent.mode, host_metadata) should follow, from what the managed hosts and
+    their templates use today and the server's autoregistration actions (GitHub issues #178, #179)."""
+    hosts = [h for h in data["hosts"].values() if h.get("managed") and h.get("enabled")]
+    checks = [h.get("checks") or {} for h in hosts]
+    passive = sum(c.get("passive") == "available" for c in checks)
+    active = sum(c.get("active") == "available" for c in checks)
+    items = [t.get("agent_items") or {} for t in data["templates"].values()]
+    pi, ai = sum(i.get("agent", 0) for i in items), sum(i.get("agent_active", 0) for i in items)
+    out = []
+    if hosts:
+        mode = ("active" if ai and not pi and not passive else "passive" if pi and not ai and not active else "both")
+        out.append(f"agents: {passive} of {len(hosts)} managed hosts answer passive checks, {active} send active "
+                   f"checks; their templates have {pi} passive and {ai} active agent items → zabbix.agent.mode: {mode}")
+    ar = data.get("autoregistration")
+    if ar is None:
+        out.append("autoregistration: the token may not read actions (action.get); ask which HostMetadata the "
+                   "server's autoregistration actions expect before setting zabbix.agent.host_metadata")
+    else:
+        join = {"and": " and ", "or": " or ", "and/or": " or ", "custom": " and "}
+        conds = [f"{a['name']}: " + join.get(a.get("eval"), " or ").join(f"{c['op']} {c['value']!r}" for c in a["metadata"])
+                 + (f" (formula {a['formula']})" if a.get("formula") else "")
+                 for a in ar if a["enabled"] and a["metadata"]]
+        out.append("autoregistration host-metadata conditions: " + ("; ".join(conds) if conds else
+                   "none visible (no autoregistration by HostMetadata, or its actions use groups or templates the "
+                   "read-only user can't read)"))
+    return out
 
 
 MAINT_PREFIX = "homelab-manager "
@@ -217,6 +254,8 @@ def cmd_discover(a, cfg) -> int:
           f"{len(data['ambiguous'])} ambiguous, {len(data['problems'])} open problems on them.")
     for amb in data["ambiguous"]:
         print(f"  ambiguous: {amb['inventory']} → {', '.join(amb['candidates'])} ({amb['why']})")
+    for line in agent_setup(data):
+        print("  " + line)
     down = [n for n, h in data["hosts"].items() if h["managed"] and h["enabled"] and h["agent"] == "unavailable"]
     if down:
         print("  agent unavailable: " + ", ".join(down))

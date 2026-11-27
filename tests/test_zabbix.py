@@ -171,6 +171,43 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(seen, [("apiinfo.version", None), ("host.update", "Bearer secret-token")])
 
 
+class DiscoverAgentTests(unittest.TestCase):   # GitHub issues #178, #179
+    def test_checks_template_item_types_and_autoregistration(self):
+        d = base_data()
+        d["host"][0]["interfaces"] = []                              # web1: active checks only
+        d["item"] = [{"itemid": "1", "hostid": "501", "type": "7"}, {"itemid": "2", "hostid": "501", "type": "7"},
+                     {"itemid": "3", "hostid": "501", "type": "2"}]
+        d["action"] = [{"actionid": "1", "name": "Linux autoreg", "status": "0", "eventsource": "2",
+                        "filter": {"evaltype": "1", "conditions": [{"conditiontype": "24", "operator": "2", "value": ":Linux:"},
+                                                  {"conditiontype": "22", "operator": "2", "value": "x"}]}},
+                       {"actionid": "2", "name": "Off", "status": "1", "eventsource": "2",
+                        "filter": {"conditions": [{"conditiontype": "24", "operator": "8", "value": "^Win"}]}},
+                       {"actionid": "3", "name": "Trigger action", "status": "0", "eventsource": "0", "filter": {}}]
+        data = zabbix_api.discover(FakeZabbix(d), CFG, INV)
+        self.assertEqual(data["hosts"]["web1"]["checks"], {"passive": "none", "active": "available"})
+        self.assertEqual(data["hosts"]["db1"]["checks"]["passive"], "available")
+        self.assertEqual(data["templates"]["Home Linux"]["agent_items"], {"agent": 0, "agent_active": 2})
+        self.assertEqual(data["autoregistration"], [
+            {"name": "Linux autoreg", "enabled": True, "eval": "and",
+             "metadata": [{"op": "contains", "value": ":Linux:"}]},
+            {"name": "Off", "enabled": False, "eval": "and/or", "metadata": [{"op": "matches", "value": "^Win"}]}])
+        setup = "\n".join(zabbix_api.agent_setup(data))
+        self.assertIn("2 send active checks", setup)
+        self.assertIn("zabbix.agent.mode: both", setup)               # db1 still answers passive checks
+        self.assertIn("Linux autoreg: contains ':Linux:'", setup)
+        self.assertNotIn("^Win", setup)                               # disabled action
+
+    def test_no_action_access(self):
+        class NoActions(FakeZabbix):
+            def call(self, method, params=None):
+                if method == "action.get":
+                    raise zbxlib.ZabbixError("No permissions to call \"action.get\".")
+                return super().call(method, params)
+        data = zabbix_api.discover(NoActions(), CFG, INV)
+        self.assertIsNone(data["autoregistration"])
+        self.assertIn("may not read actions", "\n".join(zabbix_api.agent_setup(data)))
+
+
 class MatchTests(unittest.TestCase):
     def zhosts(self):
         return base_data()["host"]

@@ -385,6 +385,7 @@ def host_summary(h: dict) -> dict:
             "macros": sorted(m.get("macro") for m in h.get("macros") or []),
             "interfaces": ifaces,
             "agent": agent_availability(h),
+            "checks": agent_checks(h),
             "encryption": {"connect": str(h.get("tls_connect") or "1"), "accept": str(h.get("tls_accept") or "1")},
             "proxyid": str(h.get("proxyid") or "0"),
             "inventory": {k: hmlib.clean(v, 200) for k, v in inv.items() if v and k in INVENTORY_FIELDS}}
@@ -407,6 +408,42 @@ def agent_availability(h: dict) -> str:
     if "unavailable" in states or act == "unavailable":
         return "unavailable"
     return "unknown" if ag or act != "unknown" else "none"
+
+
+def agent_checks(h: dict) -> dict:
+    """{"passive": state of the agent interface or none, "active": active checks status} (GitHub issue #178)."""
+    ag = [AVAILABLE.get(str(i.get("available")), "unknown") for i in h.get("interfaces") or [] if str(i.get("type")) == "1"]
+    passive = "available" if "available" in ag else (ag[0] if ag else "none")
+    return {"passive": passive, "active": AVAILABLE.get(str(h.get("active_available")), "unknown")}
+
+
+# action condition 24 = host metadata; operators: 2 contains, 3 does not contain, 8 matches, 9 does not match
+METADATA_OPS = {"2": "contains", "3": "not contains", "8": "matches", "9": "not matches"}
+# how an action combines its conditions: and/or = conditions of one type OR'ed, of different types AND'ed
+EVAL_TYPES = {"0": "and/or", "1": "and", "2": "or", "3": "custom"}
+
+
+def read_autoregistration(c: Client) -> list[dict] | None:
+    """The host-metadata conditions of the autoregistration actions and how each action combines them (GitHub
+    issue #179); None when the token may not read actions."""
+    try:
+        acts = c.call("action.get", {"output": ["actionid", "name", "status", "eventsource"],
+                                     "filter": {"eventsource": "2"}, "selectFilter": "extend"}) or []
+    except ZabbixError:
+        return None
+    out = []
+    for a in acts:
+        if str(a.get("eventsource", "2")) != "2":
+            continue
+        conds = (a.get("filter") or {}).get("conditions") or []
+        flt = a.get("filter") or {}
+        out.append({"name": hmlib.clean(a.get("name"), 128), "enabled": str(a.get("status")) == "0",
+                    "eval": EVAL_TYPES.get(str(flt.get("evaltype", "0")), "and/or"),
+                    **({"formula": hmlib.clean(flt.get("formula"), 255)} if str(flt.get("evaltype")) == "3" else {}),
+                    "metadata": [{"op": METADATA_OPS.get(str(x.get("operator")), str(x.get("operator"))),
+                                  "value": hmlib.clean(x.get("value"), 255)}
+                                 for x in conds if str(x.get("conditiontype")) == "24"]})
+    return out
 
 
 def severity_name(v) -> str:
